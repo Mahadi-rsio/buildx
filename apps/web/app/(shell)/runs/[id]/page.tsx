@@ -1,0 +1,168 @@
+"use client";
+
+import Link from "next/link";
+import { useParams } from "next/navigation";
+import { useMemo, useState } from "react";
+import { isTerminalStatus } from "@buildx/shared";
+import { ChatComposer } from "@/components/chat/chat-composer";
+import { ChatThread } from "@/components/chat/chat-thread";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { PanelSplit } from "@/components/shell/panel-split";
+import { useShell, useShellMeta } from "@/components/shell/shell-context";
+import type { WorkspaceData } from "@/components/shell/right-panel";
+import { useConfig } from "@/hooks/use-config";
+import { useCreateRun } from "@/hooks/use-create-run";
+import { useRunStream } from "@/hooks/use-run-stream";
+import { useWorkspaceFiles } from "@/hooks/use-workspace-files";
+import { buildChatMessages } from "@/lib/chat-messages";
+
+const FILE_POLL_MS = 3000;
+
+export default function RunPage() {
+  const params = useParams<{ id: string }>();
+  const runId = params?.id ?? "";
+
+  const { run, events, streamError, notFound, loading, stop } =
+    useRunStream(runId);
+  const { config } = useConfig();
+  const { createRun, submitting, error: createError } = useCreateRun();
+  const { modelOverride, setModelOverride, panelVisible } = useShell();
+  const [draft, setDraft] = useState("");
+
+  const status = run?.status ?? "idle";
+  useShellMeta({
+    status,
+    model: run?.model,
+    runId,
+    workspaceId: run?.workspaceId,
+    steps: run?.stats?.steps,
+    tokens: run?.stats?.usage?.totalTokens,
+  });
+
+  const running = run !== null && !isTerminalStatus(run.status);
+
+  const files = useWorkspaceFiles(
+    run?.workspaceId ?? runId,
+    panelVisible,
+    running ? FILE_POLL_MS : undefined,
+  );
+
+  const workspace: WorkspaceData | null = run
+    ? {
+        workspaceId: run.workspaceId,
+        events,
+        path: files.path,
+        listing: files.listing,
+        file: files.file,
+        filesError: files.error,
+        onNavigate: files.navigate,
+        onOpenFile: (target) => void files.openFile(target),
+        onBackFromFile: files.backFromFile,
+        onRefresh: files.refresh,
+        readFileContent: files.readFileContent,
+      }
+    : null;
+
+  const messages = useMemo(
+    () =>
+      run
+        ? buildChatMessages({
+            runId,
+            task: run.task,
+            createdAt: run.createdAt,
+            events,
+            status: run.status,
+          })
+        : [],
+    [runId, run, events],
+  );
+
+  async function send() {
+    const task = draft.trim();
+    if (task.length === 0 || submitting) return;
+    const created = await createRun({
+      task,
+      model: modelOverride.trim() || undefined,
+    });
+    if (created) setDraft("");
+  }
+
+  if (notFound) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+        <p className="text-sm text-muted-foreground">
+          Run <code className="font-mono text-foreground">{runId}</code> no
+          longer exists.
+        </p>
+        <Button
+          render={<Link href="/" />}
+          nativeButton={false}
+          variant="outline"
+        >
+          Start a new chat
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <PanelSplit workspace={workspace}>
+      <div className="flex h-full min-h-0 flex-col">
+        {run?.error || streamError ? (
+          <div className="shrink-0 space-y-2 px-4 pt-3">
+            {run?.error ? (
+              <Alert variant="destructive">
+                <AlertTitle>Run failed</AlertTitle>
+                <AlertDescription>{run.error}</AlertDescription>
+              </Alert>
+            ) : null}
+            {streamError ? (
+              <Alert className="border-amber-500/30 bg-amber-500/10">
+                <AlertTitle className="text-amber-100">
+                  Stream interrupted
+                </AlertTitle>
+                <AlertDescription className="text-amber-100/80">
+                  {streamError}
+                </AlertDescription>
+              </Alert>
+            ) : null}
+          </div>
+        ) : null}
+
+        <ChatThread
+          messages={messages}
+          loading={loading}
+          showThinking={running}
+          onRetry={
+            run
+              ? () => {
+                  void createRun({
+                    task: run.task,
+                    model: modelOverride.trim() || undefined,
+                  });
+                }
+              : undefined
+          }
+          onEdit={run ? () => setDraft(run.task) : undefined}
+        />
+
+        <ChatComposer
+          value={draft}
+          onChange={setDraft}
+          onSubmit={() => void send()}
+          onStop={running ? () => void stop() : undefined}
+          model={modelOverride}
+          onModelChange={setModelOverride}
+          modelPlaceholder={
+            config ? `model (${config.model})` : "model override"
+          }
+          submitting={submitting}
+          streaming={running}
+          error={createError}
+          hint="New messages start a new run with a fresh workspace"
+        />
+      </div>
+    </PanelSplit>
+  );
+}
