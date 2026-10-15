@@ -1,0 +1,18 @@
+{
+  "name": "buildx",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --filter @buildx/web dev",
+    "build": "pnpm --filter @buildx/web build",
+    "start": "pnpm --filter @buildx/web start",
+    "lint": "eslint .",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.12.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "typescript-eslint": "^8.71.2"
+  }
+}
