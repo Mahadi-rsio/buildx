@@ -5,7 +5,7 @@ import type { RunStatus } from "@buildx/shared";
 import { envStatus, isTerminalStatus } from "@buildx/shared";
 import { appendEvent, finishRun, type StoredRun } from "./store";
 import { captureWorkspaceSnapshot } from "./workspace-fs";
-import { createSandbox } from "./sandbox";
+import { createSandbox, sandboxSettings } from "./sandbox";
 import { sourceForRun } from "./workspace-source";
 
 /** Seed the workspace so `list_dir` / `read_file` have something real to read. */
@@ -23,14 +23,12 @@ async function seedWorkspace(run: StoredRun): Promise<void> {
     "Every file the agent creates or edits lands in this directory.",
     "",
   ].join("\n");
-  // Local runs get a README on disk; remote daemon runs receive it through the
-  // daemon's /fs endpoint. The baseline snapshot reads the same way either way.
-  const settings = (await import("./sandbox")).sandboxSettings();
+  // Phase 8 keeps Fly machines lazy, so only local mode writes a seed file
+  // before the run starts.
+  const settings = sandboxSettings();
   if (settings.kind === "local") {
     await mkdir(run.workspaceDir, { recursive: true });
     await writeFile(join(run.workspaceDir, "README.md"), readme, "utf8");
-  } else {
-    await createSandbox(run.workspaceDir).writeFile("README.md", readme);
   }
 }
 
@@ -66,14 +64,36 @@ export async function startRun(run: StoredRun): Promise<void> {
 
   await seedWorkspace(run);
 
-  const sandbox = createSandbox(run.workspaceDir);
+  const sandbox = createSandbox(
+    {
+      workspaceDir: run.workspaceDir,
+      userId: run.userId,
+      workspaceName: run.workspaceName,
+    },
+    {
+      dailyRequestsUsed: run.workspace.usage?.dailyRequestsUsed,
+      nextDhakaResetAt: run.workspace.usage?.nextDhakaResetAt,
+      onWorkspaceEvent: (event) => {
+        run.workspace.status = event.status;
+        run.workspace.step = event.step;
+        run.workspace.message = event.message;
+        if (event.idleDeadlineAt) run.workspace.idleDeadlineAt = event.idleDeadlineAt;
+        if (event.workspaceId) run.remoteWorkspaceId = event.workspaceId;
+        if (event.usage) run.workspace.usage = event.usage;
+        appendEvent(run, { type: "workspace", data: event, ts: Date.now() });
+      },
+    },
+  );
   try {
     await sandbox.start();
     run.status = "running";
     run.updatedAt = Date.now();
 
-    // Snapshot the seeded workspace so the Changes tab can diff against it.
-    run.baseline = await captureWorkspaceSnapshot(sourceForRun(run));
+    // Local mode snapshots immediately; remote mode snapshots lazily once a
+    // workspace has actually been restored.
+    if (sandboxSettings().kind === "local") {
+      run.baseline = await captureWorkspaceSnapshot(sourceForRun(run));
+    }
 
     const result = await runTask({
       task: run.task,
@@ -94,6 +114,9 @@ export async function startRun(run: StoredRun): Promise<void> {
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (/monthly CPU budget exhausted/i.test(message)) {
+      run.workspace.message = "Your work is saved.";
+    }
     appendEvent(run, { type: "error", data: { message }, ts: Date.now() });
     closeRun(
       run,

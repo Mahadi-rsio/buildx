@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { resolveWorkspacePath } from "@buildx/sandbox";
 import { DaemonSandbox } from "@buildx/sandbox";
 import type { StoredRun } from "./store";
+import { resolveWorkspaceDaemon, sandboxSettings } from "./sandbox";
 
 const IGNORED_DIRS = new Set([
   "node_modules",
@@ -157,8 +158,11 @@ export class DaemonWorkspaceSource implements WorkspaceSource {
   constructor(private readonly daemon: DaemonSandbox) {}
 
   resolve(rel: string): string {
-    // The daemon resolves paths itself against /workspace; nothing to do here.
-    return rel;
+    const clean = rel.replace(/\\/g, "/").replace(/^\.?\//, "");
+    if (clean.startsWith("/") || clean.split("/").includes("..")) {
+      throw new Error("path escapes sandbox root");
+    }
+    return clean;
   }
 
   async listDir(rel: string): Promise<WorkspaceEntry[]> {
@@ -207,12 +211,50 @@ export class DaemonWorkspaceSource implements WorkspaceSource {
 
 /** Build the right source for a run based on the sandbox mode. */
 export function sourceForRun(run: StoredRun): WorkspaceSource {
-  const baseUrl = (process.env.SANDBOX_BASE_URL ?? "").trim();
-  const token = (process.env.SANDBOX_TOKEN ?? "").trim();
-  if (baseUrl && token) {
-    return new DaemonWorkspaceSource(
-      new DaemonSandbox({ baseUrl, token }),
-    );
+  if (sandboxSettings().kind === "remote") {
+    let daemon: DaemonSandbox | undefined;
+    const getDaemon = async (): Promise<DaemonSandbox> => {
+      if (!daemon) {
+        const resolved = await resolveWorkspaceDaemon(
+          {
+            workspaceDir: run.workspaceDir,
+            userId: run.userId,
+            workspaceName: run.workspaceName,
+          },
+          {
+            dailyRequestsUsed: run.workspace.usage?.dailyRequestsUsed,
+            nextDhakaResetAt: run.workspace.usage?.nextDhakaResetAt,
+          },
+        );
+        run.remoteWorkspaceId = resolved.workspaceId;
+        daemon = new DaemonSandbox({
+          baseUrl: resolved.baseUrl,
+          token: resolved.token,
+        });
+      }
+      return daemon;
+    };
+    return {
+      resolve(rel: string): string {
+        const clean = rel.replace(/\\/g, "/").replace(/^\.?\//, "");
+        if (clean.startsWith("/") || clean.split("/").includes("..")) {
+          throw new Error("path escapes sandbox root");
+        }
+        return clean;
+      },
+      async listDir(rel: string) {
+        return new DaemonWorkspaceSource(await getDaemon()).listDir(rel);
+      },
+      async readFile(rel: string) {
+        return new DaemonWorkspaceSource(await getDaemon()).readFile(rel);
+      },
+      async stat(rel: string) {
+        return new DaemonWorkspaceSource(await getDaemon()).stat(rel);
+      },
+      async listFiles() {
+        return new DaemonWorkspaceSource(await getDaemon()).listFiles();
+      },
+    };
   }
   return new LocalWorkspaceSource(run.workspaceDir);
 }

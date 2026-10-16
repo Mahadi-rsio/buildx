@@ -74,6 +74,27 @@ export interface ErrorPayload {
   toolName?: string;
 }
 
+export type WorkspaceEventStatus =
+  | "workspace.restoring"
+  | "workspace.ready"
+  | "workspace.archiving"
+  | "workspace.archived";
+
+export interface WorkspacePayload {
+  status: WorkspaceEventStatus;
+  step?: string;
+  message?: string;
+  workspaceId?: string;
+  idleDeadlineAt?: number;
+  usage?: {
+    cpuHoursUsed: number;
+    cpuHoursLimit: number;
+    dailyRequestsUsed: number;
+    dailyRequestsLimit: number;
+    nextDhakaResetAt: number;
+  };
+}
+
 /**
  * Payload shape for every append-only event type. The event `type` is the key,
  * so the set of valid event names is the keyof this map (arcetecture.md §4).
@@ -88,6 +109,7 @@ export interface RunEventMap {
   todo: TodoPayload;
   approval: ApprovalPayload;
   error: ErrorPayload;
+  workspace: WorkspacePayload;
 }
 
 export type EventType = keyof RunEventMap;

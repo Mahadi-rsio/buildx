@@ -7,6 +7,27 @@ export interface RunStats {
   usage?: RunTaskUsage;
 }
 
+export interface WorkspaceUsage {
+  cpuHoursUsed: number;
+  cpuHoursLimit: number;
+  dailyRequestsUsed: number;
+  dailyRequestsLimit: number;
+  nextDhakaResetAt: number;
+}
+
+export interface WorkspaceRuntime {
+  status:
+    | "idle"
+    | "workspace.restoring"
+    | "workspace.ready"
+    | "workspace.archiving"
+    | "workspace.archived";
+  step?: string;
+  message?: string;
+  idleDeadlineAt?: number;
+  usage?: WorkspaceUsage;
+}
+
 export interface RunSummary {
   id: string;
   task: string;
@@ -19,6 +40,7 @@ export interface RunSummary {
   updatedAt: number;
   error?: string;
   stats?: RunStats;
+  workspace: WorkspaceRuntime;
   eventCount: number;
 }
 

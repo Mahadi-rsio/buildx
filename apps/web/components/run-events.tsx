@@ -46,6 +46,14 @@ export type StreamItem =
   | { key: number; kind: "file_change"; ts: number; path: string; change: string }
   | { key: number; kind: "todo"; ts: number; todos: TodoItem[] }
   | { key: number; kind: "approval"; ts: number; command: string; status: string }
+  | {
+      key: number;
+      kind: "workspace";
+      ts: number;
+      status: string;
+      step?: string;
+      message?: string;
+    }
   | { key: number; kind: "error"; ts: number; message: string };
 
 /** Collapse adjacent deltas and pair tool_call + tool_result. */
@@ -152,6 +160,16 @@ export function toStreamItems(events: RunEvent[]): StreamItem[] {
           ts: event.ts,
           command: event.data.command,
           status: event.data.status,
+        });
+        break;
+      case "workspace":
+        items.push({
+          key: event.id,
+          kind: "workspace",
+          ts: event.ts,
+          status: event.data.status,
+          step: event.data.step,
+          message: event.data.message,
         });
         break;
       case "error":
@@ -337,6 +355,21 @@ export function EventRow({ item }: { item: StreamItem }) {
             approval {item.status}:{" "}
             <span className="text-foreground">{item.command}</span>
           </span>
+        </div>
+      );
+    case "workspace":
+      return (
+        <div className="flex items-center gap-3">
+          <Clock ts={item.ts} />
+          <span className="rounded border border-border bg-muted/40 px-1.5 py-0.5 font-mono text-[10px] uppercase text-muted-foreground">
+            {item.status.replace("workspace.", "workspace ")}
+          </span>
+          {item.step ? (
+            <span className="text-xs text-foreground/85">{item.step}</span>
+          ) : null}
+          {item.message ? (
+            <span className="text-xs text-muted-foreground">{item.message}</span>
+          ) : null}
         </div>
       );
     case "error":

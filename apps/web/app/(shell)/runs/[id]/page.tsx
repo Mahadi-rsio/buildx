@@ -38,6 +38,7 @@ export default function RunPage() {
     task: run?.task,
     steps: run?.stats?.steps,
     tokens: run?.stats?.usage?.totalTokens,
+    workspace: run?.workspace,
   });
 
   const running = run !== null && !isTerminalStatus(run.status);

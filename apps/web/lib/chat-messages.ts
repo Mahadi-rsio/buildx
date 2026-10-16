@@ -69,6 +69,26 @@ export function buildChatMessages(args: {
       }
       continue;
     }
+    if (item.kind === "workspace") {
+      assistantBlocks.push({
+        id: `workspace-${item.key}`,
+        kind: "status",
+        text: item.step ?? item.message ?? item.status,
+        item: {
+          key: item.key,
+          kind: "status",
+          ts: item.ts,
+          status:
+            item.status === "workspace.archived"
+              ? "completed"
+              : item.status === "workspace.archiving" ||
+                  item.status === "workspace.restoring"
+                ? "running"
+                : "completed",
+        },
+      });
+      continue;
+    }
     if (item.kind === "terminal") {
       // Terminal lives in the workspace panel; skip inline noise.
       continue;

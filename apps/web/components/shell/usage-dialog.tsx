@@ -16,6 +16,16 @@ export function UsageDialog() {
   const { usageOpen, setUsageOpen, meta } = useShell();
   const tokens = meta.tokens ?? 0;
   const steps = meta.steps ?? 0;
+  const usage = meta.workspace?.usage;
+  const resetLabel =
+    usage && Number.isFinite(usage.nextDhakaResetAt)
+      ? new Date(usage.nextDhakaResetAt).toLocaleString("en-US", {
+          hour: "2-digit",
+          minute: "2-digit",
+          month: "short",
+          day: "numeric",
+        })
+      : "—";
 
   return (
     <Dialog open={usageOpen} onOpenChange={setUsageOpen}>
@@ -77,12 +87,33 @@ export function UsageDialog() {
               {meta.runId ? meta.runId.slice(0, 10) : "—"}
             </span>
           </div>
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-muted-foreground">CPU-hours</span>
+            <span className="font-mono text-foreground/80">
+              {usage ? `${usage.cpuHoursUsed} / ${usage.cpuHoursLimit}` : "—"}
+            </span>
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-muted-foreground">Daily requests</span>
+            <span className="font-mono text-foreground/80">
+              {usage ? `${usage.dailyRequestsUsed} / ${usage.dailyRequestsLimit}` : "—"}
+            </span>
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-muted-foreground">Dhaka reset</span>
+            <span className="font-mono text-foreground/80">{resetLabel}</span>
+          </div>
         </div>
 
-        <p className="text-[11px] leading-relaxed text-muted-foreground">
-          Counts come from <code className="font-mono">run.stats.usage</code>{" "}
-          and reset per run — runs are billed to your own provider account.
-        </p>
+        {meta.workspace?.message ? (
+          <p className="text-[11px] leading-relaxed text-muted-foreground">
+            {meta.workspace.message}
+          </p>
+        ) : (
+          <p className="text-[11px] leading-relaxed text-muted-foreground">
+            Counts combine run usage and workspace quotas.
+          </p>
+        )}
       </DialogContent>
     </Dialog>
   );
