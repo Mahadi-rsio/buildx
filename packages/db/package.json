@@ -16,6 +16,7 @@
     "studio": "drizzle-kit studio"
   },
   "dependencies": {
+    "@buildx/shared": "workspace:*",
     "drizzle-orm": "^0.45.4",
     "pg": "^8.23.1"
   },

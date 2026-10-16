@@ -5,7 +5,18 @@
 - pnpm monorepo (pnpm 12). `plan.md` / `arcetecture.md` are the source of truth. Note the misspelled filename: `arcetecture.md`, not `architecture.md`.
 - Built so far:
   - `packages/shared` — `RunEvent` model, zod schemas, `loadEnv()` / `envStatus()`.
-  - `packages/sandbox` — `Sandbox` interface + `LocalSandbox` + `resolveWorkspacePath`.
+  - `packages/sandbox` — fly-manager (Phase 7): `createWorkspace`, `ensureRunning`
+    idempotent restore, reworked `archive` (daemon `/sync` → verify → rotate →
+    destroy, strict order), `reconcile`, workspace lifecycle state machine. Also
+    `FlyClient` (Machines REST, zod-validated, retries + concurrency limiter),
+    daemon HTTP client (`daemonHealth`/`daemonInit`/`daemonSync`/
+    `waitForDaemonHealth`), `Sandbox` interface + `DaemonSandbox` + `LocalSandbox`,
+    `resolveWorkspacePath`. Tests use a FakeFlyClient + FakeStorage + fake daemon
+    HTTP server (skipped if local Postgres is unreachable).
+  - `packages/storage` — `Storage` interface (presign/head/copy/delete/rotate/list).
+  - `packages/db` — Drizzle schema, `transition` (single-from), `claimStatus`
+    (multi-from), usage sessions + quotas (`openUsageSession`, `closeUsageSession`,
+    `hasCpuBudget`, `closeOpenUsageSessions`), `withAdvisoryLock`.
   - `packages/agent` — prompt, tools, `runTask` / `createAgent`.
   - `apps/web` — Next.js 16 dashboard: run form + live event stream, and a REST/SSE API.
     - API: `GET /api/config`, `GET|POST /api/runs`, `GET /api/runs/:id`,
@@ -14,7 +25,9 @@
     - `lib/store.ts` keeps runs/events in memory on `globalThis` (no DB yet);
       `lib/runner.ts` runs `runTask` against a `LocalSandbox` and appends every step.
 - All packages test/typecheck; root `pnpm typecheck` / `test` / `build` are green.
-- `packages/db` and `services/*` are **not yet built** — `arcetecture.md` §7 lists them.
+- `services/*`, `infra/*`, `evals` are **not yet wired into prod** — `arcetecture.md` §7 lists them;
+  `services/sandbox-daemon/server.mjs` defines the daemon HTTP contract the
+  `FlyClient`/daemon clients talk to.
 
 ## Commands (run these to verify)
 

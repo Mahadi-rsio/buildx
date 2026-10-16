@@ -53,6 +53,8 @@ export * from "./schema";
 /** Re-export node-postgres bits callers occasionally need (e.g. sql template). */
 export { Pool } from "pg";
 export { sql } from "drizzle-orm";
+/** Query helpers for building where clauses on the shared schema objects. */
+export { and, asc, desc, eq, inArray, isNull, like, not, or } from "drizzle-orm";
 
 /**
  * Take a Postgres advisory lock for the duration of `fn`. Only one process ever

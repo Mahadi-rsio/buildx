@@ -172,6 +172,9 @@ importers:
 
   packages/db:
     dependencies:
+      '@buildx/shared':
+        specifier: workspace:*
+        version: link:../shared
       drizzle-orm:
         specifier: ^0.45.4
         version: 0.45.4(@types/pg@8.23.1)(kysely@0.29.6)(pg@8.23.1)
@@ -200,9 +203,18 @@ importers:
 
   packages/sandbox:
     dependencies:
+      '@buildx/db':
+        specifier: workspace:*
+        version: link:../db
       '@buildx/shared':
         specifier: workspace:*
         version: link:../shared
+      '@buildx/storage':
+        specifier: workspace:*
+        version: link:../storage
+      zod:
+        specifier: ^4.1.13
+        version: 4.6.7
     devDependencies:
       '@types/node':
         specifier: ^24.10.9

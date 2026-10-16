@@ -27,6 +27,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     unzip \
     zip \
     procps \
+    zstd \
+    tar \
     && rm -rf /var/lib/apt/lists/*
 
 # Node.js 22 LTS via NodeSource (also installs npm).
@@ -34,6 +36,14 @@ RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_VERSION}.x" | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g pnpm@latest --loglevel=error
+
+# Pre-warm the pnpm content-addressable store with the common web toolchain so
+# `pnpm install` inside a workspace is mostly cache-hits (phase.md §5).
+RUN mkdir -p /pnpm-warm && cd /pnpm-warm \
+    && printf '{"name":"buildx-warm","private":true}\n' > package.json \
+    && pnpm install --store-dir /pnpm-store next react react-dom tailwindcss --loglevel=error \
+    && rm -rf /pnpm-warm /root/.cache
+ENV NPM_CONFIG_STORE_DIR=/pnpm-store
 
 # Bun — quick JS runtime some projects use for package scripts.
 RUN curl -fsSL https://bun.sh/install | bash >/dev/null 2>&1 \
@@ -54,6 +64,6 @@ COPY services/sandbox-daemon/server.mjs /app/server.mjs
 
 EXPOSE 8080
 HEALTHCHECK --interval=15s --timeout=3s --retries=3 \
-    CMD node -e "fetch('http://localhost:8080/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))" || exit 1
+    CMD node -e "fetch('http://localhost:8080/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))" || exit 1
 
 CMD ["node", "/app/server.mjs"]

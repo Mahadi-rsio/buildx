@@ -39,6 +39,57 @@ export {
   type ReadResult,
 } from "./daemon";
 
+export {
+  MachinesApiClient,
+  ConcurrencyLimiter,
+  FlyApiError,
+  type FlyClient,
+  type FlyClientOptions,
+  type FlyMethod,
+  type FlyRequestOptions,
+  type FlyApp,
+  type FlyMachine,
+  type FlyVolume,
+  type FlyLease,
+  type FlyWaitResult,
+  type FlyIpAssignments,
+  type MachineConfig,
+} from "./fly-client";
+
+export {
+  createWorkspace,
+  createWorkspaceApp,
+  ensureRunning,
+  archive,
+  reconcile,
+  workspaceAppName,
+  workspaceMachineConfig,
+  workspaceBackupKey,
+  daemonBaseUrlFor,
+  type WorkspaceMachineConfigInput,
+  type CreateWorkspaceAppInput,
+  type CreateWorkspaceAppResult,
+  type CreateWorkspaceInput,
+  type CreateWorkspaceResult,
+  type EnsureRunningInput,
+  type EnsureRunningResult,
+  type ArchiveInput,
+  type ArchiveResult,
+  type ReconcileResult,
+} from "./fly-manager";
+
+export {
+  daemonHealth,
+  daemonInit,
+  daemonSync,
+  waitForDaemonHealth,
+  DaemonApiError,
+  type DaemonHealth,
+  type DaemonInitInput,
+  type DaemonSyncInput,
+  type DaemonSyncResult,
+} from "./daemon-client";
+
 export interface Sandbox {
   readonly id: string;
 

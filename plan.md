@@ -69,6 +69,12 @@ Planning/todo tool, self-verification (run build/tests/lint before "done"), erro
 ### Phase 6 — Polish & launch (week 6+)
 Usage tracking, quotas, secrets manager, templates, onboarding, docs.
 
+### Phase 7 — Fly workspace lifecycle: create/restore/archive
+**Done** — `packages/sandbox` fly-manager (`createWorkspace`, `ensureRunning`,
+`archive`, `reconcile`), daemon HTTP client (health/init/sync), storage-backed
+backups with a strict sync → verify → rotate → destroy order, quotas + usage
+sessions. Detailed spec + tests in `phase.md` §143–166. Root checks green.
+
 ## 7. Key Design Decisions
 
 1. **Fly Machines, not Sprites (cost).** Sprites are persistent and have built-in checkpoint/restore, but cost too much for this product. Machines are cheaper; we rebuild the useful parts ourselves: suspend/stop on idle, volume snapshots for rollback, small machine sizes. Sandbox access goes through a `Sandbox` interface so the backend can be swapped later (Sprites, Vercel Sandbox, own Firecracker on Hetzner) without touching the harness.

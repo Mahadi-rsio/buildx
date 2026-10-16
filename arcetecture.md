@@ -92,6 +92,33 @@ interface Sandbox {
 - Delete volumes/snapshots of abandoned workspaces after a retention window.
 - Track `machine_seconds` in `usage_ledger` and show it in the dashboard.
 
+**Workspace lifecycle (fly-manager, Phase 7)** — the orchestrator drives a
+per-workspace Fly app (app-scoped private network, no public IP) over the daemon
+HTTP contract (`services/sandbox-daemon/server.mjs`):
+
+- `createWorkspace` — verified email + one-workspace-per-user; insert a `creating`
+  row first, then the Fly app, then land `archived` with `lastActiveAt = lastSyncedAt = now()`
+  (a fresh workspace therefore has "nothing to sync").
+- `ensureRunning` (idempotent, every sandbox-touching call) — `running` touches
+  `lastActiveAt`; `archived`/`archive_failed` claims `restoring` and runs: CPU
+  quota check → 1 GB volume (`sin`, `iad` fallback on capacity failure) → machine
+  with the volume mounted at `/workspace` + bootstrap `SANDBOX_TOKEN` → wait
+  started → poll daemon `/health` → `/init` with a fresh per-workspace token and a
+  short-lived presigned restore URL (only when a verified backup exists) → install
+  deps if the lockfile hash changed → open a usage session → `running`. A
+  `restoring`/`archiving` sibling waits then re-evaluates.
+- `archive` (reaper / quota / user action) — claims `archiving` then STRICT ORDER:
+  (a) daemon `/sync` → presigned PUT to a `.tmp` key, (b) VERIFY size via
+  `storage.head` + persist sha256, (c) rotate `key → key.prev`, promote `tmp →
+  key` (keep last 2), (d) only then destroy machine (force) then volume, (e) close
+  usage sessions, clear pointers → `archived`. Any of a–c failing deletes nothing,
+  marks `archive_failed`, and retries (no volume is ever deleted before a verified
+  backup exists). Nothing changed (`lastActiveAt <= lastSyncedAt`) skips the
+  upload and goes straight to destroy; if sync is needed but no daemon
+  address/token resolves, it fails closed to `archive_failed`.
+- `reconcile` — diffs Fly machines/volumes against DB pointers and clears stale
+  ones (Phase 9 reconciler loop).
+
 **Checkpoint/restore (our own, since Machines have no built-in one)**
 - Before risky steps and at task milestones: git commit on a scratch branch + volume snapshot.
 - Restore = create a new volume from the snapshot, attach, restart machine.
@@ -175,9 +202,12 @@ projects
   created_at
 
 workspaces
-  id, project_id, fly_app, fly_machine_id, fly_volume_id, region,
-  status (creating|running|suspended|stopped|error), size,
-  image_version, preview_url, last_active_at, created_at
+  id, user_id → user (UNIQUE per user), name,
+  status (creating|restoring|running|archiving|archived|archive_failed|error),
+  fly_app, fly_machine_id, fly_volume_id, region,
+  daemon_token_encrypted, last_active_at, last_synced_at,
+  backup_bytes, backup_sha256, lockfile_hash, image_digest,
+  created_at, updated_at
 
 tasks
   id, project_id, workspace_id, title, prompt, status
@@ -213,6 +243,9 @@ code_chunks (optional, pgvector)
 
 usage_ledger
   id, user_id, run_id, kind (tokens|machine_seconds), amount, cost_usd, created_at
+
+usage_sessions               -- open while a workspace machine is running (quota metering)
+  id, workspace_id, user_id, machine_id, started_at, ended_at
 ```
 
 Indexes: `events(run_id, id)`, `messages(run_id, seq)`, `workspaces(project_id)`, `tasks(project_id, status)`.

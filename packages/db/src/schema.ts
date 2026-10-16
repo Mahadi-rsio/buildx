@@ -1,10 +1,19 @@
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 import {
   pgTable,
   text,
   timestamp,
   boolean,
+  integer,
+  bigint,
+  bigserial,
+  doublePrecision,
+  jsonb,
+  uuid,
+  date,
   index,
+  uniqueIndex,
+  primaryKey,
 } from "drizzle-orm/pg-core";
 
 /**
@@ -105,4 +114,351 @@ export const accountRelations = relations(account, ({ one }) => ({
     fields: [account.userId],
     references: [user.id],
   }),
+}));
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * BuildX domain tables (arcetecture.md §4, phase.md phase 4).
+ * All ids are uuid, all timestamps timestamptz, and every row that belongs to
+ * a person foreign-keys the Better Auth `user` table.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+export type WorkspaceStatus =
+  | "creating"
+  | "restoring"
+  | "running"
+  | "archiving"
+  | "archived"
+  | "archive_failed"
+  | "error";
+
+export type RunStatus =
+  | "queued"
+  | "running"
+  | "waiting_input"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export type TaskStatus =
+  | "queued"
+  | "running"
+  | "waiting_input"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export const projects = pgTable(
+  "projects",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    repoUrl: text("repo_url"),
+    defaultBranch: text("default_branch"),
+    githubInstallationId: text("github_installation_id"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [index("projects_userId_idx").on(table.userId)],
+);
+
+/** One workspace per user (UNIQUE user_id) — phase.md phase 4. */
+export const workspaces = pgTable(
+  "workspaces",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: text("user_id")
+      .notNull()
+      .unique()
+      .references(() => user.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    status: text("status")
+      .$type<WorkspaceStatus>()
+      .notNull()
+      .default("creating"),
+    flyApp: text("fly_app"),
+    flyVolumeId: text("fly_volume_id"),
+    flyMachineId: text("fly_machine_id"),
+    region: text("region"),
+    daemonTokenEncrypted: text("daemon_token_encrypted"),
+    lastActiveAt: timestamp("last_active_at", { withTimezone: true }),
+    lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
+    backupBytes: bigint("backup_bytes", { mode: "number" }),
+    backupSha256: text("backup_sha256"),
+    imageDigest: text("image_digest"),
+    lockfileHash: text("lockfile_hash"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .$onUpdate(() => new Date())
+      .notNull(),
+  },
+  (table) => [index("workspaces_status_idx").on(table.status)],
+);
+
+export const tasks = pgTable(
+  "tasks",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    workspaceId: uuid("workspace_id").references(() => workspaces.id, {
+      onDelete: "set null",
+    }),
+    title: text("title"),
+    prompt: text("prompt"),
+    status: text("status").$type<TaskStatus>().notNull().default("queued"),
+    branch: text("branch"),
+    prUrl: text("pr_url"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+  },
+  (table) => [
+    index("tasks_projectId_status_idx").on(table.projectId, table.status),
+  ],
+);
+
+export const runs = pgTable(
+  "runs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    taskId: uuid("task_id").references(() => tasks.id, {
+      onDelete: "cascade",
+    }),
+    model: text("model"),
+    status: text("status").$type<RunStatus>().notNull().default("queued"),
+    stepCount: integer("step_count").notNull().default(0),
+    inputTokens: integer("input_tokens").notNull().default(0),
+    outputTokens: integer("output_tokens").notNull().default(0),
+    costUsd: doublePrecision("cost_usd").notNull().default(0),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+    error: text("error"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("runs_taskId_idx").on(table.taskId),
+    // At most one running run per user (plan phase 4).
+    uniqueIndex("runs_one_active_per_user_idx")
+      .on(table.userId)
+      .where(sql`${table.status} = 'running'`),
+  ],
+);
+
+export const messages = pgTable(
+  "messages",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    runId: uuid("run_id")
+      .notNull()
+      .references(() => runs.id, { onDelete: "cascade" }),
+    role: text("role").notNull(),
+    parts: jsonb("parts"),
+    seq: integer("seq").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [index("messages_runId_seq_idx").on(table.runId, table.seq)],
+);
+
+/** Append-only event log; powers replay and the live SSE stream. */
+export const events = pgTable(
+  "events",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    runId: uuid("run_id")
+      .notNull()
+      .references(() => runs.id, { onDelete: "cascade" }),
+    type: text("type").notNull(),
+    payload: jsonb("payload"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [index("events_runId_id_idx").on(table.runId, table.id)],
+);
+
+export const todos = pgTable(
+  "todos",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    runId: uuid("run_id")
+      .notNull()
+      .references(() => runs.id, { onDelete: "cascade" }),
+    content: text("content").notNull(),
+    status: text("status")
+      .$type<"pending" | "in_progress" | "done">()
+      .notNull()
+      .default("pending"),
+    position: integer("position").notNull().default(0),
+  },
+  (table) => [index("todos_runId_idx").on(table.runId)],
+);
+
+export const approvals = pgTable(
+  "approvals",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    runId: uuid("run_id")
+      .notNull()
+      .references(() => runs.id, { onDelete: "cascade" }),
+    toolCallId: text("tool_call_id"),
+    command: text("command"),
+    status: text("status")
+      .$type<"pending" | "approved" | "denied">()
+      .notNull()
+      .default("pending"),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [index("approvals_runId_idx").on(table.runId)],
+);
+
+export const secrets = pgTable(
+  "secrets",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    key: text("key").notNull(),
+    valueEncrypted: text("value_encrypted").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [index("secrets_projectId_idx").on(table.projectId)],
+);
+
+export const checkpoints = pgTable(
+  "checkpoints",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    runId: uuid("run_id").references(() => runs.id, { onDelete: "set null" }),
+    label: text("label"),
+    flySnapshotId: text("fly_snapshot_id"),
+    gitCommit: text("git_commit"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [index("checkpoints_workspaceId_idx").on(table.workspaceId)],
+);
+
+/** Code chunks for optional semantic search (embedding lands with pgvector). */
+export const codeChunks = pgTable(
+  "code_chunks",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    path: text("path").notNull(),
+    symbol: text("symbol"),
+    startLine: integer("start_line"),
+    endLine: integer("end_line"),
+    content: text("content").notNull(),
+    hash: text("hash").notNull(),
+  },
+  (table) => [index("code_chunks_workspaceId_idx").on(table.workspaceId)],
+);
+
+export const usageLedger = pgTable(
+  "usage_ledger",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    runId: uuid("run_id").references(() => runs.id, { onDelete: "set null" }),
+    kind: text("kind").$type<"tokens" | "machine_seconds">().notNull(),
+    amount: doublePrecision("amount").notNull(),
+    costUsd: doublePrecision("cost_usd").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [index("usage_ledger_userId_idx").on(table.userId)],
+);
+
+/** One open row per running machine; its duration is billed as CPU-seconds. */
+export const usageSessions = pgTable(
+  "usage_sessions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    machineId: text("machine_id"),
+    startedAt: timestamp("started_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("usage_sessions_userId_idx").on(table.userId),
+    index("usage_sessions_workspaceId_idx").on(table.workspaceId),
+  ],
+);
+
+/** Daily request counter, keyed by the Asia/Dhaka calendar day. */
+export const dailyRequests = pgTable(
+  "daily_requests",
+  {
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    day: date("day").notNull(),
+    count: integer("count").notNull().default(0),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.userId, table.day] })],
+);
+
+export const workspaceRelations = relations(workspaces, ({ one, many }) => ({
+  user: one(user, { fields: [workspaces.userId], references: [user.id] }),
+  usageSessions: many(usageSessions),
+  checkpoints: many(checkpoints),
+}));
+
+export const runRelations = relations(runs, ({ one, many }) => ({
+  user: one(user, { fields: [runs.userId], references: [user.id] }),
+  task: one(tasks, { fields: [runs.taskId], references: [tasks.id] }),
+  messages: many(messages),
+  events: many(events),
+}));
+
+export const taskRelations = relations(tasks, ({ one, many }) => ({
+  project: one(projects, {
+    fields: [tasks.projectId],
+    references: [projects.id],
+  }),
+  runs: many(runs),
 }));
