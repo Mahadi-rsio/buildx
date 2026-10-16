@@ -1,3 +1,4 @@
+import { getCurrentUser, unauthorized } from "@/lib/auth/server";
 import { getRun } from "@/lib/store";
 import {
   captureWorkspaceSnapshot,
@@ -23,6 +24,8 @@ export async function GET(
   _request: Request,
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
+  if (!(await getCurrentUser())) return unauthorized();
+
   const { id } = await params;
   const run = getRun(id);
   if (!run) {

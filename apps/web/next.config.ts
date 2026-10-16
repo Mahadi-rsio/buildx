@@ -1,4 +1,11 @@
 import type { NextConfig } from "next";
+import { loadRootEnv } from "@buildx/shared/node";
+
+// Next.js only auto-loads `.env` from the app directory, but this monorepo keeps
+// a single `.env` at the repo root (shared with docker compose and the CLI
+// scripts). Load it here, before any route module (and therefore the AI SDK or
+// Better Auth) is evaluated.
+loadRootEnv();
 
 // `@ai-sdk/openai` builds a default provider at import time that throws when
 // `OPENAI_BASE_URL` is an empty string — and Next loads `KEY=` from `.env` as
@@ -17,7 +24,13 @@ for (const key of [
 const nextConfig: NextConfig = {
   // Workspace packages export TypeScript source (`./src/index.ts`), so Next must
   // transpile them before bundling.
-  transpilePackages: ["@buildx/agent", "@buildx/sandbox", "@buildx/shared"],
+  transpilePackages: [
+    "@buildx/agent",
+    "@buildx/sandbox",
+    "@buildx/shared",
+    "@buildx/db",
+    "@buildx/storage",
+  ],
 };
 
 export default nextConfig;

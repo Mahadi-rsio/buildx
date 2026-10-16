@@ -7,12 +7,22 @@
     "start": "pnpm --filter @buildx/web start",
     "lint": "eslint .",
     "typecheck": "pnpm -r typecheck",
-    "test": "pnpm -r test"
+    "test": "pnpm -r test",
+    "infra:up": "docker compose up -d --wait",
+    "infra:down": "docker compose down",
+    "infra:logs": "docker compose logs -f --tail=100",
+    "db:generate": "pnpm --filter @buildx/db generate",
+    "db:migrate": "pnpm --filter @buildx/db migrate",
+    "db:studio": "pnpm --filter @buildx/db studio",
+    "storage:init": "pnpm --filter @buildx/storage exec tsx ../../scripts/init-storage.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "eslint": "^10.12.0",
     "eslint-plugin-react-hooks": "^7.1.1",
-    "typescript-eslint": "^8.71.2"
+    "typescript-eslint": "^8.71.2",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "@types/node": "^24.10.9"
   }
 }

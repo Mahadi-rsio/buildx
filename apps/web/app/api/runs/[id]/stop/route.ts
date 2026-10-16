@@ -1,4 +1,5 @@
 import { isTerminalStatus } from "@buildx/shared";
+import { getCurrentUser, unauthorized } from "@/lib/auth/server";
 import { appendEvent, finishRun, getRun, toRunSummary } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
@@ -11,6 +12,8 @@ export async function POST(
   _request: Request,
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
+  if (!(await getCurrentUser())) return unauthorized();
+
   const { id } = await params;
   const run = getRun(id);
   if (!run) {

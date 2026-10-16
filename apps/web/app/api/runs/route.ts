@@ -1,4 +1,5 @@
 import { createRunSchema, envStatus } from "@buildx/shared";
+import { getCurrentUser, unauthorized } from "@/lib/auth/server";
 import { startRun } from "@/lib/runner";
 import { createRun, listRuns, toRunSummary } from "@/lib/store";
 
@@ -6,6 +7,7 @@ export const dynamic = "force-dynamic";
 
 /** `GET /api/runs` — newest first. */
 export async function GET(): Promise<Response> {
+  if (!(await getCurrentUser())) return unauthorized();
   return Response.json({ runs: listRuns().map(toRunSummary) });
 }
 
@@ -14,6 +16,8 @@ export async function GET(): Promise<Response> {
  * (arcetecture.md §5.2, simplified from `/api/projects/:id/tasks`).
  */
 export async function POST(request: Request): Promise<Response> {
+  if (!(await getCurrentUser())) return unauthorized();
+
   const body = await request.json().catch(() => null);
   const parsed = createRunSchema.safeParse(body);
   if (!parsed.success) {
