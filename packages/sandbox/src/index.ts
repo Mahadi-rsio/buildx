@@ -32,6 +32,12 @@ export type ProcId = string;
 export type CheckpointId = string;
 
 export { LocalSandbox, type LocalSandboxOptions } from "./local";
+export {
+  DaemonSandbox,
+  type DaemonSandboxOptions,
+  type FsEntry,
+  type ReadResult,
+} from "./daemon";
 
 export interface Sandbox {
   readonly id: string;

@@ -1,15 +1,15 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { runTask } from "@buildx/agent";
-import { LocalSandbox } from "@buildx/sandbox";
 import type { RunStatus } from "@buildx/shared";
 import { envStatus, isTerminalStatus } from "@buildx/shared";
 import { appendEvent, finishRun, type StoredRun } from "./store";
 import { captureWorkspaceSnapshot } from "./workspace-fs";
+import { createSandbox } from "./sandbox";
+import { sourceForRun } from "./workspace-source";
 
 /** Seed the workspace so `list_dir` / `read_file` have something real to read. */
 async function seedWorkspace(run: StoredRun): Promise<void> {
-  await mkdir(run.workspaceDir, { recursive: true });
   const readme = [
     "# buildx workspace",
     "",
@@ -23,7 +23,15 @@ async function seedWorkspace(run: StoredRun): Promise<void> {
     "Every file the agent creates or edits lands in this directory.",
     "",
   ].join("\n");
-  await writeFile(join(run.workspaceDir, "README.md"), readme, "utf8");
+  // Local runs get a README on disk; remote daemon runs receive it through the
+  // daemon's /fs endpoint. The baseline snapshot reads the same way either way.
+  const settings = (await import("./sandbox")).sandboxSettings();
+  if (settings.kind === "local") {
+    await mkdir(run.workspaceDir, { recursive: true });
+    await writeFile(join(run.workspaceDir, "README.md"), readme, "utf8");
+  } else {
+    await createSandbox(run.workspaceDir).writeFile("README.md", readme);
+  }
 }
 
 /**
@@ -58,15 +66,14 @@ export async function startRun(run: StoredRun): Promise<void> {
 
   await seedWorkspace(run);
 
-  const sandbox = new LocalSandbox({ rootDir: run.workspaceDir });
+  const sandbox = createSandbox(run.workspaceDir);
   try {
-    await seedWorkspace(run);
     await sandbox.start();
     run.status = "running";
     run.updatedAt = Date.now();
 
     // Snapshot the seeded workspace so the Changes tab can diff against it.
-    run.baseline = await captureWorkspaceSnapshot(run.workspaceDir);
+    run.baseline = await captureWorkspaceSnapshot(sourceForRun(run));
 
     const result = await runTask({
       task: run.task,

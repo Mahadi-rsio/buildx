@@ -1,6 +1,3 @@
-import { readdir, readFile, stat } from "node:fs/promises";
-import { join } from "node:path";
-import { resolveWorkspacePath } from "@buildx/sandbox";
 import { structuredPatch } from "diff";
 import type {
   DiffFile,
@@ -8,66 +5,29 @@ import type {
   DiffLine,
   DiffResponse,
 } from "./types";
+import type { WorkspaceSource } from "./workspace-source";
 
 export const MAX_DIFF_BYTES = 200_000;
 export const DIFF_CONTEXT = 3;
 
-const IGNORED_DIRS = new Set([
-  "node_modules",
-  ".git",
-  ".next",
-  "dist",
-  "coverage",
-  "build",
-  ".turbo",
-]);
-
-/**
- * Recursively list relative file paths inside the workspace, skipping ignored
- * directories. `out` accumulates so a snapshot can be built without materializing.
- */
-async function walk(
-  root: string,
-  rel: string,
-  out: { path: string; size: number; mtime: number }[],
-): Promise<void> {
-  let dirents;
-  try {
-    dirents = await readdir(join(root, rel), { withFileTypes: true });
-  } catch {
-    return;
-  }
-  for (const entry of dirents) {
-    if (IGNORED_DIRS.has(entry.name)) continue;
-    const path = rel ? `${rel}/${entry.name}` : entry.name;
-    if (entry.isDirectory()) {
-      await walk(root, path, out);
-      continue;
-    }
-    if (!entry.isFile()) continue;
-    try {
-      const info = await stat(join(root, path));
-      out.push({ path, size: info.size, mtime: info.mtimeMs });
-    } catch {
-      // Ignore files that raced away (e.g. sandbox teardown).
-    }
-  }
-}
-
 /** Shape of the run-start baseline snapshot (relative path → original text). */
 export type Baseline = Map<string, string>;
 
-/** Capture the current workspace contents as a baseline. */
-export async function captureWorkspaceSnapshot(root: string): Promise<Baseline> {
-  const files: { path: string; size: number; mtime: number }[] = [];
-  await walk(root, "", files);
+/**
+ * Capture the current workspace contents as a baseline. Reads through a
+ * `WorkspaceSource` so local and remote (Fly daemon) runs behave the same.
+ */
+export async function captureWorkspaceSnapshot(
+  source: WorkspaceSource,
+): Promise<Baseline> {
+  const files = await source.listFiles();
   const baseline: Baseline = new Map();
   for (const file of files) {
     if (file.size > MAX_DIFF_BYTES) continue;
     try {
-      const buffer = await readFile(join(root, file.path));
-      if (buffer.includes(0)) continue;
-      baseline.set(file.path, buffer.toString("utf8"));
+      const read = await source.readFile(file.path);
+      if (read.binary) continue;
+      baseline.set(file.path, read.content);
     } catch {
       // Skip files we can no longer read.
     }
@@ -100,11 +60,10 @@ function toHunk(oldStr: string, newStr: string): DiffHunk[] | null {
  * reported with an empty hunk list so the UI can render a notice instead.
  */
 export async function compareAgainstBaseline(
-  root: string,
+  source: WorkspaceSource,
   baseline: Baseline,
 ): Promise<DiffResponse> {
-  const current: { path: string; size: number; mtime: number }[] = [];
-  await walk(root, "", current);
+  const current = await source.listFiles();
 
   const seen = new Set<string>();
   const files: DiffFile[] = [];
@@ -112,17 +71,16 @@ export async function compareAgainstBaseline(
   for (const file of current) {
     seen.add(file.path);
     const original = baseline.get(file.path);
-    let buffer: Buffer;
+    let read;
     try {
-      buffer = await readFile(join(root, file.path));
+      read = await source.readFile(file.path);
     } catch {
       continue;
     }
-    const binary = buffer.includes(0) || file.size > MAX_DIFF_BYTES;
+    const binary = read.binary || file.size > MAX_DIFF_BYTES;
+    const text = binary ? "" : read.content;
 
     if (original === undefined) {
-      // Added file.
-      const text = binary ? "" : buffer.toString("utf8");
       const hunks = binary ? [] : (toHunk("", text) ?? []);
       const additions = binary
         ? 0
@@ -154,10 +112,9 @@ export async function compareAgainstBaseline(
       continue;
     }
 
-    const currentText = buffer.toString("utf8");
-    if (currentText === original) continue;
+    if (text === original) continue;
 
-    const hunks = toHunk(original, currentText) ?? [];
+    const hunks = toHunk(original, text) ?? [];
     const additions = hunks.reduce(
       (sum, h) => sum + h.lines.filter((l) => l.type === "add").length,
       0,
@@ -198,12 +155,4 @@ export async function compareAgainstBaseline(
   const unchanged = Math.max(0, current.length - files.length);
   const skipped = files.filter((f) => f.binary && f.hunks.length === 0).length;
   return { files, skipped, unchanged };
-}
-
-/**
- * Resolve a relative workspace path, reusing `resolveWorkspacePath` so the same
- * safety rules are enforced as the files API. Throws on traversal.
- */
-export function resolveWorkspaceFile(root: string, rel: string): string {
-  return resolveWorkspacePath(root, rel);
 }

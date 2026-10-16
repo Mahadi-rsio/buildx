@@ -1,12 +1,10 @@
-import { readdir, readFile, stat } from "node:fs/promises";
-import { resolveWorkspacePath } from "@buildx/sandbox";
 import { getRun } from "@/lib/store";
-import type { FileEntry, FileContentResponse, FilesResponse } from "@/lib/types";
+import { sourceForRun } from "@/lib/workspace-source";
+import type { FileContentResponse, FilesResponse } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
 const MAX_PREVIEW_BYTES = 1_000_000;
-const IGNORED_DIRS = new Set(["node_modules", ".git", ".next", "dist", "coverage"]);
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -15,7 +13,8 @@ function message(error: unknown): string {
 /**
  * `GET /api/workspaces/:id/files?path=` — list a directory inside the run's
  * workspace, or return a single file's contents when `path` names a file
- * (arcetecture.md §6). Traversal outside the workspace is rejected.
+ * (arcetecture.md §6). Reads through the run's `WorkspaceSource` so it works
+ * for local and remote (Fly daemon) sandboxes alike. Traversal is rejected.
  */
 export async function GET(
   request: Request,
@@ -29,59 +28,58 @@ export async function GET(
 
   const url = new URL(request.url);
   const rel = url.searchParams.get("path")?.trim() || ".";
+  const source = sourceForRun(run);
 
-  let target: string;
+  // Resolve first so traversal attempts fail with a 400 regardless of kind.
   try {
-    target = resolveWorkspacePath(run.workspaceDir, rel);
+    source.resolve(rel);
   } catch (error) {
-    return Response.json({ error: "invalid_path", message: message(error) }, { status: 400 });
+    return Response.json(
+      { error: "invalid_path", message: message(error) },
+      { status: 400 },
+    );
   }
 
-  let stats;
+  const folder = rel === "." || rel === "" ? "" : rel.replace(/\/+$/, "");
+  let type: "file" | "dir" | null;
   try {
-    stats = await stat(target);
+    type = (await source.stat(folder))?.type ?? null;
   } catch {
-    return Response.json({ error: "not_found", path: rel }, { status: 404 });
+    type = null;
   }
-
-  if (stats.isFile()) {
-    if (stats.size > MAX_PREVIEW_BYTES) {
+  if (type === "file") {
+    try {
+      const read = await source.readFile(folder);
+      if (read.size > MAX_PREVIEW_BYTES) {
+        return Response.json(
+          { error: "file_too_large", path: folder, size: read.size },
+          { status: 413 },
+        );
+      }
+      const response: FileContentResponse = {
+        path: folder,
+        type: "file",
+        content: read.binary ? "" : read.content,
+        size: read.size,
+        binary: read.binary,
+      };
+      return Response.json(response);
+    } catch (error) {
       return Response.json(
-        { error: "file_too_large", path: rel, size: stats.size },
-        { status: 413 },
+        { error: "read_failed", message: message(error) },
+        { status: 500 },
       );
     }
-    const buffer = await readFile(target);
-    const binary = buffer.includes(0);
-    const response: FileContentResponse = {
-      path: rel,
-      type: "file",
-      content: binary ? "" : buffer.toString("utf8"),
-      size: stats.size,
-      binary,
-    };
-    return Response.json(response);
   }
 
-  const dirents = await readdir(target, { withFileTypes: true });
-  const parent = rel.replace(/[./]+$/, "");
-  const entries: FileEntry[] = dirents
-    .filter((entry) => !IGNORED_DIRS.has(entry.name))
-    .map(
-      (entry): FileEntry => ({
-        name: entry.name,
-        path: parent ? `${parent}/${entry.name}` : entry.name,
-        type: entry.isDirectory() ? "dir" : "file",
-      }),
-    )
-    .sort((a, b) =>
-      a.type === b.type
-        ? a.name.localeCompare(b.name)
-        : a.type === "dir"
-          ? -1
-          : 1,
+  try {
+    const entries = await source.listDir(folder);
+    const response: FilesResponse = { path: rel, type: "dir", entries };
+    return Response.json(response);
+  } catch {
+    return Response.json(
+      { error: "not_found", path: rel },
+      { status: 404 },
     );
-
-  const response: FilesResponse = { path: rel, type: "dir", entries };
-  return Response.json(response);
+  }
 }
