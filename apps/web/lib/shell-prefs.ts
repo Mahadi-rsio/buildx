@@ -8,11 +8,18 @@ export interface ShellPrefs {
 
 const STORAGE_KEY = "buildx.shell";
 
+/** An empty override means "use the server default" (`AGENT_MODEL`). */
 const DEFAULTS: ShellPrefs = {
   sidebarCollapsed: false,
-  panelOpen: true,
+  panelOpen: false,
   modelOverride: "",
 };
+
+/**
+ * Placeholder ids that earlier builds persisted. They are not real models, so a
+ * stored override matching one is treated as "unset" instead of being sent.
+ */
+const LEGACY_INVALID_MODELS = new Set(["deepseek 0731"]);
 
 export function loadShellPrefs(): ShellPrefs {
   if (typeof window === "undefined") return DEFAULTS;
@@ -20,11 +27,13 @@ export function loadShellPrefs(): ShellPrefs {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return DEFAULTS;
     const parsed = JSON.parse(raw) as Partial<ShellPrefs>;
+    const stored =
+      typeof parsed.modelOverride === "string" ? parsed.modelOverride.trim() : "";
     return {
       sidebarCollapsed: Boolean(parsed.sidebarCollapsed),
-      panelOpen: parsed.panelOpen === undefined ? true : Boolean(parsed.panelOpen),
+      panelOpen: parsed.panelOpen === undefined ? false : Boolean(parsed.panelOpen),
       modelOverride:
-        typeof parsed.modelOverride === "string" ? parsed.modelOverride : "",
+        stored.length > 0 && !LEGACY_INVALID_MODELS.has(stored) ? stored : "",
     };
   } catch {
     return DEFAULTS;

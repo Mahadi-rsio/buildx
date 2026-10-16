@@ -1,5 +1,7 @@
+import type { RunTaskUsage } from "@buildx/agent";
 import type { RunEvent, RunStatus } from "@buildx/shared";
 import { toStreamItems, type StreamItem } from "@/components/run-events";
+import { buildTokenUsage, type TokenUsage } from "@/lib/tokens";
 
 export type ChatRole = "user" | "assistant" | "system";
 
@@ -16,6 +18,8 @@ export interface ChatMessage {
   role: ChatRole;
   blocks: ChatBlock[];
   createdAt: number;
+  /** Token accounting for the turn (live estimate, then real usage). */
+  usage?: TokenUsage;
 }
 
 /** Build a chat-shaped view from a run task + append-only events. */
@@ -25,6 +29,7 @@ export function buildChatMessages(args: {
   createdAt: number;
   events: RunEvent[];
   status: RunStatus;
+  usage?: RunTaskUsage;
 }): ChatMessage[] {
   const items = toStreamItems(args.events);
   const assistantBlocks: ChatBlock[] = [];
@@ -101,11 +106,20 @@ export function buildChatMessages(args: {
   ];
 
   if (assistantBlocks.length > 0 || running) {
+    const outputText = assistantBlocks
+      .filter((block) => block.kind === "text")
+      .map((block) => block.text ?? "")
+      .join("\n");
     messages.push({
       id: `${args.runId}-assistant`,
       role: "assistant",
       createdAt: args.events[0]?.ts ?? args.createdAt,
       blocks: assistantBlocks,
+      usage: buildTokenUsage({
+        task: args.task,
+        outputText,
+        usage: args.usage,
+      }),
     });
   }
 

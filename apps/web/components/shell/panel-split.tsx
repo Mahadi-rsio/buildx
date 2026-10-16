@@ -16,12 +16,15 @@ import {
 import { useShell } from "@/components/shell/shell-context";
 
 /**
- * Main-area layout: the page's content plus the workspace panel.
+ * Main-area layout: the page's content plus the live coding workspace.
  *
- * Desktop: resizable split (remounted when the panel toggles so sizes stay
- * sane). Mobile: content only; the panel lives in a right-side drawer.
- * Pass `workspace={null}` before a run exists — the panel then shows an
- * honest "no workspace yet" state instead of faking files.
+ * Desktop: resizable split between the conversation and the workspace panel
+ * (file browser / live changes diff). Mobile: content only; the workspace
+ * lives in a full-width right-side drawer. Pass `workspace={null}` before a run exists — the panel
+ * then shows an honest "no workspace yet" state instead of faking files.
+ *
+ * The chat column is always a bounded-height flex column so the composer stays
+ * pinned to the bottom regardless of message count or panel state.
  */
 export function PanelSplit({
   workspace,

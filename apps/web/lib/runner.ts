@@ -5,6 +5,7 @@ import { LocalSandbox } from "@buildx/sandbox";
 import type { RunStatus } from "@buildx/shared";
 import { envStatus, isTerminalStatus } from "@buildx/shared";
 import { appendEvent, finishRun, type StoredRun } from "./store";
+import { captureWorkspaceSnapshot } from "./workspace-fs";
 
 /** Seed the workspace so `list_dir` / `read_file` have something real to read. */
 async function seedWorkspace(run: StoredRun): Promise<void> {
@@ -63,6 +64,9 @@ export async function startRun(run: StoredRun): Promise<void> {
     await sandbox.start();
     run.status = "running";
     run.updatedAt = Date.now();
+
+    // Snapshot the seeded workspace so the Changes tab can diff against it.
+    run.baseline = await captureWorkspaceSnapshot(run.workspaceDir);
 
     const result = await runTask({
       task: run.task,

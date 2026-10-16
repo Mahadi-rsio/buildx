@@ -6,7 +6,6 @@ import { useEffect, useMemo, useState } from "react";
 import {
   BarChart3,
   Ellipsis,
-  FolderTree,
   Pin,
   PinOff,
   Plus,
@@ -40,7 +39,7 @@ import { useConversationPrefs } from "@/hooks/use-conversation-prefs";
 import { prepareRunList, type RunListItem } from "@/lib/group-runs";
 import { formatAgo } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { useShell, type PanelTab } from "@/components/shell/shell-context";
+import { useShell } from "@/components/shell/shell-context";
 
 function StatusDot({ status }: { status: RunListItem["status"] }) {
   const tone =
@@ -136,7 +135,7 @@ function SidebarBody({
   const { prefs, rename, togglePin, hide } = useConversationPrefs();
   const [query, setQuery] = useState("");
   const [renaming, setRenaming] = useState<RunListItem | null>(null);
-  const { setPanelTab, setPanelOpen, setSettingsOpen, setUsageOpen } = useShell();
+  const { setSettingsOpen, setUsageOpen } = useShell();
 
   const { pinned, groups } = useMemo(
     () => prepareRunList(runs, prefs, query),
@@ -290,47 +289,33 @@ function SidebarBody({
         )}
       </ScrollArea>
 
-      <div className="border-t border-border p-2">
-        <div className="grid grid-cols-3 gap-1">
+      <div className="border-t border-border/80 p-2">
+        <div className="grid grid-cols-2 gap-1.5">
           <Button
             type="button"
             variant="ghost"
             size="xs"
-            className="flex-col gap-1 py-2 text-[10px]"
-            onClick={() => {
-              setPanelTab("files" satisfies PanelTab);
-              setPanelOpen(true);
-              onNavigate?.();
-            }}
-          >
-            <FolderTree className="size-3.5" />
-            Files
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="xs"
-            className="flex-col gap-1 py-2 text-[10px]"
+            className="flex items-center justify-center gap-1.5 py-2 text-xs text-muted-foreground hover:text-foreground"
             onClick={() => {
               setUsageOpen(true);
               onNavigate?.();
             }}
           >
             <BarChart3 className="size-3.5" />
-            Usage
+            <span>Usage</span>
           </Button>
           <Button
             type="button"
             variant="ghost"
             size="xs"
-            className="flex-col gap-1 py-2 text-[10px]"
+            className="flex items-center justify-center gap-1.5 py-2 text-xs text-muted-foreground hover:text-foreground"
             onClick={() => {
               setSettingsOpen(true);
               onNavigate?.();
             }}
           >
             <Settings2 className="size-3.5" />
-            Settings
+            <span>Settings</span>
           </Button>
         </div>
       </div>

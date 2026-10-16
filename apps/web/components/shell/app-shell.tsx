@@ -30,7 +30,6 @@ function ShellLayout({ children }: { children: ReactNode }) {
 
 /**
  * App chrome: top bar, conversation sidebar, settings/usage dialogs.
- * Pages compose their own main area (usually via `PanelSplit`).
  * Push run info into the top bar with `useShellMeta(...)` from the page.
  */
 export function AppShell({ children }: { children: ReactNode }) {

@@ -18,3 +18,24 @@ export function formatClock(ts: number): string {
     second: "2-digit",
   });
 }
+
+/** Human-readable byte count: "1.2 KB", "3.4 MB", or "0 B" for empty. */
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return "0 B";
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length) {
+    value /= 1024;
+    unit += 1;
+  }
+  const rounded = value >= 100 ? Math.round(value) : value.toFixed(1);
+  return `${rounded} ${units[unit - 1]}`;
+}
+
+/** Bounded line count label: "142 lines" or "800+ lines" past `ceiling`. */
+export function formatLines(count: number, ceiling = 1000): string {
+  const safe = Number.isFinite(count) ? Math.max(0, count) : 0;
+  return safe > ceiling ? `${ceiling}+` : `${safe}`;
+}

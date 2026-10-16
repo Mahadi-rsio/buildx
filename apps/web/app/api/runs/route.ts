@@ -35,9 +35,11 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
+  const selectedModel = parsed.data.model?.trim() || config.model;
+
   const run = createRun({
     task: parsed.data.task.trim(),
-    model: parsed.data.model?.trim() || config.model,
+    model: selectedModel,
     maxSteps: parsed.data.maxSteps ?? config.maxSteps,
   });
 

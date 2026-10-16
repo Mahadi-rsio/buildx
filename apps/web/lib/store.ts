@@ -3,6 +3,10 @@ import type { RunEvent, RunEventInput, RunStatus } from "@buildx/shared";
 import { isTerminalStatus } from "@buildx/shared";
 import { workspaceDirFor } from "./paths";
 import type { RunDetail, RunStats, RunSummary } from "./types";
+import type { Baseline } from "./workspace-fs";
+
+/** Trigger lazy baseline capture on first diff request (arcetecture §6). */
+export const captureBaseline = Symbol.for("__buildx.captureBaseline");
 
 export interface StoredRun {
   id: string;
@@ -22,6 +26,9 @@ export interface StoredRun {
   subscribers: Set<(event: RunEvent) => void>;
   /** Aborted by `POST /api/runs/:id/stop`. */
   controller: AbortController;
+  /** Run-start snapshot for the workspace diff (arcetecture §6). Capture is
+   *  lazy: the first `GET /api/workspaces/:id/diff` fills this when missing. */
+  baseline?: Baseline;
 }
 
 export interface Store {

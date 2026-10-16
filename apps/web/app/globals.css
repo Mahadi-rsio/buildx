@@ -12,6 +12,18 @@
 .dark {
   --background: oklch(0.145 0 0);
   --foreground: oklch(0.985 0 0);
+  /* Semantic surfaces: background < surface < surface-elevated < card. */
+  --surface: oklch(0.165 0 0);
+  --surface-elevated: oklch(0.205 0 0);
+  /* Status hues used by the agent activity stream. */
+  --info: oklch(0.72 0.13 235);
+  --info-foreground: oklch(0.15 0 0);
+  --warning: oklch(0.78 0.15 85);
+  --warning-foreground: oklch(0.15 0 0);
+  --success: oklch(0.72 0.19 150);
+  --success-foreground: oklch(0.15 0 0);
+  --danger: oklch(0.68 0.2 25);
+  --danger-foreground: oklch(0.985 0 0);
   --card: oklch(0.185 0 0);
   --card-foreground: oklch(0.985 0 0);
   --popover: oklch(0.185 0 0);
@@ -59,6 +71,16 @@
   --color-chart-3: var(--chart-3);
   --color-chart-2: var(--chart-2);
   --color-chart-1: var(--chart-1);
+  --color-surface: var(--surface);
+  --color-surface-elevated: var(--surface-elevated);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-danger: var(--danger);
+  --color-danger-foreground: var(--danger-foreground);
   --color-ring: var(--ring);
   --color-input: var(--input);
   --color-border: var(--border);
@@ -84,6 +106,22 @@
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
+  --text-2xs: 0.625rem;
+  --text-2xs--line-height: 0.875rem;
+  /* App typography scale (arcetecture §6.1 tokens). UI body is 15px; */
+  /* secondary text 13px; tiny caps 11px; filenames 14px medium. */
+  --text-ui: 0.9375rem;
+  --text-ui--line-height: 1.55;
+  --text-secondary: 0.8125rem;
+  --text-secondary--line-height: 1.55;
+  --text-tiny: 0.6875rem;
+  --text-tiny--line-height: 1rem;
+  --text-tiny--letter-spacing: 0.04em;
+  --text-filename: 0.875rem;
+  --text-filename--line-height: 1.25;
+  /* Code: 12.5px mobile, 13px ≥ 48rem; 1.6 leading. */
+  --text-code: 0.78125rem;
+  --text-code--line-height: 1.6;
 }
 
 @layer base {
@@ -92,9 +130,110 @@
   }
   html {
     @apply font-sans antialiased;
+    /* Never scroll the page horizontally; let contained areas scroll instead. */
+    overflow-x: clip;
   }
   body {
     @apply min-h-dvh bg-background text-foreground;
+    overflow-x: clip;
+  }
+  /* Avoid scroll chaining / bounce between the app shell and nested scrollers. */
+  html,
+  body {
+    overscroll-behavior: none;
+  }
+  /* Consistent hairline icon weight across lucide and inline SVG marks. */
+  svg {
+    stroke-width: 1.75;
+  }
+  /* Code never gets contextual ligatures and keeps tabular numerals so line
+     numbers, sizes and diff counts align column-straight. */
+  code,
+  pre,
+  kbd,
+  samp {
+    font-variant-ligatures: none;
+  }
+  .code-nums {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* Horizontal-ruler code block with CSS-counter line numbers. Apply
+   `.code-lines` to the scroll container around a shiki <pre>. */
+.code-lines {
+  counter-reset: buildx-code-line;
+}
+.code-lines .shiki {
+  margin: 0;
+  padding: 0;
+  background-color: transparent;
+}
+.code-lines .line {
+  display: inline-block;
+  min-width: 100%;
+  padding-right: 1rem;
+}
+.code-lines .line::before {
+  counter-increment: buildx-code-line;
+  content: counter(buildx-code-line) " ";
+  display: inline-block;
+  width: 2.25rem;
+  margin-right: 0.875rem;
+  padding-right: 0.625rem;
+  text-align: right;
+  color: oklch(1 0 0 / 25%);
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+
+/* Vertical connector between consecutive tool steps in an activity group. */
+.timeline-rail > * {
+  position: relative;
+  padding-left: 1.35rem;
+}
+.timeline-rail > *::before {
+  content: "";
+  position: absolute;
+  left: 0.33rem;
+  top: 0.6rem;
+  bottom: 0;
+  width: 1px;
+  background: oklch(1 0 0 / 10%);
+}
+.timeline-rail > *:last-child::before {
+  bottom: 60%;
+}
+.timeline-rail > *::after {
+  content: "";
+  position: absolute;
+  left: calc(0.33rem - 3px);
+  top: 0.78rem;
+  width: 7px;
+  height: 7px;
+  border-radius: 9999px;
+  background: oklch(1 0 0 / 30%);
+  border: 1px solid oklch(0 0 0 / 50%);
+}
+.timeline-rail > *[data-status="running"]::after {
+  background: var(--warning);
+  box-shadow: 0 0 0 3px oklch(0.78 0.15 85 / 22%);
+  animation: buildx-pulse 1.6s ease-in-out infinite;
+}
+.timeline-rail > *[data-status="failed"]::after {
+  background: var(--danger);
+}
+.timeline-rail > *[data-status="done"]::after {
+  background: var(--success);
+}
+
+@keyframes buildx-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
   }
 }
 
@@ -111,3 +250,166 @@
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+
+@keyframes buildx-sweep {
+  0% {
+    background-position: 160% 0;
+  }
+  100% {
+    background-position: -60% 0;
+  }
+}
+
+/* Light that sweeps across an activity label while a step is in flight. */
+.shimmer-sweep {
+  background-image: linear-gradient(
+    100deg,
+    transparent 34%,
+    oklch(1 0 0 / 45%) 50%,
+    transparent 66%
+  );
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  animation: buildx-sweep 1.5s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shimmer-sweep {
+    display: none;
+  }
+}
+
+/* Respect iOS notch / home indicator (paired with viewport-fit=cover). */
+@utility pb-safe {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+@utility pl-safe {
+  padding-left: env(safe-area-inset-left);
+}
+@utility pr-safe {
+  padding-right: env(safe-area-inset-right);
+}
+/* Safe-area bottom padding that still leaves breathing room on desktop. */
+@utility pb-safe-min {
+  padding-bottom: max(env(safe-area-inset-bottom), 0.75rem);
+}
+
+/* Blinking block cursor for an in-flight terminal command. */
+@utility term-cursor {
+  &::after {
+    content: "▋";
+    margin-left: 0.25rem;
+    color: var(--success);
+    animation: buildx-blink 1s steps(2, start) infinite;
+  }
+}
+@keyframes buildx-blink {
+  to {
+    visibility: hidden;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .term-cursor::after {
+    animation: none;
+  }
+}
+
+/* ANSI 16-color palette for terminal output (dark theme). anser emits these
+   class names with `use_classes: true`. Intentionally low-saturation on the
+   dark `--surface` so every ink passes 3:1 contrast. */
+.ansi-black-fg {
+  color: oklch(0.72 0 0);
+}
+.ansi-red-fg {
+  color: oklch(0.7 0.21 25);
+}
+.ansi-green-fg {
+  color: oklch(0.74 0.18 145);
+}
+.ansi-yellow-fg {
+  color: oklch(0.82 0.17 90);
+}
+.ansi-blue-fg {
+  color: oklch(0.7 0.15 225);
+}
+.ansi-magenta-fg {
+  color: oklch(0.72 0.2 310);
+}
+.ansi-cyan-fg {
+  color: oklch(0.74 0.13 190);
+}
+.ansi-white-fg {
+  color: oklch(0.92 0 0);
+}
+.ansi-bright-black-fg {
+  color: oklch(0.72 0 0);
+}
+.ansi-bright-red-fg {
+  color: oklch(0.7 0.21 25);
+}
+.ansi-bright-green-fg {
+  color: oklch(0.74 0.18 145);
+}
+.ansi-bright-yellow-fg {
+  color: oklch(0.82 0.17 90);
+}
+.ansi-bright-blue-fg {
+  color: oklch(0.7 0.15 225);
+}
+.ansi-bright-magenta-fg {
+  color: oklch(0.72 0.2 310);
+}
+.ansi-bright-cyan-fg {
+  color: oklch(0.74 0.13 190);
+}
+.ansi-bright-white-fg {
+  color: oklch(0.92 0 0);
+}
+/* 256-color escapes fall back to a readable gray-blue. */
+.ansi-palette-fg {
+  color: oklch(0.78 0.05 245);
+}
+.ansi-black-bg {
+  background: oklch(0.26 0 0);
+}
+.ansi-red-bg {
+  background: oklch(0.4 0.14 25);
+}
+.ansi-green-bg {
+  background: oklch(0.42 0.13 145);
+}
+.ansi-yellow-bg {
+  background: oklch(0.47 0.12 90);
+}
+.ansi-blue-bg {
+  background: oklch(0.4 0.12 225);
+}
+.ansi-magenta-bg {
+  background: oklch(0.42 0.14 310);
+}
+.ansi-cyan-bg {
+  background: oklch(0.42 0.1 190);
+}
+/* White on black resets back to muted gray instead of blinding white. */
+.ansi-white-bg {
+  background: oklch(0.3 0 0);
+}
+.ansi-bright-black-bg {
+  background: oklch(0.3 0 0);
+}
+.ansi-bold {
+  font-weight: 600;
+}
+.ansi-italic {
+  font-style: italic;
+}
+.ansi-underline {
+  text-decoration: underline;
+}
+.ansi-hidden {
+  visibility: hidden;
+}
+.ansi-dim {
+  opacity: 0.6;
+}
+

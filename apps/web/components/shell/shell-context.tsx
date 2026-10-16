@@ -17,13 +17,7 @@ import {
 } from "@/lib/shell-prefs";
 import { useIsMobile } from "@/hooks/use-mobile";
 
-export type PanelTab =
-  | "files"
-  | "changes"
-  | "terminal"
-  | "preview"
-  | "mcp"
-  | "memory";
+export type PanelTab = "files" | "changes";
 
 /** Live run info pushed up by the active page so the top bar stays truthful. */
 export interface ShellMeta {
@@ -96,7 +90,7 @@ export function useShellMeta(meta: ShellMeta): void {
 export function ShellProvider({ children }: { children: ReactNode }) {
   const [prefs, setPrefs] = useState<ShellPrefs>({
     sidebarCollapsed: false,
-    panelOpen: true,
+    panelOpen: false,
     modelOverride: "",
   });
   const [sidebarOpen, setSidebarOpen] = useState(false);

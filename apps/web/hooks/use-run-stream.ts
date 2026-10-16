@@ -83,6 +83,29 @@ export function useRunStream(runId: string) {
             );
             if (isTerminalStatus(payload.status)) {
               source?.close();
+              // Stats (including real token usage) are only persisted once the
+              // run finishes, so pull the final record to surface them.
+              void (async () => {
+                try {
+                  const res = await fetch(`/api/runs/${runId}`);
+                  if (!res.ok || !alive) return;
+                  const data = (await res.json()) as RunDetail;
+                  if (!alive) return;
+                  setRun((previous) =>
+                    previous
+                      ? {
+                          ...previous,
+                          status: data.status,
+                          error: data.error ?? previous.error,
+                          stats: data.stats,
+                          updatedAt: data.updatedAt,
+                        }
+                      : data,
+                  );
+                } catch {
+                  // Keep the streamed state if the refresh fails.
+                }
+              })();
             }
           } else if (type === "error") {
             const payload = frame.data as { message?: string };

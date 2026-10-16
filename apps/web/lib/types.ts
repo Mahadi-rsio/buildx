@@ -50,3 +50,37 @@ export interface FileContentResponse {
 }
 
 export type FilesResponseItem = FilesResponse | FileContentResponse;
+
+/** One line inside a unified-diff hunk (from `diff.structuredPatch`). */
+export interface DiffLine {
+  type: "ctx" | "add" | "del";
+  text: string;
+}
+
+export interface DiffHunk {
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  lines: DiffLine[];
+}
+
+export interface DiffFile {
+  path: string;
+  /** A=added, M=modified, D=deleted. */
+  status: "M" | "A" | "D";
+  additions: number;
+  deletions: number;
+  hunks: DiffHunk[];
+  /** True when the file is binary or was skipped (too large) — no hunks. */
+  binary?: boolean;
+  size?: number;
+  mtime?: number;
+}
+
+export interface DiffResponse {
+  files: DiffFile[];
+  /** Number of files compared but left unchanged (shown in the summary). */
+  unchanged: number;
+  skipped: number;
+}

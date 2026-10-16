@@ -1,31 +1,25 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import type { RunEvent, TodoItem } from "@buildx/shared";
+import { Fragment, useMemo } from "react";
 import {
-  Boxes,
-  Eye,
-  FileCode2,
-  FolderIcon,
+  ArrowLeft,
+  ChevronRight,
+  FolderOpen,
   FolderTree,
-  MemoryStick,
+  Home,
   RefreshCw,
-  TerminalSquare,
 } from "lucide-react";
-import { latestTodos } from "@/components/run-events";
-import { CodeComparison } from "@/components/ui/code-comparison";
+import { FileIcon } from "@/components/workspace/file-icon";
+import { CodeViewer } from "@/components/workspace/code-viewer";
+import { DiffView } from "@/components/workspace/diff-view";
 import { File, Tree, type TreeViewElement } from "@/components/ui/file-tree";
-import { NumberTicker } from "@/components/ui/number-ticker";
-import { Terminal } from "@/components/ui/terminal";
 import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  collectFileChanges,
-  collectTerminalOutput,
-  guessLanguage,
-} from "@/lib/chat-messages";
-import type { FileContentResponse, FilesResponse } from "@/lib/types";
+import type {
+  DiffFile,
+  FileContentResponse,
+  FilesResponse,
+} from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 function listingToTree(listing: FilesResponse | null): TreeViewElement[] {
@@ -48,84 +42,174 @@ function Unavailable({
 }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
+      <span className="mb-1 flex size-9 items-center justify-center rounded-full border border-border bg-muted/40 text-muted-foreground">
+        <FolderTree className="size-4" />
+      </span>
       <p className="text-sm font-medium text-foreground/90">{title}</p>
-      <p className="text-xs leading-relaxed text-muted-foreground">{detail}</p>
+      <p className="max-w-60 text-secondary leading-relaxed text-muted-foreground">
+        {detail}
+      </p>
+    </div>
+  );
+}
+
+function PathCrumbs({
+  path,
+  onNavigate,
+}: {
+  path: string;
+  onNavigate: (path: string) => void;
+}) {
+  const parts = path === "." ? [] : path.split("/").filter(Boolean);
+  return (
+    <nav
+      aria-label="Workspace folders"
+      className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto font-mono text-secondary [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+    >
+      <button
+        type="button"
+        onClick={() => onNavigate(".")}
+        aria-label="Workspace root"
+        className="shrink-0 rounded p-1 text-muted-foreground transition hover:bg-muted/60 hover:text-foreground"
+      >
+        <Home className="size-3.5" />
+      </button>
+      {parts.map((part, index) => {
+        const target = parts.slice(0, index + 1).join("/");
+        const last = index === parts.length - 1;
+        return (
+          <Fragment key={target}>
+            <ChevronRight className="size-3 shrink-0 text-muted-foreground/40" />
+            <button
+              type="button"
+              onClick={() => onNavigate(target)}
+              className={cn(
+                "max-w-32 shrink-0 truncate rounded px-1 py-0.5 transition hover:bg-muted/60 hover:text-foreground",
+                last ? "text-foreground/85" : "text-muted-foreground",
+              )}
+            >
+              {part}
+            </button>
+          </Fragment>
+        );
+      })}
+    </nav>
+  );
+}
+
+function FileTreeView({
+  listing,
+  path,
+  onNavigate,
+  onOpenFile,
+}: {
+  listing: FilesResponse;
+  path: string;
+  onNavigate: (path: string) => void;
+  onOpenFile: (path: string) => void;
+}) {
+  const tree = useMemo(() => listingToTree(listing), [listing]);
+  const parts = path === "." ? [] : path.split("/").filter(Boolean);
+  const parentPath = parts.length ? parts.slice(0, -1).join("/") || "." : null;
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      {path !== "." ? (
+        <div className="mb-1 px-2 pt-1.5">
+          <Button
+            type="button"
+            size="xs"
+            variant="outline"
+            className="w-full justify-start"
+            onClick={() => parentPath && onNavigate(parentPath)}
+          >
+            <FolderOpen className="size-3" />
+            Up to parent
+          </Button>
+        </div>
+      ) : null}
+      <div className="min-h-0 flex-1 overflow-hidden">
+        <Tree
+          className="h-full"
+          elements={tree}
+          initialExpandedItems={[]}
+          indicator={false}
+          sort="default"
+        >
+          {tree.map((el) =>
+            el.type === "folder" ? (
+              <File
+                key={el.id}
+                value={el.id}
+                fileIcon={
+                  <span className="text-amber-300/90">
+                    <FolderTree className="size-4" />
+                  </span>
+                }
+                handleSelect={(id) => {
+                  if (el.type === "folder") onNavigate(id);
+                  else void onOpenFile(id);
+                }}
+              >
+                <span className="truncate">{el.name}</span>
+              </File>
+            ) : (
+              <File
+                key={el.id}
+                value={el.id}
+                fileIcon={<FileIcon path={el.id} className="size-4" />}
+                handleSelect={(id) => {
+                  if (el.type === "folder") onNavigate(id);
+                  else void onOpenFile(id);
+                }}
+              >
+                <span className="truncate">{el.name}</span>
+              </File>
+            ),
+          )}
+        </Tree>
+      </div>
     </div>
   );
 }
 
 export function WorkspacePanel({
   workspaceId,
-  events,
   path,
   listing,
   file,
   filesError,
+  diffFiles,
+  diffUnchanged,
+  diffStatus,
   onNavigate,
   onOpenFile,
   onBackFromFile,
   onRefresh,
-  readFileContent,
+  onOpenFromDiff,
   tab,
   onTabChange,
   className,
 }: {
   workspaceId: string;
-  events: RunEvent[];
   path: string;
   listing: FilesResponse | null;
   file: FileContentResponse | null;
   filesError: string | null;
+  diffFiles: DiffFile[];
+  diffUnchanged: number;
+  diffStatus: "loading" | "ready" | "error";
   onNavigate: (path: string) => void;
   onOpenFile: (path: string) => void;
   onBackFromFile: () => void;
   onRefresh: () => void;
-  readFileContent: (path: string) => Promise<string | null>;
-  /** Controlled active tab (defaults to uncontrolled "files"). */
+  /** Open a changed file in the Files tab (from the Changes tab). */
+  onOpenFromDiff: (path: string) => void;
+  /** Controlled active tab. */
   tab?: string;
   onTabChange?: (tab: string) => void;
   className?: string;
 }) {
-  const changes = useMemo(() => collectFileChanges(events), [events]);
-  const terminalOutput = useMemo(() => collectTerminalOutput(events), [events]);
-  const todos = useMemo(() => latestTodos(events), [events]);
-  const tree = useMemo(() => listingToTree(listing), [listing]);
-
-  const [selectedChange, setSelectedChange] = useState<string | null>(null);
-  const [afterCode, setAfterCode] = useState("");
-  const [loadingDiff, setLoadingDiff] = useState(false);
-
-  const activeChange =
-    selectedChange && changes.some((c) => c.path === selectedChange)
-      ? selectedChange
-      : (changes[0]?.path ?? null);
-
-  useEffect(() => {
-    if (!activeChange) return;
-    let alive = true;
-    void (async () => {
-      const content = await readFileContent(activeChange);
-      if (!alive) return;
-      setAfterCode(content ?? "");
-      setLoadingDiff(false);
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [activeChange, readFileContent, events.length]);
-
-  useEffect(() => {
-    if (!activeChange) return;
-    let alive = true;
-    void (async () => {
-      await Promise.resolve();
-      if (alive) setLoadingDiff(true);
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [activeChange, events.length]);
-
   return (
     <div className={cn("flex h-full min-h-0 flex-col bg-sidebar/40", className)}>
       <Tabs
@@ -134,56 +218,54 @@ export function WorkspacePanel({
         onValueChange={(next) => onTabChange?.(String(next))}
         className="flex h-full min-h-0 flex-col gap-0"
       >
-        <div className="border-b border-border px-2 py-2">
-          <TabsList className="h-auto w-full flex-wrap justify-start gap-1 bg-transparent p-0">
-            <TabsTrigger value="files" className="gap-1.5 px-2.5 text-xs">
+        <div className="flex h-9 shrink-0 items-center gap-1.5 border-b border-border bg-sidebar/60 px-1.5">
+          <TabsList className="h-7 w-full gap-0.5 rounded-lg p-px">
+            <TabsTrigger
+              value="files"
+              className="gap-1.5 rounded-md px-2.5 text-xs data-active:bg-muted/70"
+            >
               <FolderTree className="size-3.5" />
               Files
             </TabsTrigger>
-            <TabsTrigger value="changes" className="gap-1.5 px-2.5 text-xs">
-              <FileCode2 className="size-3.5" />
+            <TabsTrigger
+              value="changes"
+              className="gap-1.5 rounded-md px-2.5 text-xs data-active:bg-muted/70"
+            >
+              <FolderOpen className="size-3.5" />
               Changes
-              {changes.length > 0 ? (
-                <span className="font-mono text-[10px] text-muted-foreground">
-                  <NumberTicker value={changes.length} className="text-muted-foreground" />
+              {diffFiles.length > 0 ? (
+                <span className="rounded-full bg-success/15 px-1.5 py-px font-mono text-[10px] tabular-nums text-success">
+                  {diffFiles.length}
                 </span>
               ) : null}
-            </TabsTrigger>
-            <TabsTrigger value="terminal" className="gap-1.5 px-2.5 text-xs">
-              <TerminalSquare className="size-3.5" />
-              Terminal
-            </TabsTrigger>
-            <TabsTrigger value="preview" className="gap-1.5 px-2.5 text-xs">
-              <Eye className="size-3.5" />
-              Preview
-            </TabsTrigger>
-            <TabsTrigger value="mcp" className="gap-1.5 px-2.5 text-xs">
-              <Boxes className="size-3.5" />
-              MCP
-            </TabsTrigger>
-            <TabsTrigger value="memory" className="gap-1.5 px-2.5 text-xs">
-              <MemoryStick className="size-3.5" />
-              Memory
             </TabsTrigger>
           </TabsList>
         </div>
 
         <TabsContent value="files" className="min-h-0 flex-1 overflow-hidden">
           <div className="flex h-full min-h-0 flex-col">
-            <div className="flex items-center gap-2 border-b border-border px-3 py-2">
-              <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground">
-                {file ? file.path : path}
-              </span>
+            <div className="flex items-center gap-2 border-b border-border bg-sidebar/60 px-2 py-1.5">
               {file ? (
-                <Button
-                  type="button"
-                  size="xs"
-                  variant="ghost"
-                  onClick={onBackFromFile}
-                >
-                  Tree
-                </Button>
-              ) : null}
+                <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                  <Button
+                    type="button"
+                    size="icon-xs"
+                    variant="ghost"
+                    aria-label="Back to file tree"
+                    onClick={onBackFromFile}
+                  >
+                    <ArrowLeft className="size-3.5" />
+                  </Button>
+                  <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                    <FileIcon path={file.path} className="size-4" />
+                    <span className="min-w-0 flex-1 truncate font-mono text-secondary text-foreground/85">
+                      {file.path}
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <PathCrumbs path={path} onNavigate={onNavigate} />
+              )}
               <Button
                 type="button"
                 size="icon-xs"
@@ -194,199 +276,62 @@ export function WorkspacePanel({
                 <RefreshCw className="size-3.5" />
               </Button>
             </div>
-            {filesError ? (
-              <p className="px-3 py-3 text-xs text-red-400">{filesError}</p>
-            ) : file ? (
-              <ScrollArea className="min-h-0 flex-1">
-                <div className="p-3">
-                  <p className="mb-2 font-mono text-[11px] text-muted-foreground">
-                    {file.size} bytes
-                    {file.binary ? " · binary (not shown)" : ""}
-                  </p>
-                  <pre className="whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-foreground/85">
-                    {file.binary ? "" : file.content}
-                  </pre>
-                </div>
-              </ScrollArea>
-            ) : tree.length === 0 ? (
-              <p className="px-3 py-3 text-xs text-muted-foreground">
-                Empty workspace — files appear as the agent writes them.
-              </p>
-            ) : (
-              <div className="min-h-0 flex-1 overflow-hidden p-2">
-                {path !== "." ? (
-                  <div className="mb-2 px-1">
-                    <Button
-                      type="button"
-                      size="xs"
-                      variant="outline"
-                      onClick={() => {
-                        const parts = path.split("/").filter(Boolean);
-                        parts.pop();
-                        onNavigate(parts.length ? parts.join("/") : ".");
-                      }}
-                    >
-                      Up to parent
-                    </Button>
-                  </div>
-                ) : null}
-                <Tree
-                  className="h-full"
-                  elements={tree}
-                  initialExpandedItems={[]}
-                  indicator={false}
-                >
-                  {tree.map((el) => (
-                    <File
-                      key={el.id}
-                      value={el.id}
-                      fileIcon={
-                        el.type === "folder" ? (
-                          <FolderIcon className="size-4 text-amber-300/90" />
-                        ) : undefined
-                      }
-                      handleSelect={(id) => {
-                        if (el.type === "folder") onNavigate(id);
-                        else void onOpenFile(id);
-                      }}
-                    >
-                      {el.name}
-                    </File>
-                  ))}
-                </Tree>
-              </div>
-            )}
-            <p className="border-t border-border px-3 py-1.5 font-mono text-[10px] text-muted-foreground">
-              workspace/{workspaceId.slice(0, 10)}
+
+            <div className="min-h-0 flex-1">
+              {filesError ? (
+                <p className="px-3 py-3 text-xs text-red-400">{filesError}</p>
+              ) : file ? (
+                <CodeViewer
+                  path={file.path}
+                  content={file.binary ? "" : file.content}
+                />
+              ) : listing ? (
+                <FileTreeView
+                  listing={listing}
+                  path={path}
+                  onNavigate={onNavigate}
+                  onOpenFile={onOpenFile}
+                />
+              ) : (
+                <Unavailable
+                  title="Empty workspace"
+                  detail="Files appear here as the agent writes them."
+                />
+              )}
+            </div>
+
+            <p className="flex items-center gap-1.5 border-t border-border px-3 py-1.5 font-mono text-[10px] text-muted-foreground">
+              <FolderTree className="size-3 shrink-0 text-amber-300/80" />
+              <span className="truncate">
+                workspace/{workspaceId.slice(0, 12)}
+              </span>
             </p>
           </div>
         </TabsContent>
 
         <TabsContent value="changes" className="min-h-0 flex-1 overflow-hidden">
-          {changes.length === 0 ? (
+          {diffStatus === "loading" && diffFiles.length === 0 ? (
             <Unavailable
-              title="No file changes yet"
-              detail="Edits stream here from real file_change events as the agent writes."
+              title="Building the diff"
+              detail="Diffing the workspace against the run-start baseline…"
+            />
+          ) : diffStatus === "error" && diffFiles.length === 0 ? (
+            <Unavailable
+              title="Diff unavailable"
+              detail="The diff endpoint could not be reached for this run."
             />
           ) : (
-            <div className="flex h-full min-h-0 flex-col">
-              <ScrollArea className="max-h-28 border-b border-border">
-                <ul className="p-2">
-                  {changes.map((change) => (
-                    <li key={change.path}>
-                      <button
-                        type="button"
-                        onClick={() => setSelectedChange(change.path)}
-                        className={cn(
-                          "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left font-mono text-[11px] transition hover:bg-muted/50",
-                          activeChange === change.path && "bg-muted/60",
-                        )}
-                      >
-                        <span className="text-emerald-400">{change.change}</span>
-                        <span className="truncate text-foreground/85">
-                          {change.path}
-                        </span>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </ScrollArea>
-              <div className="min-h-0 flex-1 overflow-auto p-2">
-                {activeChange ? (
-                  loadingDiff ? (
-                    <p className="px-2 py-3 text-xs text-muted-foreground">
-                      Loading diff…
-                    </p>
-                  ) : (
-                    <CodeComparison
-                      beforeCode=""
-                      afterCode={afterCode}
-                      language={guessLanguage(activeChange)}
-                      filename={activeChange}
-                      lightTheme="github-light"
-                      darkTheme="github-dark"
-                    />
-                  )
-                ) : null}
-              </div>
-            </div>
-          )}
-        </TabsContent>
-
-        <TabsContent value="terminal" className="min-h-0 flex-1 overflow-hidden p-3">
-          {terminalOutput.length === 0 ? (
-            <Unavailable
-              title="No terminal output"
-              detail="Stdout and stderr from tool executions appear here when emitted."
+            <DiffView
+              files={diffFiles}
+              unchanged={diffUnchanged}
+              onOpenFile={(target) => {
+                onOpenFromDiff(target);
+                onTabChange?.("files");
+              }}
             />
-          ) : (
-            <Terminal
-              sequence={false}
-              className="h-full max-h-none max-w-none overflow-auto"
-            >
-              <span className="whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed text-foreground/85">
-                {terminalOutput}
-              </span>
-            </Terminal>
           )}
-        </TabsContent>
-
-        <TabsContent value="preview" className="min-h-0 flex-1">
-          <Unavailable
-            title="Preview unavailable"
-            detail="No preview URL is exposed by the current sandbox API. This tab will activate when a workspace preview endpoint lands."
-          />
-        </TabsContent>
-
-        <TabsContent value="mcp" className="min-h-0 flex-1">
-          <Unavailable
-            title="MCP & skills not configured"
-            detail="MCP server management is not wired in this phase. Nothing here is simulated as connected."
-          />
-        </TabsContent>
-
-        <TabsContent value="memory" className="min-h-0 flex-1 overflow-auto p-4">
-          <MemoryPanel todos={todos} />
         </TabsContent>
       </Tabs>
-    </div>
-  );
-}
-
-function MemoryPanel({ todos }: { todos: TodoItem[] }) {
-  if (todos.length === 0) {
-    return (
-      <Unavailable
-        title="No project memory yet"
-        detail="The agent's todo/plan events will show here as working memory for this run."
-      />
-    );
-  }
-  return (
-    <div className="space-y-3">
-      <div>
-        <h3 className="text-sm font-medium">Agent plan</h3>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Live todos from the current run (not persisted project memory).
-        </p>
-      </div>
-      <ul className="space-y-2">
-        {todos.map((todo, index) => (
-          <li
-            key={`${todo.content}-${index}`}
-            className={cn(
-              "rounded-lg border border-border px-3 py-2 text-xs",
-              todo.status === "done" && "text-muted-foreground line-through",
-              todo.status === "in_progress" && "border-amber-500/30 text-amber-200",
-            )}
-          >
-            <span className="font-mono text-[10px] uppercase text-muted-foreground">
-              {todo.status}
-            </span>
-            <p className="mt-1">{todo.content}</p>
-          </li>
-        ))}
-      </ul>
     </div>
   );
 }

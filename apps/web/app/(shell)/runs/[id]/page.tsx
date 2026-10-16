@@ -6,14 +6,14 @@ import { useMemo, useState } from "react";
 import { isTerminalStatus } from "@buildx/shared";
 import { ChatComposer } from "@/components/chat/chat-composer";
 import { ChatThread } from "@/components/chat/chat-thread";
+import { PanelSplit } from "@/components/shell/panel-split";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { PanelSplit } from "@/components/shell/panel-split";
 import { useShell, useShellMeta } from "@/components/shell/shell-context";
 import type { WorkspaceData } from "@/components/shell/right-panel";
-import { useConfig } from "@/hooks/use-config";
 import { useCreateRun } from "@/hooks/use-create-run";
 import { useRunStream } from "@/hooks/use-run-stream";
+import { useWorkspaceDiff } from "@/hooks/use-workspace-diff";
 import { useWorkspaceFiles } from "@/hooks/use-workspace-files";
 import { buildChatMessages } from "@/lib/chat-messages";
 
@@ -25,7 +25,6 @@ export default function RunPage() {
 
   const { run, events, streamError, notFound, loading, stop } =
     useRunStream(runId);
-  const { config } = useConfig();
   const { createRun, submitting, error: createError } = useCreateRun();
   const { modelOverride, setModelOverride, panelVisible } = useShell();
   const [draft, setDraft] = useState("");
@@ -36,6 +35,7 @@ export default function RunPage() {
     model: run?.model,
     runId,
     workspaceId: run?.workspaceId,
+    task: run?.task,
     steps: run?.stats?.steps,
     tokens: run?.stats?.usage?.totalTokens,
   });
@@ -43,6 +43,12 @@ export default function RunPage() {
   const running = run !== null && !isTerminalStatus(run.status);
 
   const files = useWorkspaceFiles(
+    run?.workspaceId ?? runId,
+    panelVisible,
+    running ? FILE_POLL_MS : undefined,
+  );
+
+  const diff = useWorkspaceDiff(
     run?.workspaceId ?? runId,
     panelVisible,
     running ? FILE_POLL_MS : undefined,
@@ -61,6 +67,12 @@ export default function RunPage() {
         onBackFromFile: files.backFromFile,
         onRefresh: files.refresh,
         readFileContent: files.readFileContent,
+        diff: {
+          files: diff.files,
+          unchanged: diff.unchanged,
+          status: diff.status,
+        },
+        onOpenFromDiff: (target) => void files.openFile(target),
       }
     : null;
 
@@ -73,6 +85,7 @@ export default function RunPage() {
             createdAt: run.createdAt,
             events,
             status: run.status,
+            usage: run.stats?.usage,
           })
         : [],
     [runId, run, events],
@@ -108,9 +121,9 @@ export default function RunPage() {
 
   return (
     <PanelSplit workspace={workspace}>
-      <div className="flex h-full min-h-0 flex-col">
+      <div className="flex h-full min-h-0 min-w-0 flex-col">
         {run?.error || streamError ? (
-          <div className="shrink-0 space-y-2 px-4 pt-3">
+          <div className="mx-auto w-full max-w-3xl shrink-0 space-y-2 px-4 pt-3 sm:px-6">
             {run?.error ? (
               <Alert variant="destructive">
                 <AlertTitle>Run failed</AlertTitle>
@@ -134,6 +147,8 @@ export default function RunPage() {
           messages={messages}
           loading={loading}
           showThinking={running}
+          cancelled={run?.status === "cancelled"}
+          status={status}
           onRetry={
             run
               ? () => {
@@ -154,9 +169,6 @@ export default function RunPage() {
           onStop={running ? () => void stop() : undefined}
           model={modelOverride}
           onModelChange={setModelOverride}
-          modelPlaceholder={
-            config ? `model (${config.model})` : "model override"
-          }
           submitting={submitting}
           streaming={running}
           error={createError}

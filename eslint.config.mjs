@@ -11,6 +11,7 @@ export default tseslint.config(
       "**/dist/**",
       "**/coverage/**",
       "**/*.d.ts",
+      "**/.opencode/**",
     ],
   },
   js.configs.recommended,

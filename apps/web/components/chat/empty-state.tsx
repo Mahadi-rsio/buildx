@@ -1,95 +1,83 @@
 "use client";
 
 import { GlyphMatrix } from "@/components/ui/glyph-matrix";
-import { Button } from "@/components/ui/button";
 import { TypingText } from "@/components/chat/typing-text";
+import { useConfig } from "@/hooks/use-config";
+import { Sparkles, Terminal, ShieldCheck, Zap } from "lucide-react";
 
-const STARTERS = [
-  {
-    id: "greet",
-    title: "Hello module",
-    prompt:
-      "Create src/greet.ts exporting a `greet(name: string)` function, add a README.md showing how to use it, and verify the file reads back correctly.",
-  },
-  {
-    id: "cli",
-    title: "Tiny CLI",
-    prompt:
-      "Scaffold a tiny Node ESM CLI in src/cli.ts that prints the current time, add a package.json with a `start` script, and verify the file contents.",
-  },
-  {
-    id: "fix",
-    title: "Fix & test",
-    prompt:
-      "Create src/math.ts with an `add(a, b)` function that intentionally returns a+b+1, then fix it to return a+b and write a short note in NOTES.md explaining the bug.",
-  },
-  {
-    id: "readme",
-    title: "Project README",
-    prompt:
-      "Create a concise README.md for a TypeScript utility package with install, usage, and scripts sections.",
-  },
-] as const;
+/** `deepseek/deepseek-v4-flash-0731` → `DeepSeek V4 Flash 0731`. */
+function prettifyModel(id: string | undefined): string {
+  if (!id) return "Multi-Model Support";
+  const leaf = id.includes("/") ? id.split("/").pop() ?? id : id;
+  return leaf
+    .replace(/[-_]+/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase())
+    .trim();
+}
 
 export function ChatEmptyState({
-  onSelect,
+  onSelect: _onSelect,
 }: {
-  onSelect: (prompt: string) => void;
+  onSelect?: (prompt: string) => void;
 }) {
+  const { config } = useConfig();
   return (
-    <div className="relative flex flex-1 flex-col items-center justify-center px-4 py-10">
+    <div className="relative flex flex-1 flex-col items-center justify-center px-4 py-12 text-center">
       <div
         aria-hidden
-        className="pointer-events-none absolute inset-0 opacity-[0.35] motion-reduce:hidden"
+        className="pointer-events-none absolute inset-0 opacity-[0.25] motion-reduce:hidden"
       >
         <GlyphMatrix
           className="size-full"
           color="oklch(0.55 0 0)"
           cellSize={16}
-          mutationRate={0.025}
-          interval={120}
-          fadeBottom={0.75}
+          mutationRate={0.02}
+          interval={140}
+          fadeBottom={0.8}
         />
       </div>
 
-      <div className="relative z-10 mx-auto w-full max-w-2xl text-center">
-        <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
-          Buildx
-        </p>
+      <div className="relative z-10 mx-auto w-full max-w-xl">
+        <div className="inline-flex items-center gap-2 rounded-full border border-border/80 bg-muted/40 px-3 py-1 text-xs text-muted-foreground shadow-xs backdrop-blur-md">
+          <span className="flex size-2 rounded-full bg-emerald-400 animate-pulse" />
+          <span className="font-mono text-[11px] font-medium tracking-wide uppercase">
+            Autonomous Coding Agent
+          </span>
+        </div>
+
         <TypingText
           as="h1"
           text="What should we build?"
-          duration={38}
-          className="mt-3 min-h-[1.3em] text-3xl font-semibold tracking-tight text-foreground sm:text-4xl"
+          duration={36}
+          className="mt-4 min-h-[1.3em] text-3xl font-semibold tracking-tight text-foreground sm:text-4xl"
         />
-        <p className="mx-auto mt-3 max-w-lg text-sm leading-relaxed text-muted-foreground">
-          Describe a coding task. The agent plans, edits files, runs commands,
-          and streams every step into a sandboxed workspace.
+
+        <p className="mx-auto mt-3 max-w-md text-sm leading-relaxed text-muted-foreground">
+          Describe any coding task or system. The agent plans architecture,
+          edits files, executes tests, and streams every step in real-time.
         </p>
 
-        <div className="mt-8 grid gap-2 sm:grid-cols-2">
-          {STARTERS.map((starter) => (
-            <Button
-              key={starter.id}
-              type="button"
-              variant="outline"
-              className="h-auto items-start justify-start whitespace-normal rounded-xl px-4 py-3 text-left"
-              onClick={() => onSelect(starter.prompt)}
-            >
-              <span className="block">
-                <span className="block text-sm font-medium text-foreground">
-                  {starter.title}
-                </span>
-                <span className="mt-1 block text-xs font-normal text-muted-foreground line-clamp-2">
-                  {starter.prompt}
-                </span>
-              </span>
-            </Button>
-          ))}
+        <div className="mt-8 flex flex-wrap items-center justify-center gap-2 text-[11px] text-muted-foreground">
+          <div className="inline-flex items-center gap-1.5 rounded-lg border border-border/60 bg-card/40 px-2.5 py-1 backdrop-blur-xs">
+            <Terminal className="size-3 text-primary/70" />
+            <span>Full Shell Sandbox</span>
+          </div>
+          <div className="inline-flex items-center gap-1.5 rounded-lg border border-border/60 bg-card/40 px-2.5 py-1 backdrop-blur-xs">
+            <Sparkles className="size-3 text-primary/70" />
+            <span>{prettifyModel(config?.model)}</span>
+          </div>
+          <div className="inline-flex items-center gap-1.5 rounded-lg border border-border/60 bg-card/40 px-2.5 py-1 backdrop-blur-xs">
+            <ShieldCheck className="size-3 text-primary/70" />
+            <span>Isolated Environment</span>
+          </div>
+          <div className="inline-flex items-center gap-1.5 rounded-lg border border-border/60 bg-card/40 px-2.5 py-1 backdrop-blur-xs">
+            <Zap className="size-3 text-primary/70" />
+            <span>Live Streaming Loop</span>
+          </div>
         </div>
       </div>
     </div>
   );
 }
 
-export { STARTERS };
+export const STARTERS = [];

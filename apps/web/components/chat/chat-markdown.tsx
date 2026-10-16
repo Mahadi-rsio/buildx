@@ -1,11 +1,11 @@
 "use client";
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { codeToHtml, type BundledLanguage } from "shiki";
 import { Check, Copy } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { highlightCode } from "@/lib/highlight";
 import { cn } from "@/lib/utils";
 
 async function copyText(value: string) {
@@ -25,24 +25,27 @@ function CodeBlock({
   children: ReactNode;
 }) {
   const [copied, setCopied] = useState(false);
+  const [html, setHtml] = useState<{ key: string; html: string } | null>(null);
   const language = /language-(\w+)/.exec(className ?? "")?.[1] ?? "text";
   const code = String(children).replace(/\n$/, "");
+  const key = `${language}\u0000${code}`;
+  const rendered = html?.key === key ? html.html : null;
 
-  const highlighted = useMemo(() => {
-    try {
-      return codeToHtml(code, {
-        lang: language as BundledLanguage,
-        theme: "github-dark",
-      });
-    } catch {
-      return null;
-    }
-  }, [code, language]);
+  useEffect(() => {
+    let alive = true;
+    void highlightCode(code, language).then((next) => {
+      if (!alive) return;
+      setHtml({ key, html: next });
+    });
+    return () => {
+      alive = false;
+    };
+  }, [key, code, language]);
 
   return (
-    <div className="group relative my-3 overflow-hidden rounded-lg border border-border bg-black/40">
-      <div className="flex items-center justify-between border-b border-border px-3 py-1.5">
-        <span className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
+    <div className="group relative my-3 overflow-hidden rounded-lg border border-border bg-surface/40">
+      <div className="flex items-center justify-between border-b border-border/70 px-3 py-1.5">
+        <span className="font-mono text-2xs uppercase tracking-wide text-muted-foreground">
           {language}
         </span>
         <Button
@@ -61,16 +64,15 @@ function CodeBlock({
           {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
         </Button>
       </div>
-      {highlighted ? (
-        <div
-          className="overflow-x-auto [&_pre]:m-0 [&_pre]:p-3 [&_pre]:font-mono [&_pre]:text-[12px] [&_pre]:leading-relaxed"
-          dangerouslySetInnerHTML={{ __html: highlighted }}
-        />
-      ) : (
-        <pre className="overflow-x-auto p-3 font-mono text-[12px] leading-relaxed text-foreground/90">
-          <code>{code}</code>
-        </pre>
-      )}
+      <div className="overflow-x-auto px-3 py-2 [&_.shiki]:font-mono [&_.shiki]:text-xs [&_.shiki]:leading-[1.6]">
+        {rendered ? (
+          <div dangerouslySetInnerHTML={{ __html: rendered }} />
+        ) : (
+          <pre className="font-mono text-xs leading-[1.6] text-foreground/90">
+            <code>{code}</code>
+          </pre>
+        )}
+      </div>
     </div>
   );
 }
@@ -85,7 +87,7 @@ export function ChatMarkdown({
   return (
     <div
       className={cn(
-        "prose-buildx max-w-none text-[14px] leading-relaxed text-foreground/90",
+        "prose-buildx max-w-[65ch] [overflow-wrap:anywhere] text-base leading-[1.65] text-foreground/90",
         className,
       )}
     >
@@ -107,7 +109,7 @@ export function ChatMarkdown({
               href={href}
               target="_blank"
               rel="noreferrer"
-              className="text-sky-300 underline-offset-2 hover:underline"
+              className="text-info underline-offset-2 hover:underline"
             >
               {children}
             </a>
@@ -134,7 +136,7 @@ export function ChatMarkdown({
           ),
           table: ({ children }) => (
             <div className="my-3 overflow-x-auto rounded-lg border border-border">
-              <table className="w-full border-collapse text-left text-xs">
+              <table className="w-full border-collapse text-left text-sm">
                 {children}
               </table>
             </div>
@@ -156,7 +158,7 @@ export function ChatMarkdown({
             }
             return (
               <code
-                className="rounded bg-muted px-1 py-0.5 font-mono text-[12px]"
+                className="rounded bg-muted px-1 py-0.5 font-mono text-sm"
                 {...props}
               >
                 {children}

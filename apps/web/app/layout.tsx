@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 import { Geist, Geist_Mono } from "next/font/google";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -15,6 +15,20 @@ export const metadata: Metadata = {
   title: "buildx — agent workspace",
   description:
     "A chat-first workspace for the buildx coding agent: every run streams live into a sandboxed workspace.",
+};
+
+/**
+ * Mobile viewport: `viewport-fit=cover` lets us respect `env(safe-area-inset-*)`
+ * (notch / home indicator) and `interactive-widget=resizes-content` makes the
+ * visual viewport collapse to the on-screen keyboard so the composer stays
+ * visible while typing instead of being covered or clipped.
+ */
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  interactiveWidget: "resizes-content",
+  themeColor: "#0f0f0f",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

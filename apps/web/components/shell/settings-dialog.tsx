@@ -2,6 +2,7 @@
 
 import { AlertTriangle, CheckCircle2, ExternalLink, Loader2 } from "lucide-react";
 import { useConfig } from "@/hooks/use-config";
+import { ModelPicker } from "@/components/model-picker";
 import {
   Dialog,
   DialogContent,
@@ -92,18 +93,17 @@ export function SettingsDialog() {
 
           <section className="space-y-2">
             <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Default model override
+              Default model
             </h3>
-            <input
+            <ModelPicker
               value={modelOverride}
-              onChange={(e) => setModelOverride(e.target.value)}
-              placeholder={config ? config.model : "model id"}
-              aria-label="Default model override"
-              className="h-9 w-full rounded-lg border border-border bg-muted/40 px-3 font-mono text-xs text-foreground outline-none placeholder:text-muted-foreground focus:border-ring/50"
+              onChange={setModelOverride}
+              className="h-9 w-full justify-between rounded-lg"
             />
             <p className="text-xs text-muted-foreground">
-              Prefills the composer on new runs. A run&apos;s actual model is
-              fixed when it starts and shown in the top bar.
+              Leave unset to use the server default
+              {config ? ` (${config.model})` : ""}. Prefills the composer on new
+              runs.
             </p>
           </section>
 
