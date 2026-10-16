@@ -1,5 +1,5 @@
 import { getCurrentUser, unauthorized } from "@/lib/auth/server";
-import { getRun } from "@/lib/store";
+import { getRun, getRunByWorkspaceId } from "@/lib/store";
 import { sourceForRun } from "@/lib/workspace-source";
 import type { FileContentResponse, FilesResponse } from "@/lib/types";
 
@@ -24,7 +24,7 @@ export async function GET(
   if (!(await getCurrentUser())) return unauthorized();
 
   const { id } = await params;
-  const run = getRun(id);
+  const run = getRun(id) ?? getRunByWorkspaceId(id);
   if (!run) {
     return Response.json({ error: "not_found", id }, { status: 404 });
   }

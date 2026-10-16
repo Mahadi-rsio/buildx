@@ -16,6 +16,7 @@ import {
   type ShellPrefs,
 } from "@/lib/shell-prefs";
 import { useIsMobile } from "@/hooks/use-mobile";
+import type { WorkspaceRuntime } from "@/lib/types";
 
 export type PanelTab = "files" | "changes";
 
@@ -28,6 +29,7 @@ export interface ShellMeta {
   task?: string;
   steps?: number;
   tokens?: number;
+  workspace?: WorkspaceRuntime;
 }
 
 const IDLE_META: ShellMeta = { status: "idle" };
@@ -72,19 +74,19 @@ export function useShell(): ShellContextValue {
  */
 export function useShellMeta(meta: ShellMeta): void {
   const { setMeta } = useShell();
-  const { status, model, runId, workspaceId, task, steps, tokens } = meta;
+  const { status, model, runId, workspaceId, task, steps, tokens, workspace } = meta;
 
   useEffect(() => {
     let alive = true;
     void (async () => {
       await Promise.resolve();
       if (!alive) return;
-      setMeta({ status, model, runId, workspaceId, task, steps, tokens });
+      setMeta({ status, model, runId, workspaceId, task, steps, tokens, workspace });
     })();
     return () => {
       alive = false;
     };
-  }, [status, model, runId, workspaceId, task, steps, tokens, setMeta]);
+  }, [status, model, runId, workspaceId, task, steps, tokens, workspace, setMeta]);
 }
 
 export function ShellProvider({ children }: { children: ReactNode }) {

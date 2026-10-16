@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect, useState } from "react";
 import {
   BarChart3,
   PanelLeft,
@@ -13,7 +14,15 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { useShell } from "@/components/shell/shell-context";
 import { cn } from "@/lib/utils";
 
+function formatCountdown(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
 export function TopBar() {
+  const [now, setNow] = useState(() => Date.now());
   const isMobile = useIsMobile();
   const {
     meta,
@@ -44,6 +53,18 @@ export function TopBar() {
           ? "Stopped"
           : null;
   const labelClass = live || waiting ? "text-warning" : failed ? "text-danger" : "text-muted-foreground";
+  const workspace = meta.workspace;
+  useEffect(() => {
+    if (workspace?.status !== "workspace.ready" || !workspace.idleDeadlineAt) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [workspace?.status, workspace?.idleDeadlineAt]);
+
+  const workspaceLabel = workspace?.status?.replace("workspace.", "");
+  const countdown =
+    workspace?.status === "workspace.ready" && workspace.idleDeadlineAt
+      ? formatCountdown(workspace.idleDeadlineAt - now)
+      : null;
 
   return (
     <header className="flex h-12 shrink-0 items-center gap-1.5 border-b border-border bg-background/80 px-2 backdrop-blur sm:gap-2 sm:px-3">
@@ -116,6 +137,16 @@ export function TopBar() {
         ) : null}
         {status === "completed" ? (
           <span className="sr-only">Run completed</span>
+        ) : null}
+        {workspaceLabel ? (
+          <span className="shrink-0 rounded border border-border bg-muted/30 px-1.5 py-0.5 text-2xs uppercase tracking-wide text-muted-foreground">
+            ws {workspaceLabel}
+          </span>
+        ) : null}
+        {countdown ? (
+          <span className="shrink-0 font-mono text-2xs text-muted-foreground">
+            auto-pause {countdown}
+          </span>
         ) : null}
       </div>
 

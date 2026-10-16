@@ -15,6 +15,7 @@ const EVENT_TYPES: EventType[] = [
   "todo",
   "approval",
   "error",
+  "workspace",
 ];
 
 interface Frame {
@@ -112,6 +113,23 @@ export function useRunStream(runId: string) {
             setRun((previous) =>
               previous
                 ? { ...previous, error: payload.message ?? previous.error }
+                : previous,
+            );
+          } else if (type === "workspace") {
+            const payload = frame.data as RunDetail["workspace"];
+            setRun((previous) =>
+              previous
+                ? {
+                    ...previous,
+                    workspace: {
+                      ...previous.workspace,
+                      ...payload,
+                    },
+                    workspaceId:
+                      payload.workspaceId && payload.workspaceId.length > 0
+                        ? payload.workspaceId
+                        : previous.workspaceId,
+                  }
                 : previous,
             );
           }

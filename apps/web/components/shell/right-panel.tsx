@@ -113,8 +113,8 @@ export function EmptyWorkspace() {
         No workspace yet
       </p>
       <p className="max-w-56 text-xs leading-relaxed text-muted-foreground">
-        A scratch workspace is created the moment a run starts. Files, diffs,
-        and terminal output stream here live.
+        A workspace starts lazily on the first tool call. Files, diffs, and
+        terminal output stream here once the sandbox is ready.
       </p>
     </div>
   );

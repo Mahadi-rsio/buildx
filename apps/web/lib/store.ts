@@ -2,7 +2,13 @@ import { randomUUID } from "node:crypto";
 import type { RunEvent, RunEventInput, RunStatus } from "@buildx/shared";
 import { isTerminalStatus } from "@buildx/shared";
 import { workspaceDirFor } from "./paths";
-import type { RunDetail, RunStats, RunSummary } from "./types";
+import type {
+  RunDetail,
+  RunStats,
+  RunSummary,
+  WorkspaceRuntime,
+  WorkspaceUsage,
+} from "./types";
 import type { Baseline } from "./workspace-fs";
 
 /** Trigger lazy baseline capture on first diff request (arcetecture §6). */
@@ -10,6 +16,8 @@ export const captureBaseline = Symbol.for("__buildx.captureBaseline");
 
 export interface StoredRun {
   id: string;
+  userId: string;
+  workspaceName: string;
   task: string;
   status: RunStatus;
   model: string;
@@ -29,6 +37,10 @@ export interface StoredRun {
   /** Run-start snapshot for the workspace diff (arcetecture §6). Capture is
    *  lazy: the first `GET /api/workspaces/:id/diff` fills this when missing. */
   baseline?: Baseline;
+  /** Internal workspace id from `workspaces` (one per user). */
+  remoteWorkspaceId?: string;
+  /** Workspace lifecycle + quota state surfaced by Phase 10 UI. */
+  workspace: WorkspaceRuntime;
 }
 
 export interface Store {
@@ -52,9 +64,12 @@ export function getStore(): Store {
 }
 
 export interface CreateRunArgs {
+  userId: string;
+  workspaceName: string;
   task: string;
   model: string;
   maxSteps: number;
+  usage?: WorkspaceUsage;
 }
 
 export function createRun(args: CreateRunArgs): StoredRun {
@@ -62,6 +77,8 @@ export function createRun(args: CreateRunArgs): StoredRun {
   const id = `run_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
   const run: StoredRun = {
     id,
+    userId: args.userId,
+    workspaceName: args.workspaceName,
     task: args.task,
     status: "queued",
     model: args.model,
@@ -72,6 +89,10 @@ export function createRun(args: CreateRunArgs): StoredRun {
     events: [],
     subscribers: new Set(),
     controller: new AbortController(),
+    workspace: {
+      status: "idle",
+      usage: args.usage,
+    },
   };
   getStore().runs.set(run.id, run);
   return run;
@@ -79,6 +100,10 @@ export function createRun(args: CreateRunArgs): StoredRun {
 
 export function getRun(id: string): StoredRun | undefined {
   return getStore().runs.get(id);
+}
+
+export function getRunByWorkspaceId(workspaceId: string): StoredRun | undefined {
+  return listRuns().find((run) => run.workspaceId === workspaceId);
 }
 
 export function listRuns(): StoredRun[] {
@@ -132,6 +157,7 @@ export function toRunSummary(run: StoredRun): RunSummary {
     updatedAt: run.updatedAt,
     error: run.error,
     stats: run.stats,
+    workspace: run.workspace,
     eventCount: run.events.length,
   };
 }

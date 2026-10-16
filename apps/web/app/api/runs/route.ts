@@ -1,5 +1,15 @@
 import { createRunSchema, envStatus } from "@buildx/shared";
+import {
+  DAILY_REQUEST_LIMIT,
+  MONTHLY_CPU_HOURS,
+  consumeDailyRequest,
+  dailyRequestCount,
+  dhakaDay,
+  monthlyCpuSecondsUsed,
+  nextDhakaReset,
+} from "@buildx/db";
 import { getCurrentUser, unauthorized } from "@/lib/auth/server";
+import { getDb } from "@buildx/db";
 import { startRun } from "@/lib/runner";
 import { createRun, listRuns, toRunSummary } from "@/lib/store";
 
@@ -16,7 +26,8 @@ export async function GET(): Promise<Response> {
  * (arcetecture.md §5.2, simplified from `/api/projects/:id/tasks`).
  */
 export async function POST(request: Request): Promise<Response> {
-  if (!(await getCurrentUser())) return unauthorized();
+  const user = await getCurrentUser();
+  if (!user) return unauthorized();
 
   const body = await request.json().catch(() => null);
   const parsed = createRunSchema.safeParse(body);
@@ -40,11 +51,38 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   const selectedModel = parsed.data.model?.trim() || config.model;
+  const db = getDb();
+  const day = dhakaDay();
+  const consumed = await consumeDailyRequest(db, user.id, day);
+  if (consumed == null) {
+    return Response.json(
+      {
+        error: "daily_quota_exhausted",
+        message:
+          "Daily request limit reached. Your work is saved — try again after the Dhaka reset.",
+      },
+      { status: 429 },
+    );
+  }
+
+  const [usedCpuSeconds, usedDaily] = await Promise.all([
+    monthlyCpuSecondsUsed(db, user.id),
+    dailyRequestCount(db, user.id, day),
+  ]);
 
   const run = createRun({
+    userId: user.id,
+    workspaceName: user.name?.trim() || user.email.split("@")[0] || "workspace",
     task: parsed.data.task.trim(),
     model: selectedModel,
     maxSteps: parsed.data.maxSteps ?? config.maxSteps,
+    usage: {
+      cpuHoursUsed: Number((usedCpuSeconds / 3600).toFixed(2)),
+      cpuHoursLimit: MONTHLY_CPU_HOURS,
+      dailyRequestsUsed: usedDaily,
+      dailyRequestsLimit: DAILY_REQUEST_LIMIT,
+      nextDhakaResetAt: nextDhakaReset().getTime(),
+    },
   });
 
   // Fire and forget: `startRun` never rejects and appends every step itself.

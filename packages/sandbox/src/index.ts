@@ -38,6 +38,11 @@ export {
   type FsEntry,
   type ReadResult,
 } from "./daemon";
+export {
+  LazySandbox,
+  type LazySandboxOptions,
+  type LazySandboxConnection,
+} from "./lazy-sandbox";
 
 export {
   MachinesApiClient,
