@@ -29,6 +29,13 @@
       "when": 1792206709191,
       "tag": "0003_bored_shatterstar",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1792231805970,
+      "tag": "0004_small_zuras",
+      "breakpoints": true
     }
   ]
 }

@@ -60,31 +60,42 @@ async function countRuns(uid: string): Promise<number> {
   return rows.length;
 }
 
-/** A `Db` whose next `insert().values().returning()` query fails once, then
- *  behaves normally. Keeps the drizzle chain shape so the store's call sites
- *  are exercised. */
 function failingInsertOnce(database: Db): Db {
   let failed = false;
-  return new Proxy(database, {
-    get(target, prop) {
-      if (prop === "insert") {
-        return () => ({
-          values: () => ({
-            returning: () => {
-              if (!failed) {
-                failed = true;
-                return Promise.reject(new Error("injected insert failure"));
-              }
-              throw new Error("the failing proxy was used more than once");
-            },
-          }),
-        });
-      }
-      const value = (target as unknown as Record<string, unknown>)[String(prop)];
-      if (typeof value === "function") return value.bind(target);
-      return value;
-    },
-  });
+  const wrap = (dbTarget: Db): Db =>
+    new Proxy(dbTarget, {
+      get(target, prop) {
+        if (prop === "transaction") {
+          return async (fn: (tx: Db) => Promise<unknown>) =>
+            (target as Db & { transaction: (fn: (tx: Db) => Promise<unknown>) => Promise<unknown> }).transaction((tx: Db) => fn(wrap(tx)));
+        }
+        if (prop === "insert") {
+          return (table: unknown) => {
+            const isRuns =
+              table === runsTable ||
+              (table as Record<symbol, unknown>)?.[Symbol.for("drizzle:Name")] === "runs";
+            if (isRuns) {
+              return {
+                values: () => ({
+                  returning: () => {
+                    if (!failed) {
+                      failed = true;
+                      return Promise.reject(new Error("injected insert failure"));
+                    }
+                    throw new Error("the failing proxy was used more than once");
+                  },
+                }),
+              };
+            }
+            return (target as Db & { insert: (t: unknown) => unknown }).insert(table);
+          };
+        }
+        const value = (target as unknown as Record<string, unknown>)[String(prop)];
+        if (typeof value === "function") return value.bind(target);
+        return value;
+      },
+    });
+  return wrap(database);
 }
 
 after(async () => {
@@ -157,4 +168,95 @@ test("a failed creation does not consume a quota slot", { skip: skipReason }, as
 
   assert.equal(await countRuns(uid), 0, "the failed insert left no run row");
   assert.equal(await dailyRequestCount(db!, uid, day), 0, "quota is untouched on failure");
+});
+
+test("concurrent run creation at the quota limit allows exactly one winner", { skip: skipReason }, async () => {
+  const uid = await newUser();
+  const day = dhakaDay();
+
+  // Pre-fill to 1 slot before DAILY_REQUEST_LIMIT
+  await db!.insert(dailyRequests).values({
+    userId: uid,
+    day,
+    count: DAILY_REQUEST_LIMIT - 1,
+  });
+
+  // 5 distinct requests race for that single slot
+  const results = await Promise.all(
+    Array.from({ length: 5 }, (_, i) =>
+      enqueueRunForUser(inputFor(uid, `race-limit-${i}`)),
+    ),
+  );
+
+  const created = results.filter((r) => r.kind === "created");
+  const exhausted = results.filter((r) => r.kind === "quota_exhausted");
+
+  assert.equal(created.length, 1, "exactly one request claims the final quota slot");
+  assert.equal(exhausted.length, 4, "all other racing requests receive quota_exhausted");
+  assert.equal(await countRuns(uid), 1, "only one run was created in the database");
+  assert.equal(
+    await dailyRequestCount(db!, uid, day),
+    DAILY_REQUEST_LIMIT,
+    "quota count strictly caps at the limit and cannot be bypassed",
+  );
+});
+
+test("worker claiming during in-flight creation cannot claim uncommitted run", { skip: skipReason }, async () => {
+  const uid = await newUser();
+  const runId = randomUUID();
+
+  // Barrier 1: signals that the row has been inserted but the tx is still open
+  let signalOutsideCheckDone!: () => void;
+  const outsideCheckDone = new Promise<void>((r) => { signalOutsideCheckDone = r; });
+
+  // Barrier 2: lets the transaction proceed to commit
+  let signalAllowCommit!: () => void;
+  const allowCommit = new Promise<void>((r) => { signalAllowCommit = r; });
+
+  // Run the transaction in the background — do NOT await yet
+  const txPromise = db!.transaction(async (tx) => {
+    await tx.insert(runsTable).values({
+      id: runId,
+      userId: uid,
+      task: "in-flight task",
+      model: "gpt-4o-mini",
+      maxSteps: 5,
+      workspaceName: "workspace-flight",
+      status: "queued",
+    });
+
+    // Row inserted inside tx. Signal that the outside check can now run.
+    signalOutsideCheckDone();
+
+    // Hold the transaction open until the outside check finishes.
+    await allowCommit;
+  });
+
+  // Wait for the insert to have happened (tx still open, row uncommitted)
+  await outsideCheckDone;
+
+  // From a different connection (pool), verify the row is invisible (READ COMMITTED isolation)
+  const rowsOutside = await db!
+    .select({ id: runsTable.id })
+    .from(runsTable)
+    .where(sql`${runsTable.id} = ${runId}`);
+  const foundInFlight = rowsOutside.length > 0;
+
+  // Let the transaction commit
+  signalAllowCommit();
+  await txPromise;
+
+  assert.equal(
+    foundInFlight,
+    false,
+    "worker must never see or claim an uncommitted in-flight run",
+  );
+
+  // After commit the run must be visible
+  const [rowAfter] = await db!
+    .select({ id: runsTable.id, status: runsTable.status })
+    .from(runsTable)
+    .where(sql`${runsTable.id} = ${runId}`);
+  assert.equal(rowAfter?.id, runId, "run is visible after transaction commits");
+  assert.equal(rowAfter?.status, "queued");
 });

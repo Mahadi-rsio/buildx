@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { runTask } from "@buildx/agent";
+import type { Sandbox } from "@buildx/sandbox";
 import { envStatus, isTerminalStatus } from "@buildx/shared";
 import {
   appendEvent,
@@ -14,8 +15,85 @@ import { captureWorkspaceSnapshot } from "./workspace-fs";
 import { createSandbox, sandboxSettings } from "./sandbox";
 import { sourceForRun } from "./workspace-source";
 
+function guardSandbox(sandbox: Sandbox, run: StoredRun): Sandbox {
+  const checkOwnership = (): void => {
+    if (run.runtime.lostOwnership) {
+      throw new Error(`Worker lost ownership of run ${run.id}; workspace mutation rejected`);
+    }
+    if (run.runtime.controller.signal.aborted) {
+      throw new Error(`Run ${run.id} has been aborted; workspace mutation rejected`);
+    }
+    if (run.leaseExpiresAt && run.leaseExpiresAt <= Date.now()) {
+      run.runtime.lostOwnership = true;
+      run.runtime.controller.abort();
+      throw new Error(`Worker lease expired for run ${run.id}; workspace mutation rejected`);
+    }
+  };
+
+  return {
+    ...sandbox,
+    get id() {
+      return sandbox.id;
+    },
+    async start() {
+      checkOwnership();
+      return sandbox.start();
+    },
+    async suspend() {
+      return sandbox.suspend();
+    },
+    async destroy() {
+      return sandbox.destroy();
+    },
+    async writeFile(path: string, content: string) {
+      checkOwnership();
+      await sandbox.writeFile(path, content);
+      checkOwnership();
+    },
+    async *exec(cmd: string, opts) {
+      checkOwnership();
+      for await (const chunk of sandbox.exec(cmd, opts)) {
+        checkOwnership();
+        yield chunk;
+      }
+      checkOwnership();
+    },
+    async readFile(path: string, range) {
+      return sandbox.readFile(path, range);
+    },
+    async startBackground(cmd: string) {
+      checkOwnership();
+      const res = await sandbox.startBackground(cmd);
+      checkOwnership();
+      return res;
+    },
+    async checkpoint(label: string) {
+      checkOwnership();
+      const res = await sandbox.checkpoint(label);
+      checkOwnership();
+      return res;
+    },
+    async restore(id: string) {
+      checkOwnership();
+      await sandbox.restore(id);
+      checkOwnership();
+    },
+    async previewUrl(port: number) {
+      return sandbox.previewUrl(port);
+    },
+  };
+}
+
 /** Seed the workspace so `list_dir` / `read_file` have something real to read. */
 async function seedWorkspace(run: StoredRun): Promise<void> {
+  if (
+    run.runtime.lostOwnership ||
+    run.runtime.controller.signal.aborted ||
+    (run.leaseExpiresAt && run.leaseExpiresAt <= Date.now())
+  ) {
+    run.runtime.lostOwnership = true;
+    throw new Error(`Cannot seed workspace: run ${run.id} lost ownership or expired`);
+  }
   const readme = [
     "# buildx workspace",
     "",
@@ -50,7 +128,13 @@ async function closeRun(
   message?: string,
 ): Promise<void> {
   // A fenced process must not write onto a run the reclaiming worker owns.
-  if (run.runtime.lostOwnership) return;
+  if (
+    run.runtime.lostOwnership ||
+    (run.leaseExpiresAt && run.leaseExpiresAt <= Date.now())
+  ) {
+    run.runtime.lostOwnership = true;
+    return;
+  }
   const last = [...run.events].reverse().find((event) => event.type === "status");
   if (!last || !isTerminalStatus(last.data.status)) {
     await appendEvent(run, {
@@ -73,7 +157,14 @@ export async function startRun(run: StoredRun): Promise<void> {
   // Stopped (or fenced) before we got scheduled — the worker handles the
   // terminal finalize for this case; returning here leaves the lease for the
   // worker's post-loop fallback.
-  if (isTerminalStatus(run.status) || run.runtime.controller.signal.aborted) return;
+  if (
+    isTerminalStatus(run.status) ||
+    run.runtime.controller.signal.aborted ||
+    run.runtime.lostOwnership ||
+    (run.leaseExpiresAt && run.leaseExpiresAt <= Date.now())
+  ) {
+    return;
+  }
 
   const config = envStatus();
   if (!config.hasApiKey) {
@@ -84,11 +175,12 @@ export async function startRun(run: StoredRun): Promise<void> {
     return;
   }
 
-  const sandbox = createSandbox({
+  const rawSandbox = createSandbox({
     workspaceDir: run.workspaceDir,
     userId: run.userId,
     workspaceName: run.workspaceName,
   });
+  const sandbox = guardSandbox(rawSandbox, run);
   try {
     await sandbox.start();
     await seedWorkspace(run);
@@ -118,7 +210,13 @@ export async function startRun(run: StoredRun): Promise<void> {
       },
     });
 
-    if (run.runtime.lostOwnership) return;
+    if (
+      run.runtime.lostOwnership ||
+      (run.leaseExpiresAt && run.leaseExpiresAt <= Date.now())
+    ) {
+      run.runtime.lostOwnership = true;
+      return;
+    }
     run.stats = { steps: result.steps, usage: result.usage };
     await persistStats(run);
     await closeRun(
@@ -128,7 +226,11 @@ export async function startRun(run: StoredRun): Promise<void> {
     );
   } catch (error) {
     // A fenced run is owned by the reclaiming worker now — nothing to write.
-    if (run.runtime.lostOwnership) {
+    if (
+      run.runtime.lostOwnership ||
+      (run.leaseExpiresAt && run.leaseExpiresAt <= Date.now())
+    ) {
+      run.runtime.lostOwnership = true;
       console.warn(`[buildx-worker] fenced during run ${run.id}; skipping writes`);
       return;
     }
@@ -147,6 +249,6 @@ export async function startRun(run: StoredRun): Promise<void> {
       message,
     );
   } finally {
-    await sandbox.destroy().catch(() => undefined);
+    await rawSandbox.destroy().catch(() => undefined);
   }
 }

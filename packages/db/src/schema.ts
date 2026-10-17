@@ -260,6 +260,8 @@ export const runs = pgTable(
     cancelReason: text("cancel_reason"),
     /** Optional dedupe key: at most one run per (user, key) pair. */
     idempotencyKey: text("idempotency_key"),
+    /** Monotonically increasing fencing token incremented on each worker claim. */
+    fencingToken: integer("fencing_token").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),

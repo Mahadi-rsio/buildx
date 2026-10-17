@@ -124,6 +124,10 @@ function makeDeps(opts: TestDeps): WorkerDeps {
       calls.push("release-lock");
       return true;
     },
+    requeueRun: async () => {
+      calls.push("requeue");
+      return true;
+    },
     bindClaim: async (row) => {
       void row;
       calls.push("bind");
@@ -152,7 +156,11 @@ function makeDeps(opts: TestDeps): WorkerDeps {
   };
 
   for (const [key, value] of Object.entries(opts.overrides ?? {})) {
-    (defaultFns as unknown as Record<string, unknown>)[key] = value;
+    if (key === "config" && typeof value === "object" && value !== null) {
+      defaultFns.config = { ...defaultFns.config, ...value };
+    } else {
+      (defaultFns as unknown as Record<string, unknown>)[key] = value;
+    }
   }
   return defaultFns;
 }
@@ -386,6 +394,103 @@ test("stale worker release can't drop a reclaimed lease", async () => {
     await sleep(5);
   }
   assert.equal(run.runtime.lostOwnership, true);
+  control.abort();
+  await worker;
+});
+
+test("workspace lock contention requeues run back to queued state", async () => {
+  resetWorkerForTest();
+  const calls: string[] = [];
+  const run = fakeRun();
+  const deps = makeDeps({
+    calls,
+    run,
+    overrides: {
+      acquireWorkspaceLock: async () => false,
+    },
+  });
+  const processed = await processNextRun(deps);
+  assert.equal(processed, false);
+  assert.ok(calls.includes("requeue"), "requeueRun was called to return run to queued state");
+  assert.ok(!calls.includes("start"), "run never starts while workspace is locked");
+});
+
+test("prolonged database outage exceeding gracePeriodMs fences worker and aborts task", async () => {
+  resetWorkerForTest();
+  const control = new AbortController();
+  const calls: string[] = [];
+  const run = fakeRun();
+  const deps = makeDeps({
+    calls,
+    run,
+    claimCount: 1,
+    overrides: {
+      config: {
+        heartbeatMs: 5,
+        watchdogMs: 5,
+        gracePeriodMs: 20,
+      },
+      heartbeatRun: async () => {
+        throw new Error("DB connection lost during heartbeat");
+      },
+      readRunControl: async () => {
+        if (!calls.includes("start")) {
+          return { cancelled: false, reason: null, ownsLease: true };
+        }
+        throw new Error("DB connection lost during watchdog");
+      },
+      startRun: (r: StoredRun) => startAndRun({ calls }, r),
+    },
+  });
+
+  const worker = runWorker({ signal: control.signal, deps });
+  for (let i = 0; i < 200 && !run.runtime.lostOwnership; i += 1) {
+    await sleep(5);
+  }
+
+  assert.equal(run.runtime.lostOwnership, true, "worker is fenced when DB outage exceeds grace period");
+  assert.equal(run.runtime.controller.signal.aborted, true, "task is aborted on prolonged outage");
+  assert.ok(!calls.some((c) => c.startsWith("finish")), "fenced worker never finalizes after outage");
+
+  control.abort();
+  await worker;
+});
+
+test("transient DB error within gracePeriodMs does not fence worker", async () => {
+  resetWorkerForTest();
+  const control = new AbortController();
+  const calls: string[] = [];
+  const run = fakeRun();
+  let heartbeatCount = 0;
+
+  const deps = makeDeps({
+    calls,
+    run,
+    claimCount: 1,
+    overrides: {
+      config: {
+        heartbeatMs: 5,
+        watchdogMs: 5,
+        gracePeriodMs: 200,
+      },
+      heartbeatRun: async () => {
+        heartbeatCount += 1;
+        if (heartbeatCount === 1) {
+          throw new Error("transient DB blip");
+        }
+        return true;
+      },
+      readRunControl: async () => ({ cancelled: false, reason: null, ownsLease: true }),
+      startRun: async () => {
+        await sleep(25);
+      },
+    },
+  });
+
+  const worker = runWorker({ signal: control.signal, deps });
+  await sleep(35);
+
+  assert.equal(run.runtime.lostOwnership, false, "transient error within grace period does not fence");
   control.abort();
   await worker;
 });

@@ -6,6 +6,7 @@ import {
   asc,
   claimNextQueuedRun,
   events as eventsTable,
+  finalizeRun,
   getDb,
   heartbeatRun,
   inArray,
@@ -71,6 +72,8 @@ async function claimRunForTest(runId: string, leaseId: string): Promise<RunRow> 
     .set({
       status: "running",
       leaseId,
+      fencingToken: sql`${runsTable.fencingToken} + 1`,
+      leaseExpiresAt: sql`now() + interval '60 seconds'`,
       startedAt: new Date(),
     })
     .where(sql`${runsTable.id} = ${runId}`)
@@ -91,6 +94,17 @@ function failingInsertOnce(database: Db): Db {
   let failed = false;
   return new Proxy(database, {
     get(target, prop) {
+      if (prop === "execute") {
+        return (...args: unknown[]) => {
+          if (!failed) {
+            failed = true;
+            return Promise.reject(
+              new Error("injected transient insert failure"),
+            );
+          }
+          return (target as Db & { execute: (...a: unknown[]) => unknown }).execute(...args);
+        };
+      }
       if (prop === "insert") {
         return () => ({
           values: () => ({
@@ -490,4 +504,145 @@ test("a failed append does not poison the chain and order is preserved", { skip:
     ["1", "2", "3", "4", "5"],
   );
   assert.equal(await finishRun(run, "completed"), true);
+});
+
+test("stale lease cannot append events after a new worker takes ownership with incremented fencing token", { skip: skipReason }, async () => {
+  const uid = await newUser();
+  const { run } = await createRun({
+    userId: uid,
+    workspaceName: "fencing-token",
+    task: "test fencing",
+    model: "gpt-4o-mini",
+    maxSteps: 5,
+  });
+
+  // Worker A claims with fencingToken 1
+  const claimA = await claimRunForTest(run.id, "lease-worker-a");
+  const workerA = await bindClaim(claimA);
+  assert.equal(workerA.fencingToken, 1);
+
+  // Worker A can append initially
+  const ev1 = await appendEvent(workerA, { type: "text", data: { text: "from A" }, ts: Date.now() });
+  assert.ok(ev1.id > 0);
+
+  // Snapshot Worker A's stale lease+token before Worker B takes over
+  const workerALeaseId = workerA.leaseId!;
+  const workerAFencingToken = workerA.fencingToken!;
+
+  // Worker B claims, incrementing fencingToken to 2
+  const claimB = await claimRunForTest(run.id, "lease-worker-b");
+  assert.equal(claimB.fencingToken, 2);
+
+  // Restore Worker A's stale in-memory state (simulates a separate process still holding stale values)
+  // bindClaim(claimB) would update them in a real multi-process setup, but we haven't called it yet
+  workerA.leaseId = workerALeaseId;
+  workerA.fencingToken = workerAFencingToken;
+  // appendGuardedEvent enforces lease_id = 'lease-worker-a' AND fencing_token = 1 → fails in DB
+  await assert.rejects(
+    appendEvent(workerA, { type: "text", data: { text: "stale write from A" }, ts: Date.now() }),
+    StaleRunError,
+    "stale lease must be rejected atomically by PostgreSQL",
+  );
+
+  // Worker A is now marked as lost ownership (before bindClaim for B resets it)
+  assert.equal(workerA.runtime.lostOwnership, true, "stale worker is fenced after DB rejection");
+
+  // finishRun(workerA) is short-circuited by the in-memory lostOwnership guard before DB call
+  assert.equal(await finishRun(workerA, "completed"), false, "stale worker cannot finalize (in-memory guard)");
+
+  // Test DB-enforced finalize rejection directly using stale lease/token
+  const staleFinalizeOk = await finalizeRun(db!, {
+    runId: run.id,
+    leaseId: workerALeaseId,
+    fencingToken: workerAFencingToken,
+    status: "completed",
+  });
+  assert.equal(staleFinalizeOk, false, "DB rejects finalize with stale lease/token");
+
+  // Worker B binds, appends and finalizes successfully
+  const workerB = await bindClaim(claimB);
+  const ev2 = await appendEvent(workerB, { type: "text", data: { text: "from B" }, ts: Date.now() });
+  assert.ok(ev2.id > ev1.id);
+  assert.equal(await finishRun(workerB, "completed"), true, "new owner finalizes successfully");
+});
+
+test("expired lease cannot append events or finalize", { skip: skipReason }, async () => {
+  const uid = await newUser();
+  const { run } = await createRun({
+    userId: uid,
+    workspaceName: "expire-test",
+    task: "test expiry",
+    model: "gpt-4o-mini",
+    maxSteps: 5,
+  });
+
+  const claim = await claimRunForTest(run.id, "lease-expiring");
+  const worker = await bindClaim(claim);
+
+  // Manually expire the lease in the database
+  await db!
+    .update(runsTable)
+    .set({ leaseExpiresAt: sql`now() - interval '5 seconds'` })
+    .where(sql`${runsTable.id} = ${run.id}`);
+  // Keep worker's in-memory leaseExpiresAt as past too so application guard fires
+  worker.leaseExpiresAt = Date.now() - 10_000;
+
+  // Event append must be rejected by application or Postgres guard
+  await assert.rejects(
+    appendEvent(worker, { type: "text", data: { text: "should fail" }, ts: Date.now() }),
+    StaleRunError,
+    "expired lease cannot append events",
+  );
+
+  // Finalize must be rejected by Postgres guard (even if in-memory leaseExpiresAt is reset)
+  worker.leaseExpiresAt = undefined;
+  worker.runtime.lostOwnership = false;
+  assert.equal(await finishRun(worker, "completed"), false, "expired lease cannot finalize");
+});
+
+test("progress events are rejected on cancelled run", { skip: skipReason }, async () => {
+  const uid = await newUser();
+  const { run } = await createRun({
+    userId: uid,
+    workspaceName: "cancel-guard",
+    task: "test cancel guard",
+    model: "gpt-4o-mini",
+    maxSteps: 5,
+  });
+
+  const claim = await claimRunForTest(run.id, "lease-cancel");
+  const worker = await bindClaim(claim);
+
+  // Cancel the run (must pass StoredRun, not id string)
+  await cancelRun(worker, "stop requested");
+
+  // cancelRun aborts worker.runtime.controller — reset it to bypass the in-memory abort guard
+  // so we can test that the *database-level* cancelled_at guard rejects non-terminal events.
+  worker.runtime.controller = new AbortController();
+  worker.runtime.lostOwnership = false; // ensure in-memory path doesn't short-circuit
+
+  // Non-terminal progress events must be rejected by the database guard
+  // (appendGuardedEvent checks cancelled_at IS NULL unless it's a cancellation status event)
+  await assert.rejects(
+    appendEvent(worker, { type: "text", data: { text: "progress after cancel" }, ts: Date.now() }),
+    StaleRunError,
+    "progress events must not be appended to a cancelled run",
+  );
+
+  // The rejection sets lostOwnership=true; reset it to simulate the worker
+  // continuing execution (as if it's a separate process that just learned of the cancel)
+  // and now writing the terminal cancellation status event to close the run.
+  worker.runtime.lostOwnership = false;
+  worker.runtime.controller = new AbortController();
+
+  // Terminal cancellation status event is accepted
+  const terminalEv = await appendEvent(worker, {
+    type: "status",
+    data: { status: "cancelled", message: "stop requested" },
+    ts: Date.now(),
+  });
+  assert.ok(terminalEv.id > 0);
+
+  // Finalize as cancelled succeeds
+  assert.equal(await finishRun(worker, "cancelled", "stop requested"), true);
 });

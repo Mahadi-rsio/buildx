@@ -1,0 +1,1 @@
+ALTER TABLE "runs" ADD COLUMN "fencing_token" integer DEFAULT 0 NOT NULL;

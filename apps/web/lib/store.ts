@@ -7,9 +7,11 @@ import {
   desc,
   eq,
   gt,
+  appendGuardedEvent,
   finalizeRun,
   getDb,
   requestCancellation,
+  sql,
   events as eventsTable,
   runs as runsTable,
 } from "@buildx/db";
@@ -71,6 +73,8 @@ export interface StoredRun {
   stats?: RunStats;
   /** Lease id owning this run while it is being executed (set by the worker). */
   leaseId?: string;
+  /** Monotonically increasing fencing token. */
+  fencingToken?: number;
   /** Durable view of the claim deadline; refreshed from Postgres, never a
    *  source of truth on its own. */
   leaseExpiresAt?: number;
@@ -120,6 +124,7 @@ function syncFromRow(run: StoredRun, row: RunRow): void {
   run.model = row.model ?? DEFAULT_MODEL;
   run.maxSteps = row.maxSteps;
   run.leaseId = row.leaseId ?? undefined;
+  run.fencingToken = row.fencingToken ?? 0;
   run.leaseExpiresAt = row.leaseExpiresAt?.getTime() ?? undefined;
   run.updatedAt = row.updatedAt.getTime();
   run.error = row.error ?? undefined;
@@ -140,7 +145,7 @@ function syncFromRow(run: StoredRun, row: RunRow): void {
 }
 
 /** Hydrate (and remember) a run from its DB row, loading its event log. */
-async function hydrateRun(row: RunRow): Promise<StoredRun> {
+export async function hydrateRun(row: RunRow): Promise<StoredRun> {
   const existing = cachedRuns().get(row.id);
   if (existing) {
     syncFromRow(existing, row);
@@ -161,6 +166,7 @@ async function hydrateRun(row: RunRow): Promise<StoredRun> {
     updatedAt: row.updatedAt.getTime(),
     error: row.error ?? undefined,
     leaseId: row.leaseId ?? undefined,
+    fencingToken: row.fencingToken ?? 0,
     leaseExpiresAt: row.leaseExpiresAt?.getTime() ?? undefined,
     events: [],
     runtime: runtime,
@@ -303,6 +309,7 @@ export async function createRun(
     workspaceDir: workspaceDirFor(row.id),
     createdAt: row.createdAt.getTime() ?? Date.now(),
     updatedAt: row.updatedAt.getTime() ?? Date.now(),
+    fencingToken: row.fencingToken ?? 0,
     events: [],
     runtime,
   };
@@ -384,8 +391,10 @@ export function markLostOwnership(runId: string): StoredRun | undefined {
 export async function getRunForIdempotencyKey(
   userId: string,
   idempotencyKey: string,
+  deps?: { db?: Db },
 ): Promise<StoredRun | undefined> {
-  const [row] = await getDb()
+  const db = deps?.db ?? getDb();
+  const [row] = await db
     .select()
     .from(runsTable)
     .where(
@@ -494,17 +503,33 @@ async function doAppendEvent(
   if (isTerminalStatus(run.status)) {
     throw new StaleRunError(run.id, "appendEvent after terminal status");
   }
+  if (run.leaseExpiresAt && Date.now() >= run.leaseExpiresAt) {
+    run.runtime.lostOwnership = true;
+    run.runtime.controller.abort();
+    throw new StaleRunError(run.id, "appendEvent after lease expired");
+  }
+
   const db = dbOverride ?? getDb();
   const ts = new Date(input.ts);
-  const [row] = await db
-    .insert(eventsTable)
-    .values({
-      runId: run.id,
-      type: input.type,
-      payload: JSON.parse(JSON.stringify(input.data)),
-      createdAt: ts,
-    })
-    .returning({ id: eventsTable.id, createdAt: eventsTable.createdAt });
+  const row = await appendGuardedEvent(db, {
+    runId: run.id,
+    leaseId: run.leaseId,
+    fencingToken: run.fencingToken,
+    type: input.type,
+    payload: input.data,
+    createdAt: ts,
+  });
+
+  if (!row) {
+    run.runtime.lostOwnership = true;
+    if (!run.runtime.controller.signal.aborted) {
+      run.runtime.controller.abort();
+    }
+    throw new StaleRunError(
+      run.id,
+      "event insert rejected: run is no longer owned by this lease or is terminal/expired/cancelled",
+    );
+  }
 
   const event = {
     ...input,
@@ -530,6 +555,10 @@ async function doAppendEvent(
  *  counters never overwrite the reclaiming worker's values. */
 export async function persistStats(run: StoredRun): Promise<void> {
   if (run.runtime.lostOwnership || isTerminalStatus(run.status)) return;
+  if (run.leaseExpiresAt && Date.now() >= run.leaseExpiresAt) {
+    markLostOwnership(run.id);
+    return;
+  }
   const usage = run.stats?.usage;
   await getDb()
     .update(runsTable)
@@ -541,7 +570,14 @@ export async function persistStats(run: StoredRun): Promise<void> {
     })
     .where(
       run.leaseId
-        ? and(eq(runsTable.id, run.id), eq(runsTable.leaseId, run.leaseId))
+        ? and(
+            eq(runsTable.id, run.id),
+            eq(runsTable.leaseId, run.leaseId),
+            run.fencingToken !== undefined
+              ? eq(runsTable.fencingToken, run.fencingToken)
+              : sql`true`,
+            sql`(${runsTable.leaseExpiresAt} IS NULL OR ${runsTable.leaseExpiresAt} >= now())`,
+          )
         : eq(runsTable.id, run.id),
     );
 }
@@ -565,9 +601,14 @@ export async function finishRun(
 ): Promise<boolean> {
   // A fenced process must not act (or appear to act) as the run's owner.
   if (run.runtime.lostOwnership) return false;
+  if (run.leaseExpiresAt && Date.now() >= run.leaseExpiresAt) {
+    markLostOwnership(run.id);
+    return false;
+  }
   const applied = await finalizeRun(getDb(), {
     runId: run.id,
     leaseId: run.leaseId ?? "",
+    fencingToken: run.fencingToken,
     status,
     error,
   });
@@ -576,6 +617,7 @@ export async function finishRun(
     run.updatedAt = Date.now();
     if (error !== undefined) run.error = error;
     run.leaseId = undefined;
+    run.fencingToken = undefined;
   }
   return applied;
 }

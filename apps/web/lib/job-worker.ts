@@ -10,6 +10,7 @@ import {
   releaseRunLease,
   releaseWorkspaceLock,
   renewWorkspaceLock,
+  requeueRun,
   sql,
   type Db,
 } from "@buildx/db";
@@ -32,6 +33,7 @@ const LOOP_FAST_MS = 100;
 const LOOP_IDLE_MS = 2_000;
 const STARTUP_BACKOFF_MS = 500;
 const MAX_BACKOFF_MS = 30_000;
+const GRACE_PERIOD_MS = 15_000;
 
 /** Tunables for the worker loop; tests shrink the poll intervals. */
 export interface WorkerConfig {
@@ -43,6 +45,7 @@ export interface WorkerConfig {
   loopFastMs: number;
   startupBackoffMs: number;
   maxBackoffMs: number;
+  gracePeriodMs: number;
 }
 
 const DEFAULT_CONFIG: WorkerConfig = {
@@ -54,6 +57,7 @@ const DEFAULT_CONFIG: WorkerConfig = {
   loopFastMs: LOOP_FAST_MS,
   startupBackoffMs: STARTUP_BACKOFF_MS,
   maxBackoffMs: MAX_BACKOFF_MS,
+  gracePeriodMs: GRACE_PERIOD_MS,
 };
 
 function sleep(ms: number): Promise<void> {
@@ -101,6 +105,7 @@ export interface WorkerDeps {
   renewWorkspaceLock: typeof renewWorkspaceLock;
   releaseRunLease: typeof releaseRunLease;
   releaseWorkspaceLock: typeof releaseWorkspaceLock;
+  requeueRun: typeof requeueRun;
   bindClaim: typeof bindClaimStore;
   appendEvent: typeof appendEvent;
   flushAppends: typeof flushAppends;
@@ -112,7 +117,10 @@ export interface WorkerDeps {
 }
 
 function configOf(deps: WorkerDeps): WorkerConfig {
-  return deps.config ? { ...DEFAULT_CONFIG, ...deps.config } : DEFAULT_CONFIG;
+  const merged = deps.config ? { ...DEFAULT_CONFIG, ...deps.config } : DEFAULT_CONFIG;
+  // Bounded grace period: never exceed half the lease TTL
+  const boundedGrace = Math.min(merged.gracePeriodMs, Math.max(10, Math.floor(merged.leaseTtlMs / 2)));
+  return { ...merged, gracePeriodMs: boundedGrace };
 }
 
 export function defaultDeps(): WorkerDeps {
@@ -126,6 +134,7 @@ export function defaultDeps(): WorkerDeps {
     renewWorkspaceLock,
     releaseRunLease,
     releaseWorkspaceLock,
+    requeueRun,
     bindClaim: bindClaimStore,
     appendEvent,
     flushAppends,
@@ -167,6 +176,7 @@ export async function processNextRun(deps: WorkerDeps): Promise<boolean> {
     return undefined;
   });
   if (!run) {
+    await deps.requeueRun(deps.db, { runId: claimed.id, leaseId }).catch(log);
     await deps.releaseRunLease(deps.db, { runId: claimed.id, leaseId }).catch(log);
     return false;
   }
@@ -178,6 +188,7 @@ export async function processNextRun(deps: WorkerDeps): Promise<boolean> {
     const state = await deps.readRunControl(deps.db, {
       runId: run.id,
       leaseId,
+      fencingToken: run.fencingToken,
     });
     if (state.cancelled) {
       await finalizeEarly(
@@ -195,7 +206,11 @@ export async function processNextRun(deps: WorkerDeps): Promise<boolean> {
     // worker owns the row — refuse to finalize as a stale owner. Otherwise
     // answer the persisted cancel flag so the lease never silently expires.
     if (!isTerminalStatus(run.status)) {
-      if (run.runtime.lostOwnership) {
+      if (
+        run.runtime.lostOwnership ||
+        (run.leaseExpiresAt && run.leaseExpiresAt <= Date.now())
+      ) {
+        run.runtime.lostOwnership = true;
         console.warn(
           `[buildx-worker] run ${run.id} lost its lease during execution; not finalizing`,
         );
@@ -203,16 +218,24 @@ export async function processNextRun(deps: WorkerDeps): Promise<boolean> {
         const control = await deps.readRunControl(deps.db, {
           runId: run.id,
           leaseId,
+          fencingToken: run.fencingToken,
         });
-        await finalizeEarly(
-          deps,
-          run,
-          control.reason ??
-            (control.cancelled
-              ? "stopped before the agent started"
-              : "the worker lost the run"),
-          control.cancelled ? "cancelled" : "failed",
-        );
+        if (control.ownsLease) {
+          await finalizeEarly(
+            deps,
+            run,
+            control.reason ??
+              (control.cancelled
+                ? "stopped before the agent started"
+                : "the worker lost the run"),
+            control.cancelled ? "cancelled" : "failed",
+          );
+        } else {
+          run.runtime.lostOwnership = true;
+          console.warn(
+            `[buildx-worker] run ${run.id} lost lease check after execution; not finalizing`,
+          );
+        }
       }
     }
     return true;
@@ -228,8 +251,8 @@ interface RunSession {
 /**
  * Take the workspace lock and start the lease keep-alive + control-plane
  * watchdog (cancellation/ownership polling). Returns `undefined` when the
- * workspace is busy or the worker was asked to stop — the lease is handed back
- * and the run is retried on a later loop.
+ * workspace is busy or the worker was asked to stop — the run is requeued
+ * back to 'queued' state and retried on a later loop.
  */
 async function acquireSession(
   deps: WorkerDeps,
@@ -238,6 +261,7 @@ async function acquireSession(
 ): Promise<RunSession | undefined> {
   const cfg = configOf(deps);
   if (workerState.__BUILDX_WORKER_STOPPED__) {
+    await deps.requeueRun(deps.db, { runId: run.id, leaseId }).catch(log);
     await deps.releaseRunLease(deps.db, { runId: run.id, leaseId }).catch(log);
     return undefined;
   }
@@ -247,11 +271,15 @@ async function acquireSession(
     .acquireWorkspaceLock(deps.db, { workspaceId, leaseId, ttlMs: cfg.lockTtlMs })
     .catch(() => false);
   if (!lockOk) {
+    // P1: Correct workspace-lock contention handling.
+    // Transition the run back to a claimable queued state using guarded requeueRun.
+    await deps.requeueRun(deps.db, { runId: run.id, leaseId }).catch(log);
     await deps.releaseRunLease(deps.db, { runId: run.id, leaseId }).catch(log);
     return undefined;
   }
 
   let fenced = false;
+  let lastConfirmedAt = Date.now();
   const timers: Array<NodeJS.Timeout> = [];
 
   /** Fence every persistent write and stop the in-flight agent loop. Safe to
@@ -267,10 +295,21 @@ async function acquireSession(
     }
   };
 
+  const handleUncertainty = (error: unknown, operation: string): void => {
+    const elapsed = Date.now() - lastConfirmedAt;
+    console.error(
+      `[buildx-worker] ${operation} error (${elapsed}ms since last confirmation)`,
+      error,
+    );
+    if (elapsed > cfg.gracePeriodMs) {
+      fenceLostOwnership(
+        `ownership unconfirmed for ${elapsed}ms (grace period ${cfg.gracePeriodMs}ms exceeded): ${String(error)}`,
+      );
+    }
+  };
+
   // Lease + workspace-lock renewal. A heartbeat DB error is an *uncertain*
-  // lease state: we must not assume ownership forever, but a single hiccup
-  // shouldn't fence a healthy run — if the DB stays down our lease lapses and
-  // `recoverTimedOutRuns` reclaims the run.
+  // lease state: bounded grace period prevents indefinite execution during DB outages.
   const keepalive = setInterval(() => {
     void (async () => {
       try {
@@ -278,13 +317,16 @@ async function acquireSession(
           runId: run.id,
           leaseId,
           leaseTtlMs: cfg.leaseTtlMs,
+          fencingToken: run.fencingToken,
         });
         if (!stillOurs) {
-          fenceLostOwnership("lease expired (recovered by another worker)");
+          fenceLostOwnership("lease expired or superseded by another worker");
           return;
         }
+        run.leaseExpiresAt = Date.now() + cfg.leaseTtlMs;
+        lastConfirmedAt = Date.now();
       } catch (error) {
-        console.error("[buildx-worker] heartbeat error (uncertain lease)", error);
+        handleUncertainty(error, "heartbeat");
         return;
       }
       try {
@@ -293,30 +335,40 @@ async function acquireSession(
           leaseId,
           ttlMs: cfg.lockTtlMs,
         });
-        if (!kept) fenceLostOwnership("workspace lock stolen");
+        if (!kept) {
+          fenceLostOwnership("workspace lock stolen or expired");
+          return;
+        }
+        lastConfirmedAt = Date.now();
       } catch (error) {
-        console.error("[buildx-worker] workspace lock renew error", error);
+        handleUncertainty(error, "renewWorkspaceLock");
       }
     })();
   }, cfg.heartbeatMs);
   timers.push(keepalive);
 
   // Cancellation + ownership watchdog: polls frequently so `/stop` is honored
-  // promptly, and fences the moment another instance takes the lease.
+  // promptly, and fences the moment another instance takes the lease or cancels.
   const watchdog = setInterval(() => {
     void deps
-      .readRunControl(deps.db, { runId: run.id, leaseId })
+      .readRunControl(deps.db, {
+        runId: run.id,
+        leaseId,
+        fencingToken: run.fencingToken,
+      })
       .then((control) => {
+        if (!control.ownsLease) {
+          fenceLostOwnership("lease taken over by another instance or expired");
+          return;
+        }
+        lastConfirmedAt = Date.now();
         if (control.cancelled && !run.runtime.controller.signal.aborted) {
           // The agent loop stops; runner/worker finalize the run as cancelled.
           run.runtime.controller.abort();
         }
-        if (!control.ownsLease) {
-          fenceLostOwnership("lease taken over by another instance");
-        }
       })
       .catch((error) => {
-        console.error("[buildx-worker] watchdog error", error);
+        handleUncertainty(error, "watchdog");
       });
   }, cfg.watchdogMs);
   timers.push(watchdog);
@@ -324,8 +376,8 @@ async function acquireSession(
   return {
     async release() {
       for (const timer of timers) clearInterval(timer);
-      // Both releases are lease-guarded: after a terminal finalize or a fence
-      // they no-op against a lease we no longer own.
+      // Both releases are lease-guarded: in PostgreSQL they match `WHERE lease_id = leaseId`,
+      // so they safely no-op against a lease/lock that was already reclaimed by another worker.
       await deps.releaseWorkspaceLock(deps.db, { workspaceId, leaseId }).catch(log);
       await deps.releaseRunLease(deps.db, { runId: run.id, leaseId }).catch(log);
     },
@@ -340,8 +392,11 @@ async function finalizeEarly(
   status: TerminalRunStatus = "cancelled",
 ): Promise<void> {
   try {
-    if (run.runtime.lostOwnership) {
-      console.warn(`[buildx-worker] skipping finalize for fenced run ${run.id}`);
+    if (
+      run.runtime.lostOwnership ||
+      (run.leaseExpiresAt && run.leaseExpiresAt <= Date.now())
+    ) {
+      console.warn(`[buildx-worker] skipping finalize for fenced/expired run ${run.id}`);
       return;
     }
     await deps.appendEvent(run, {

@@ -46,6 +46,7 @@ export async function claimNextQueuedRun(
     UPDATE runs
     SET status = 'running',
         lease_id = ${input.leaseId},
+        fencing_token = runs.fencing_token + 1,
         lease_expires_at = now() + make_interval(secs => ${ttl / 1000}),
         started_at = COALESCE(started_at, now()),
         updated_at = now()
@@ -103,16 +104,29 @@ export async function recoverTimedOutRuns(
  */
 export async function heartbeatRun(
   db: Db,
-  input: { runId: string; leaseId: string; leaseTtlMs?: number },
+  input: {
+    runId: string;
+    leaseId: string;
+    fencingToken?: number;
+    leaseTtlMs?: number;
+  },
 ): Promise<boolean> {
   const ttl = input.leaseTtlMs ?? RUN_LEASE_TTL_MS;
+  const guarded = and(
+    eq(runs.id, input.runId),
+    eq(runs.leaseId, input.leaseId),
+    eq(runs.status, "running"),
+    input.fencingToken !== undefined
+      ? eq(runs.fencingToken, input.fencingToken)
+      : sql`true`,
+  );
   const rows = await db
     .update(runs)
     .set({
       leaseExpiresAt: sql`now() + make_interval(secs => ${ttl / 1000})`,
       updatedAt: sql`now()`,
     })
-    .where(and(eq(runs.id, input.runId), eq(runs.leaseId, input.leaseId)))
+    .where(guarded)
     .returning({ id: runs.id });
   return rows.length === 1;
 }
@@ -120,12 +134,51 @@ export async function heartbeatRun(
 /** Drop the run's lease (called on the release path of the execute loop). */
 export async function releaseRunLease(
   db: Db,
-  input: { runId: string; leaseId: string },
+  input: { runId: string; leaseId: string; fencingToken?: number },
 ): Promise<boolean> {
+  const guarded = and(
+    eq(runs.id, input.runId),
+    eq(runs.leaseId, input.leaseId),
+    input.fencingToken !== undefined
+      ? eq(runs.fencingToken, input.fencingToken)
+      : sql`true`,
+  );
   const rows = await db
     .update(runs)
     .set({ leaseId: null, leaseExpiresAt: null, updatedAt: sql`now()` })
-    .where(and(eq(runs.id, input.runId), eq(runs.leaseId, input.leaseId)))
+    .where(guarded)
+    .returning({ id: runs.id });
+  return rows.length === 1;
+}
+
+/**
+ * Requeue a running run back to queued state on lock contention or clean yield.
+ * If cancellation was requested in the interim, transitions to cancelled instead.
+ * Guarded by leaseId and running status so newer worker state is never overwritten.
+ */
+export async function requeueRun(
+  db: Db,
+  input: { runId: string; leaseId: string; fencingToken?: number },
+): Promise<boolean> {
+  const guarded = and(
+    eq(runs.id, input.runId),
+    eq(runs.leaseId, input.leaseId),
+    eq(runs.status, "running"),
+    input.fencingToken !== undefined
+      ? eq(runs.fencingToken, input.fencingToken)
+      : sql`true`,
+  );
+  const rows = await db
+    .update(runs)
+    .set({
+      status: sql`CASE WHEN ${runs.cancelledAt} IS NOT NULL THEN 'cancelled'::text ELSE 'queued'::text END`,
+      leaseId: null,
+      leaseExpiresAt: null,
+      startedAt: sql`CASE WHEN ${runs.cancelledAt} IS NOT NULL THEN ${runs.startedAt} ELSE NULL END`,
+      endedAt: sql`CASE WHEN ${runs.cancelledAt} IS NOT NULL THEN now() ELSE NULL END`,
+      updatedAt: sql`now()`,
+    })
+    .where(guarded)
     .returning({ id: runs.id });
   return rows.length === 1;
 }
@@ -178,22 +231,38 @@ export async function isRunCancelled(
  */
 export async function readRunControl(
   db: Db,
-  input: { runId: string; leaseId: string },
-): Promise<{ cancelled: boolean; reason: string | null; ownsLease: boolean }> {
+  input: { runId: string; leaseId: string; fencingToken?: number },
+): Promise<{
+  cancelled: boolean;
+  reason: string | null;
+  ownsLease: boolean;
+}> {
   const rows = await db
     .select({
       cancelledAt: runs.cancelledAt,
       cancelReason: runs.cancelReason,
       leaseId: runs.leaseId,
+      fencingToken: runs.fencingToken,
+      leaseExpiresAt: runs.leaseExpiresAt,
+      status: runs.status,
     })
     .from(runs)
     .where(eq(runs.id, input.runId));
   const row = rows[0];
   if (!row) return { cancelled: false, reason: null, ownsLease: false };
+
+  const matchesLease = row.leaseId === input.leaseId;
+  const matchesToken =
+    input.fencingToken === undefined || row.fencingToken === input.fencingToken;
+  const notExpired =
+    !row.leaseExpiresAt || row.leaseExpiresAt.getTime() >= Date.now();
+  const notTerminal = !TERMINAL.includes(row.status);
+  const ownsLease = matchesLease && matchesToken && notExpired && notTerminal;
+
   return {
     cancelled: Boolean(row.cancelledAt),
     reason: row.cancelReason ?? null,
-    ownsLease: row.leaseId === input.leaseId,
+    ownsLease,
   };
 }
 
@@ -201,19 +270,30 @@ export async function readRunControl(
  * Terminal transition guarded by (a) we still own the lease and (b) the run is
  * not already terminal. For `completed`/`failed` the run must NOT have been
  * cancelled; for `cancelled` it must HAVE been (the worker answers an external
- * stop request). Returns whether the transition happened.
+ * stop request). Also enforces that the lease has not expired. Returns whether
+ * the transition happened.
  */
 export async function finalizeRun(
   db: Db,
-  input: { runId: string; leaseId: string; status: Exclude<RunStatus, "queued" | "running" | "waiting_input">; error?: string | null; },
+  input: {
+    runId: string;
+    leaseId: string;
+    fencingToken?: number;
+    status: Exclude<RunStatus, "queued" | "running" | "waiting_input">;
+    error?: string | null;
+  },
 ): Promise<boolean> {
   const guarded = and(
     eq(runs.id, input.runId),
     eq(runs.leaseId, input.leaseId),
+    input.fencingToken !== undefined
+      ? eq(runs.fencingToken, input.fencingToken)
+      : sql`true`,
     notInArray(runs.status, TERMINAL),
     input.status === "cancelled"
       ? sql`${runs.cancelledAt} IS NOT NULL`
       : isNull(runs.cancelledAt),
+    sql`(${runs.leaseExpiresAt} IS NULL OR ${runs.leaseExpiresAt} >= now())`,
   );
   const rows = await db
     .update(runs)
@@ -228,6 +308,70 @@ export async function finalizeRun(
     .where(guarded)
     .returning({ id: runs.id });
   return rows.length === 1;
+}
+
+/**
+ * Ownership-safe event insertion guarded atomically in PostgreSQL.
+ * Inserts only if the run is currently owned by `leaseId` (and `fencingToken`),
+ * the lease has not expired, the run is not in a terminal state, and either:
+ * - the run is not cancelled, OR
+ * - the event is the terminal cancellation status event closing the run.
+ * Returns the inserted event id and timestamp, or null when ownership/lease
+ * condition was not met.
+ */
+export async function appendGuardedEvent(
+  db: Db,
+  input: {
+    runId: string;
+    leaseId?: string;
+    fencingToken?: number;
+    type: string;
+    payload: unknown;
+    createdAt?: Date;
+  },
+): Promise<{ id: number; createdAt: Date } | null> {
+  const ts = input.createdAt ?? new Date();
+  const payloadJson = JSON.stringify(input.payload ?? {});
+  const isCancellationStatus =
+    input.type === "status" &&
+    typeof input.payload === "object" &&
+    input.payload !== null &&
+    (input.payload as Record<string, unknown>).status === "cancelled";
+
+  const result = await db.execute(sql`
+    WITH target AS (
+      SELECT id FROM runs
+      WHERE id = ${input.runId}::uuid
+        AND status NOT IN ('completed', 'failed', 'cancelled')
+        AND (
+          (${input.leaseId ?? null}::text IS NULL AND lease_id IS NULL)
+          OR
+          (
+            ${input.leaseId ?? null}::text IS NOT NULL
+            AND lease_id = ${input.leaseId ?? null}
+            AND (${input.fencingToken ?? null}::integer IS NULL OR fencing_token = ${input.fencingToken ?? null})
+            AND (lease_expires_at IS NULL OR lease_expires_at >= now())
+          )
+        )
+        AND (
+          cancelled_at IS NULL
+          OR ${isCancellationStatus}
+        )
+    )
+    INSERT INTO events (run_id, type, payload, created_at)
+    SELECT id, ${input.type}, ${payloadJson}::jsonb, ${ts}::timestamptz
+    FROM target
+    RETURNING id, created_at
+  `);
+
+  const { rows } = result as unknown as {
+    rows: Array<{ id: number | string; created_at: Date | string }>;
+  };
+  if (!rows || !rows[0]) return null;
+  return {
+    id: Number(rows[0].id),
+    createdAt: new Date(rows[0].created_at),
+  };
 }
 
 /**
