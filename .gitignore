@@ -12,3 +12,8 @@ apps/web/.workspaces/
 .env
 .env.local
 .env*.local
+
+# cloudflare / open-next
+.open-next/
+.wrangler/
+

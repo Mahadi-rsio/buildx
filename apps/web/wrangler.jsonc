@@ -1,0 +1,67 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "buildx",
+  "main": "./worker/index.ts",
+  "compatibility_date": "2026-10-17",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "observability": {
+    "enabled": true
+  },
+  "queues": {
+    "producers": [
+      {
+        "binding": "BUILDX_QUEUE",
+        "queue": "buildx-runs"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "buildx-runs",
+        "max_batch_size": 1,
+        "max_batch_timeout": 5,
+        "max_retries": 3,
+        "dead_letter_queue": "buildx-runs-dlq"
+      }
+    ]
+  },
+  "r2_buckets": [
+    {
+      "binding": "BUILDX_R2",
+      "bucket_name": "buildx-artifacts"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "BUILDX_KV",
+      "id": "buildx-cache-kv"
+    }
+  ],
+  "vars": {
+    "BUILDX_SANDBOX_KIND": "box",
+    "AGENT_MODEL": "gpt-4o",
+    "AGENT_MAX_STEPS": "40",
+    "OPENNEXT_CLOUDFLARE": "true"
+  },
+  "env": {
+    "production": {
+      "vars": {
+        "NODE_ENV": "production",
+        "BUILDX_SANDBOX_KIND": "box",
+        "OPENNEXT_CLOUDFLARE": "true"
+      }
+    },
+    "preview": {
+      "vars": {
+        "NODE_ENV": "production",
+        "BUILDX_SANDBOX_KIND": "box",
+        "OPENNEXT_CLOUDFLARE": "true"
+      }
+    }
+  }
+}

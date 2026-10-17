@@ -30,6 +30,14 @@ export class LocalSandbox implements Sandbox {
   private readonly procs = new Map<ProcId, ChildProcess>();
 
   constructor(options: LocalSandboxOptions) {
+    if (
+      process.env.NODE_ENV === "production" ||
+      process.env.OPENNEXT_CLOUDFLARE === "true"
+    ) {
+      throw new Error(
+        "LocalSandbox is strictly forbidden in production. Production runs must use Upstash Box.",
+      );
+    }
     this.id = randomUUID();
     this.rootDir = resolve(options.rootDir);
   }

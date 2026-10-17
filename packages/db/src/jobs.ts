@@ -63,6 +63,47 @@ export async function claimNextQueuedRun(
 }
 
 /**
+ * Atomically claim a specific queued run by ID.
+ * Used by queue message consumers to claim the specific run targeted by a message.
+ * Respects the per-user single running run invariant with row locks.
+ */
+export async function claimRunById(
+  db: Db,
+  input: { runId: string; leaseId: string; leaseTtlMs?: number },
+): Promise<RunRow | null> {
+  const ttl = input.leaseTtlMs ?? RUN_LEASE_TTL_MS;
+  const result = await db.execute(sql`
+    WITH candidate AS (
+      SELECT r.id FROM runs r
+      WHERE r.id = ${input.runId}::uuid
+        AND r.status = 'queued'
+        AND NOT EXISTS (
+          SELECT 1 FROM runs other
+          WHERE other.user_id = r.user_id
+            AND other.status = 'running'
+        )
+      FOR UPDATE SKIP LOCKED
+    )
+    UPDATE runs
+    SET status = 'running',
+        lease_id = ${input.leaseId},
+        fencing_token = runs.fencing_token + 1,
+        lease_expires_at = now() + make_interval(secs => ${ttl / 1000}),
+        started_at = COALESCE(started_at, now()),
+        updated_at = now()
+    WHERE id IN (SELECT id FROM candidate)
+    RETURNING id
+  `);
+  const { rows } = result as unknown as { rows: Array<{ id: string }> };
+  if (!rows[0]) return null;
+  const rows2 = await db
+    .select()
+    .from(runs)
+    .where(eq(runs.id, rows[0].id));
+  return rows2[0] ?? null;
+}
+
+/**
  * Recover abandoned work. Runs stuck in `running` past their lease expiry are
  * requeued (or cancelled outright when a cancellation was already requested).
  * Expired workspace locks are deleted so the workspace can be re-acquired.

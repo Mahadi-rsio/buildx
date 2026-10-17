@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@buildx/shared": "workspace:*",
+    "@neondatabase/serverless": "^1.2.0",
     "drizzle-orm": "^0.45.4",
     "pg": "^8.23.1"
   },

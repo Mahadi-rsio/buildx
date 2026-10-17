@@ -55,6 +55,15 @@ function boxNameFor(ctx: SandboxRunContext): string {
 export function sandboxSettings(): SandboxSettings {
   const boxApiKey = (process.env.UPSTASH_BOX_API_KEY ?? "").trim();
   const explicit = (process.env.BUILDX_SANDBOX_KIND ?? "").trim().toLowerCase();
+  const isProduction =
+    process.env.NODE_ENV === "production" ||
+    process.env.OPENNEXT_CLOUDFLARE === "true";
+
+  if (isProduction && explicit === "local") {
+    throw new Error(
+      "BUILDX_SANDBOX_KIND=local is strictly forbidden in production. Production runs must use Upstash Box.",
+    );
+  }
 
   // Explicit override wins: `BUILDX_SANDBOX_KIND=box` forces Box, `local`
   // forces the local sandbox (tests/dev without a Box key). Box mode always
@@ -93,10 +102,10 @@ export function sandboxSettings(): SandboxSettings {
   }
 
   // No key and no explicit override: never silently run jobs on this machine
-  // in production. Dev/test keep the convenient local sandbox.
-  if (process.env.NODE_ENV === "production") {
+  // in production. Local sandbox fallback is strictly prohibited in production.
+  if (isProduction) {
     throw new Error(
-      "No sandbox configured: set UPSTASH_BOX_API_KEY or BUILDX_SANDBOX_KIND=local",
+      "Production execution requires Upstash Box: set UPSTASH_BOX_API_KEY. Local sandbox fallback is not permitted in production.",
     );
   }
   return { kind: "local" };
@@ -179,6 +188,14 @@ export function createSandbox(ctx: SandboxRunContext): Sandbox {
         await box.suspend().catch(() => undefined);
       },
     });
+  }
+  const isProduction =
+    process.env.NODE_ENV === "production" ||
+    process.env.OPENNEXT_CLOUDFLARE === "true";
+  if (isProduction) {
+    throw new Error(
+      "Local sandbox execution is strictly forbidden in production. Configure UPSTASH_BOX_API_KEY.",
+    );
   }
   return new LocalSandbox({ rootDir: ctx.workspaceDir });
 }

@@ -8,6 +8,19 @@ export const dynamic = "force-dynamic";
 
 const encoder = new TextEncoder();
 const POLL_MS = 1_000;
+const HEARTBEAT_MS = 15_000;
+const MAX_EVENT_PAYLOAD_BYTES = 64 * 1024; // 64 KB limit per event payload
+
+function sanitizePayload(data: unknown): unknown {
+  if (typeof data !== "object" || data === null) return data;
+  const clone = { ...(data as Record<string, unknown>) };
+  for (const [k, v] of Object.entries(clone)) {
+    if (typeof v === "string" && v.length > MAX_EVENT_PAYLOAD_BYTES) {
+      clone[k] = `${v.slice(0, MAX_EVENT_PAYLOAD_BYTES)}... [truncated]`;
+    }
+  }
+  return clone;
+}
 
 /**
  * One SSE frame. `id` lets EventSource resume via `Last-Event-ID`; `data` wraps
@@ -18,9 +31,13 @@ function frame(event: RunEvent): Uint8Array {
   return encoder.encode(
     `id: ${event.id}\nevent: ${event.type}\ndata: ${JSON.stringify({
       ts: event.ts,
-      data: event.data,
+      data: sanitizePayload(event.data),
     })}\n\n`,
   );
+}
+
+function heartbeatFrame(): Uint8Array {
+  return encoder.encode(`: ping\n\n`);
 }
 
 function sleep(ms: number): Promise<void> {
@@ -75,10 +92,12 @@ export async function GET(
     async start(controller) {
       let closed = false;
       let cursor = after;
+      let lastActivityAt = Date.now();
 
       const close = (): void => {
         if (closed) return;
         closed = true;
+        clearInterval(heartbeatTimer);
         try {
           controller.close();
         } catch {
@@ -90,6 +109,7 @@ export async function GET(
         if (closed) return;
         try {
           controller.enqueue(frame(event));
+          lastActivityAt = Date.now();
         } catch {
           close();
           return;
@@ -99,6 +119,22 @@ export async function GET(
           close();
         }
       };
+
+      // Periodic heartbeat keeps the connection open through Edge/Cloudflare proxies (100s idle limit)
+      const heartbeatTimer = setInterval(() => {
+        if (closed) {
+          clearInterval(heartbeatTimer);
+          return;
+        }
+        if (Date.now() - lastActivityAt >= HEARTBEAT_MS) {
+          try {
+            controller.enqueue(heartbeatFrame());
+            lastActivityAt = Date.now();
+          } catch {
+            close();
+          }
+        }
+      }, HEARTBEAT_MS);
 
       const tick = async (): Promise<void> => {
         const snapshot = await listEventsAfter(id, cursor);
@@ -120,7 +156,7 @@ export async function GET(
       }
     },
     cancel() {
-      // No-op: queued poll ticks fall through on their own timeout.
+      // Browser disconnected: stream closes without aborting background execution
     },
   });
 

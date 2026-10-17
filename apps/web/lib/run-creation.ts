@@ -11,6 +11,7 @@ import {
   monthlyCpuSecondsUsed,
   nextDhakaReset,
   runs as runsTable,
+  insertOutboxMessage,
   type Db,
 } from "@buildx/db";
 import type { WorkspaceUsage } from "./types";
@@ -19,6 +20,7 @@ import {
   hydrateRun,
   type StoredRun,
 } from "./store";
+import { dispatchRunToQueue } from "./queue/producer";
 
 /**
  * Enqueue a run for a user with idempotent + quota-safe atomic semantics:
@@ -145,11 +147,43 @@ export async function enqueueRunForUser(
         })
         .returning();
 
-      return { kind: "created" as const, row: rows[0] };
+      // Record dispatch intent in the transactional outbox atomically
+      const outboxRow = await insertOutboxMessage(tx, {
+        runId: id,
+        payload: {
+          runId: id,
+          userId: input.user.id,
+          task: input.task,
+          model: input.model,
+          maxSteps: input.maxSteps,
+          idempotencyKey: input.idempotencyKey ?? null,
+          step: 0,
+        },
+      });
+
+      return { kind: "created" as const, row: rows[0], outboxId: outboxRow.id };
     });
 
     if (result.kind === "quota_exhausted") {
       return { kind: "quota_exhausted" };
+    }
+
+    if (result.kind === "created" && result.outboxId) {
+      // Asynchronously attempt dispatch to Cloudflare Queue (and mark outbox published on success)
+      void dispatchRunToQueue(
+        {
+          runId: result.row.id,
+          idempotencyKey: input.idempotencyKey,
+          outboxId: result.outboxId,
+          step: 0,
+        },
+        { db },
+      ).catch((err) => {
+        console.error(
+          `[run-creation] initial queue dispatch failed for ${result.row.id}`,
+          err,
+        );
+      });
     }
 
     const run = await hydrateRun(result.row);

@@ -38,10 +38,14 @@ function startWorker(): void {
 
 const instrumentation = {
   register() {
-    // Node server runtime only — never during static analysis or the Next
-    // build. Runs the durable job worker (claims leases, executes runs,
-    // recovers stalled work).
-    if (process.env.NEXT_RUNTIME === "nodejs") {
+    // Persistent polling workers are completely disabled in production and Cloudflare Workers.
+    // Cloudflare Queues handle asynchronous dispatch in production.
+    if (
+      process.env.NODE_ENV !== "production" &&
+      process.env.OPENNEXT_CLOUDFLARE !== "true" &&
+      process.env.NEXT_RUNTIME === "nodejs" &&
+      !process.env.BUILDX_DISABLE_LOCAL_WORKER
+    ) {
       startWorker();
     }
   },

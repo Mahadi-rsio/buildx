@@ -1,25 +1,50 @@
 import { sql } from "drizzle-orm";
-import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
-import { Pool } from "pg";
+import { drizzle as drizzleNodePg, type NodePgDatabase } from "drizzle-orm/node-postgres";
+import { drizzle as drizzleNeon, type NeonDatabase } from "drizzle-orm/neon-serverless";
+import { Pool as PgPool } from "pg";
+import { Pool as NeonPool } from "@neondatabase/serverless";
 import * as schema from "./schema";
 
 /**
- * Create a Drizzle client over a `pg` Pool. Accepts a caller-supplied pool so
- * tests / scripts / migrations can own their own; the default path caches a
- * singleton on `globalThis` so Next.js hot reload never exhausts connections.
+ * Create a Drizzle client over a `pg` Pool or `@neondatabase/serverless` Pool.
+ * Accepts a caller-supplied pool so tests / scripts / migrations can own their own;
+ * the default path caches a singleton on `globalThis` so Next.js hot reload never exhausts connections.
  */
 export interface DbClientOptions {
   /** Existing pool to wrap. When omitted, a Pool is created from DATABASE_URL. */
-  pool?: Pool;
+  pool?: PgPool | NeonPool;
   /** Connection string (used when `pool` is omitted). Falls back to env. */
   connectionString?: string;
   /** When true, always build a fresh client instead of caching on globalThis. */
   fresh?: boolean;
+  /** Explicit driver choice ('neon' uses WebSocket; 'node-pg' uses TCP/Hyperdrive). */
+  driver?: "node-pg" | "neon";
 }
 
-export type Db = NodePgDatabase<typeof schema>;
+export type Db = NodePgDatabase<typeof schema> | NeonDatabase<typeof schema>;
 
 const globalForDb = globalThis as unknown as { __BUILDX_DB__?: Db };
+
+function shouldUseNeonDriver(connectionString: string, driverOption?: "node-pg" | "neon"): boolean {
+  if (driverOption === "neon") return true;
+  if (driverOption === "node-pg") return false;
+  const envDriver = process.env.BUILDX_DB_DRIVER?.toLowerCase();
+  if (envDriver === "neon") return true;
+  if (envDriver === "node-pg" || envDriver === "pg") return false;
+
+  // Cloudflare Hyperdrive connections use standard TCP socket proxy
+  if (process.env.HYPERDRIVE_URL || connectionString.includes("hyperdrive")) {
+    return false;
+  }
+
+  // Neon WebSocket driver for Cloudflare Workers / browser-like environments
+  const isCloudflare =
+    typeof process !== "undefined" &&
+    (process.env.OPENNEXT_CLOUDFLARE === "true" || process.env.NEXT_RUNTIME === "edge");
+  const isNeonHost = connectionString.includes(".neon.tech");
+
+  return Boolean(isCloudflare && isNeonHost);
+}
 
 /**
  * The database client. In Next.js dev this is a process-wide singleton
@@ -33,15 +58,32 @@ export function getDb(options: DbClientOptions = {}): Db {
   }
 
   const connectionString =
-    options.connectionString ?? process.env.DATABASE_URL;
-  if (!connectionString) {
+    options.connectionString ??
+    process.env.HYPERDRIVE_URL ??
+    process.env.DATABASE_URL;
+  if (!connectionString && !options.pool) {
     throw new Error(
       "DATABASE_URL is not set. Copy .env.example to .env and fill it in.",
     );
   }
 
-  const pool = options.pool ?? new Pool({ connectionString });
-  const db = drizzle(pool, { schema });
+  let db: Db;
+  if (options.pool) {
+    if (options.pool instanceof NeonPool) {
+      db = drizzleNeon(options.pool, { schema }) as unknown as Db;
+    } else {
+      db = drizzleNodePg(options.pool as PgPool, { schema }) as unknown as Db;
+    }
+  } else {
+    const useNeon = shouldUseNeonDriver(connectionString!, options.driver);
+    if (useNeon) {
+      const pool = new NeonPool({ connectionString: connectionString! });
+      db = drizzleNeon(pool, { schema }) as unknown as Db;
+    } else {
+      const pool = new PgPool({ connectionString: connectionString! });
+      db = drizzleNodePg(pool, { schema }) as unknown as Db;
+    }
+  }
 
   if (!options.fresh) globalForDb.__BUILDX_DB__ = db;
   return db;
