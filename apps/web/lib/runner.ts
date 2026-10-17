@@ -9,10 +9,7 @@ import { createSandbox, sandboxSettings } from "./sandbox";
 import { sourceForRun } from "./workspace-source";
 
 /** Seed the workspace so `list_dir` / `read_file` have something real to read. */
-async function seedWorkspace(
-  run: StoredRun,
-  sandbox: import("@buildx/sandbox").Sandbox,
-): Promise<void> {
+async function seedWorkspace(run: StoredRun): Promise<void> {
   const readme = [
     "# buildx workspace",
     "",
@@ -26,14 +23,12 @@ async function seedWorkspace(
     "Every file the agent creates or edits lands in this directory.",
     "",
   ].join("\n");
-  // Only local mode writes a seed file before the run starts (box workspaces
-  // start empty).
-  const settings = sandboxSettings();
-  if (settings.kind === "local") {
+  // Local mode only: box workspaces are never seeded eagerly, so a plain chat
+  // message doesn't spin a box up. The box is created lazily on the agent's
+  // first sandbox tool call instead.
+  if (sandboxSettings().kind === "local") {
     await mkdir(run.workspaceDir, { recursive: true });
     await writeFile(join(run.workspaceDir, "README.md"), readme, "utf8");
-  } else if (settings.kind === "box") {
-    await sandbox.writeFile("README.md", readme);
   }
 }
 
@@ -74,7 +69,7 @@ export async function startRun(run: StoredRun): Promise<void> {
   });
   try {
     await sandbox.start();
-    await seedWorkspace(run, sandbox);
+    await seedWorkspace(run);
     run.status = "running";
     run.updatedAt = Date.now();
 

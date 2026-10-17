@@ -2,7 +2,7 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { BoxSandbox, resolveWorkspacePath } from "@buildx/sandbox";
 import type { StoredRun } from "./store";
-import { resolveWorkspaceBox, sandboxSettings } from "./sandbox";
+import { sandboxSettings, tryGetWorkspaceBox } from "./sandbox";
 
 const IGNORED_DIRS = new Set([
   "node_modules",
@@ -198,21 +198,34 @@ export class BoxWorkspaceSource implements WorkspaceSource {
   }
 }
 
+/**
+ * Empty source returned for box runs whose box hasn't been provisioned yet.
+ * The file browser/diff reads through this until the agent's first sandbox
+ * tool call creates the box; nothing here ever creates a box.
+ */
+class EmptyWorkspaceSource implements WorkspaceSource {
+  resolve(rel: string): string {
+    if (rel.split("/").includes("..")) throw new Error("path escapes sandbox root");
+    return rel.replace(/^\.?\//, "");
+  }
+  async listDir(_rel: string): Promise<WorkspaceEntry[]> {
+    return [];
+  }
+  async readFile(_rel: string): Promise<WorkspaceFileRead> {
+    throw new Error("workspace not provisioned yet");
+  }
+  async stat(_rel: string): Promise<{ type: "file" | "dir" } | null> {
+    return null;
+  }
+  async listFiles(): Promise<{ path: string; size: number; mtime?: number }[]> {
+    return [];
+  }
+}
+
 /** Build the right source for a run based on the sandbox mode. */
 export function sourceForRun(run: StoredRun): WorkspaceSource {
   const settings = sandboxSettings();
   if (settings.kind === "box") {
-    let box: BoxSandbox | undefined;
-    const getBox = async (): Promise<BoxSandbox> => {
-      if (!box) {
-        box = await resolveWorkspaceBox({
-          workspaceDir: run.workspaceDir,
-          userId: run.userId,
-          workspaceName: run.workspaceName,
-        });
-      }
-      return box;
-    };
     return {
       resolve(rel: string): string {
         const clean = rel.replace(/\\/g, "/").replace(/^\.?\//, "");
@@ -222,16 +235,24 @@ export function sourceForRun(run: StoredRun): WorkspaceSource {
         return clean;
       },
       async listDir(rel: string) {
-        return new BoxWorkspaceSource(await getBox()).listDir(rel);
+        const box = await tryGetWorkspaceBox(run.userId);
+        if (!box) return new EmptyWorkspaceSource().listDir(rel);
+        return new BoxWorkspaceSource(box).listDir(rel);
       },
       async readFile(rel: string) {
-        return new BoxWorkspaceSource(await getBox()).readFile(rel);
+        const box = await tryGetWorkspaceBox(run.userId);
+        if (!box) return new EmptyWorkspaceSource().readFile(rel);
+        return new BoxWorkspaceSource(box).readFile(rel);
       },
       async stat(rel: string) {
-        return new BoxWorkspaceSource(await getBox()).stat(rel);
+        const box = await tryGetWorkspaceBox(run.userId);
+        if (!box) return new EmptyWorkspaceSource().stat(rel);
+        return new BoxWorkspaceSource(box).stat(rel);
       },
       async listFiles() {
-        return new BoxWorkspaceSource(await getBox()).listFiles();
+        const box = await tryGetWorkspaceBox(run.userId);
+        if (!box) return new EmptyWorkspaceSource().listFiles();
+        return new BoxWorkspaceSource(box).listFiles();
       },
     };
   }

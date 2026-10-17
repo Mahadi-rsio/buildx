@@ -23,6 +23,7 @@ export interface SandboxRunContext {
 
 const globalSandboxState = globalThis as unknown as {
   __BUILDX_BOXES__?: Map<string, Promise<BoxSandbox>>;
+  __BUILDX_BOXES_RESOLVED__?: Map<string, BoxSandbox>;
 };
 
 function boxCache(): Map<string, Promise<BoxSandbox>> {
@@ -30,6 +31,13 @@ function boxCache(): Map<string, Promise<BoxSandbox>> {
     globalSandboxState.__BUILDX_BOXES__ = new Map();
   }
   return globalSandboxState.__BUILDX_BOXES__;
+}
+
+function resolvedBoxes(): Map<string, BoxSandbox> {
+  if (!globalSandboxState.__BUILDX_BOXES_RESOLVED__) {
+    globalSandboxState.__BUILDX_BOXES_RESOLVED__ = new Map();
+  }
+  return globalSandboxState.__BUILDX_BOXES_RESOLVED__;
 }
 
 /** Build a stable per-user box name (Box names must be [a-z0-9-]). */
@@ -86,6 +94,7 @@ export async function resolveWorkspaceBox(
       size: (settings.boxSize as BoxSandboxOptions["size"]) || "small",
     });
     await box.start();
+    resolvedBoxes().set(key, box);
     return box;
   })();
 
@@ -98,6 +107,29 @@ export async function resolveWorkspaceBox(
   }
 }
 
+/**
+ * Non-activating box lookup: returns the user's box only if one already exists
+ * (fully resolved, or currently being provisioned by the runner). Never
+ * creates a box itself, so read-only consumers (file browser, diff) can't spin
+ * a box up on their own — the box only exists after the agent made a sandbox
+ * tool call. Resolves to `undefined` when the user has no box yet.
+ */
+export async function tryGetWorkspaceBox(
+  userId: string,
+): Promise<BoxSandbox | undefined> {
+  const resolved = resolvedBoxes().get(`${userId}`);
+  if (resolved) return resolved;
+  const pending = boxCache().get(`${userId}`);
+  if (pending) {
+    try {
+      return await pending;
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
 /** Build the sandbox that backs a run's workspace. */
 export function createSandbox(ctx: SandboxRunContext): Sandbox {
   const settings = sandboxSettings();
@@ -107,6 +139,7 @@ export function createSandbox(ctx: SandboxRunContext): Sandbox {
       // Keep the persistent box alive across runs; Box auto-pauses when idle.
       onDestroy: async (box) => {
         boxCache().delete(ctx.userId);
+        resolvedBoxes().delete(ctx.userId);
         await box.suspend().catch(() => undefined);
       },
     });
