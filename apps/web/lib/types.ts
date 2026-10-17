@@ -26,6 +26,7 @@ export interface WorkspaceRuntime {
   message?: string;
   idleDeadlineAt?: number;
   usage?: WorkspaceUsage;
+  workspaceId?: string;
 }
 
 export interface RunSummary {

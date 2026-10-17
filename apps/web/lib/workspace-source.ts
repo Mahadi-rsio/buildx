@@ -1,9 +1,8 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { resolveWorkspacePath } from "@buildx/sandbox";
-import { DaemonSandbox } from "@buildx/sandbox";
+import { BoxSandbox, resolveWorkspacePath } from "@buildx/sandbox";
 import type { StoredRun } from "./store";
-import { resolveWorkspaceDaemon, sandboxSettings } from "./sandbox";
+import { resolveWorkspaceBox, sandboxSettings } from "./sandbox";
 
 const IGNORED_DIRS = new Set([
   "node_modules",
@@ -25,7 +24,7 @@ export interface WorkspaceEntry {
   mtime?: number;
 }
 
-/** A fully read file (text or binary), mirroring the daemon's /fs read. */
+/** A fully read file (text or binary), mirroring the box `/fs` read. */
 export interface WorkspaceFileRead {
   content: string;
   binary: boolean;
@@ -36,7 +35,7 @@ export interface WorkspaceFileRead {
 /**
  * Backend-agnostic view over a run's workspace. The web app reads file trees,
  * file contents, and diffs through this so it works identically whether the
- * run lives on the local disk or on a Fly Machine daemon.
+ * run lives on the local disk or in an Upstash Box.
  */
 export interface WorkspaceSource {
   /** List one directory (relative path); throws on missing dirs. */
@@ -75,7 +74,7 @@ async function walk(
 
 /**
  * Local source: reads the workspace directly off the run's scratch directory.
- * Used in development and tests (no Fly machine configured).
+ * Used in development and tests (no Box configured).
  */
 export class LocalWorkspaceSource implements WorkspaceSource {
   constructor(private readonly rootDir: string) {}
@@ -151,11 +150,11 @@ export class LocalWorkspaceSource implements WorkspaceSource {
 }
 
 /**
- * Remote source: reads the workspace through the sandbox daemon on a Fly
- * Machine via the shared HTTP API (`/fs`), same paths the runner uses to exec.
+ * Box source: reads the workspace inside a persistent Upstash Box through the
+ * same `BoxSandbox` methods the runner uses to exec.
  */
-export class DaemonWorkspaceSource implements WorkspaceSource {
-  constructor(private readonly daemon: DaemonSandbox) {}
+export class BoxWorkspaceSource implements WorkspaceSource {
+  constructor(private readonly box: BoxSandbox) {}
 
   resolve(rel: string): string {
     const clean = rel.replace(/\\/g, "/").replace(/^\.?\//, "");
@@ -167,7 +166,7 @@ export class DaemonWorkspaceSource implements WorkspaceSource {
 
   async listDir(rel: string): Promise<WorkspaceEntry[]> {
     const clean = rel === "." ? "" : rel.replace(/^\.?\//, "").replace(/\/+$/, "");
-    const entries = await this.daemon.listDir(clean);
+    const entries = await this.box.listDir(clean);
     const parent = clean;
     return entries
       .filter((entry) => !IGNORED_DIRS.has(entry.name))
@@ -175,16 +174,11 @@ export class DaemonWorkspaceSource implements WorkspaceSource {
         name: entry.name,
         path: parent ? `${parent}/${entry.name}` : entry.name,
         type: entry.type,
-        size: (entry as WorkspaceEntry).size,
-        mtime: (entry as WorkspaceEntry).mtime,
       }));
   }
 
   async readFile(rel: string): Promise<WorkspaceFileRead> {
-    const info = await this.daemon.readInfo(rel);
-    if (info.type === "dir") {
-      throw new Error(`not a file: ${rel}`);
-    }
+    const info = await this.box.readInfo(rel);
     return {
       content: info.content,
       binary: info.binary,
@@ -194,12 +188,7 @@ export class DaemonWorkspaceSource implements WorkspaceSource {
   }
 
   async stat(rel: string): Promise<{ type: "file" | "dir" } | null> {
-    try {
-      const info = await this.daemon.readInfo(rel);
-      return { type: info.type === "dir" ? "dir" : "file" };
-    } catch {
-      return null;
-    }
+    return this.box.stat(rel);
   }
 
   async listFiles(): Promise<{ path: string; size: number; mtime?: number }[]> {
@@ -211,28 +200,18 @@ export class DaemonWorkspaceSource implements WorkspaceSource {
 
 /** Build the right source for a run based on the sandbox mode. */
 export function sourceForRun(run: StoredRun): WorkspaceSource {
-  if (sandboxSettings().kind === "remote") {
-    let daemon: DaemonSandbox | undefined;
-    const getDaemon = async (): Promise<DaemonSandbox> => {
-      if (!daemon) {
-        const resolved = await resolveWorkspaceDaemon(
-          {
-            workspaceDir: run.workspaceDir,
-            userId: run.userId,
-            workspaceName: run.workspaceName,
-          },
-          {
-            dailyRequestsUsed: run.workspace.usage?.dailyRequestsUsed,
-            nextDhakaResetAt: run.workspace.usage?.nextDhakaResetAt,
-          },
-        );
-        run.remoteWorkspaceId = resolved.workspaceId;
-        daemon = new DaemonSandbox({
-          baseUrl: resolved.baseUrl,
-          token: resolved.token,
+  const settings = sandboxSettings();
+  if (settings.kind === "box") {
+    let box: BoxSandbox | undefined;
+    const getBox = async (): Promise<BoxSandbox> => {
+      if (!box) {
+        box = await resolveWorkspaceBox({
+          workspaceDir: run.workspaceDir,
+          userId: run.userId,
+          workspaceName: run.workspaceName,
         });
       }
-      return daemon;
+      return box;
     };
     return {
       resolve(rel: string): string {
@@ -243,16 +222,16 @@ export function sourceForRun(run: StoredRun): WorkspaceSource {
         return clean;
       },
       async listDir(rel: string) {
-        return new DaemonWorkspaceSource(await getDaemon()).listDir(rel);
+        return new BoxWorkspaceSource(await getBox()).listDir(rel);
       },
       async readFile(rel: string) {
-        return new DaemonWorkspaceSource(await getDaemon()).readFile(rel);
+        return new BoxWorkspaceSource(await getBox()).readFile(rel);
       },
       async stat(rel: string) {
-        return new DaemonWorkspaceSource(await getDaemon()).stat(rel);
+        return new BoxWorkspaceSource(await getBox()).stat(rel);
       },
       async listFiles() {
-        return new DaemonWorkspaceSource(await getDaemon()).listFiles();
+        return new BoxWorkspaceSource(await getBox()).listFiles();
       },
     };
   }

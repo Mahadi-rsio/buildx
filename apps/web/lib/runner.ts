@@ -9,7 +9,10 @@ import { createSandbox, sandboxSettings } from "./sandbox";
 import { sourceForRun } from "./workspace-source";
 
 /** Seed the workspace so `list_dir` / `read_file` have something real to read. */
-async function seedWorkspace(run: StoredRun): Promise<void> {
+async function seedWorkspace(
+  run: StoredRun,
+  sandbox: import("@buildx/sandbox").Sandbox,
+): Promise<void> {
   const readme = [
     "# buildx workspace",
     "",
@@ -23,12 +26,14 @@ async function seedWorkspace(run: StoredRun): Promise<void> {
     "Every file the agent creates or edits lands in this directory.",
     "",
   ].join("\n");
-  // Phase 8 keeps Fly machines lazy, so only local mode writes a seed file
-  // before the run starts.
+  // Only local mode writes a seed file before the run starts (box workspaces
+  // start empty).
   const settings = sandboxSettings();
   if (settings.kind === "local") {
     await mkdir(run.workspaceDir, { recursive: true });
     await writeFile(join(run.workspaceDir, "README.md"), readme, "utf8");
+  } else if (settings.kind === "box") {
+    await sandbox.writeFile("README.md", readme);
   }
 }
 
@@ -62,34 +67,18 @@ export async function startRun(run: StoredRun): Promise<void> {
     return;
   }
 
-  await seedWorkspace(run);
-
-  const sandbox = createSandbox(
-    {
-      workspaceDir: run.workspaceDir,
-      userId: run.userId,
-      workspaceName: run.workspaceName,
-    },
-    {
-      dailyRequestsUsed: run.workspace.usage?.dailyRequestsUsed,
-      nextDhakaResetAt: run.workspace.usage?.nextDhakaResetAt,
-      onWorkspaceEvent: (event) => {
-        run.workspace.status = event.status;
-        run.workspace.step = event.step;
-        run.workspace.message = event.message;
-        if (event.idleDeadlineAt) run.workspace.idleDeadlineAt = event.idleDeadlineAt;
-        if (event.workspaceId) run.remoteWorkspaceId = event.workspaceId;
-        if (event.usage) run.workspace.usage = event.usage;
-        appendEvent(run, { type: "workspace", data: event, ts: Date.now() });
-      },
-    },
-  );
+  const sandbox = createSandbox({
+    workspaceDir: run.workspaceDir,
+    userId: run.userId,
+    workspaceName: run.workspaceName,
+  });
   try {
     await sandbox.start();
+    await seedWorkspace(run, sandbox);
     run.status = "running";
     run.updatedAt = Date.now();
 
-    // Local mode snapshots immediately; remote mode snapshots lazily once a
+    // Local mode snapshots immediately; box mode snapshots lazily once a
     // workspace has actually been restored.
     if (sandboxSettings().kind === "local") {
       run.baseline = await captureWorkspaceSnapshot(sourceForRun(run));

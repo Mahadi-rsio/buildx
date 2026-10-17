@@ -1,7 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { EventType, RunEvent, RunStatus } from "@buildx/shared";
+import type {
+  EventType,
+  RunEvent,
+  RunStatus,
+  WorkspacePayload,
+} from "@buildx/shared";
 import { isTerminalStatus } from "@buildx/shared";
 import type { RunDetail } from "@/lib/types";
 
@@ -116,7 +121,7 @@ export function useRunStream(runId: string) {
                 : previous,
             );
           } else if (type === "workspace") {
-            const payload = frame.data as RunDetail["workspace"];
+            const payload = frame.data as WorkspacePayload;
             setRun((previous) =>
               previous
                 ? {

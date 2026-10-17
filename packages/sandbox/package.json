@@ -16,6 +16,7 @@
     "@buildx/db": "workspace:*",
     "@buildx/shared": "workspace:*",
     "@buildx/storage": "workspace:*",
+    "@upstash/box": "^0.7.9",
     "zod": "^4.1.13"
   },
   "devDependencies": {

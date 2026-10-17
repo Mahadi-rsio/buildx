@@ -5,14 +5,11 @@
 - pnpm monorepo (pnpm 12). `plan.md` / `arcetecture.md` are the source of truth. Note the misspelled filename: `arcetecture.md`, not `architecture.md`.
 - Built so far:
   - `packages/shared` — `RunEvent` model, zod schemas, `loadEnv()` / `envStatus()`.
-  - `packages/sandbox` — fly-manager (Phase 7): `createWorkspace`, `ensureRunning`
-    idempotent restore, reworked `archive` (daemon `/sync` → verify → rotate →
-    destroy, strict order), `reconcile`, workspace lifecycle state machine. Also
-    `FlyClient` (Machines REST, zod-validated, retries + concurrency limiter),
-    daemon HTTP client (`daemonHealth`/`daemonInit`/`daemonSync`/
-    `waitForDaemonHealth`), `Sandbox` interface + `DaemonSandbox` + `LocalSandbox`,
-    `resolveWorkspacePath`. Tests use a FakeFlyClient + FakeStorage + fake daemon
-    HTTP server (skipped if local Postgres is unreachable).
+  - `packages/sandbox` — `Sandbox` interface + `LocalSandbox` + `BoxSandbox`
+    (Upstash Box, persistent) + `LazyBoxSandbox`, `resolveWorkspacePath`. Box is
+    the primary remote backend (`UPSTASH_BOX_API_KEY`); the old Fly Machines /
+    sandbox-daemon (`FlyClient`, `fly-manager`, `DaemonSandbox`, `LazySandbox`)
+    stack was removed.
   - `packages/storage` — `Storage` interface (presign/head/copy/delete/rotate/list).
   - `packages/db` — Drizzle schema, `transition` (single-from), `claimStatus`
     (multi-from), usage sessions + quotas (`openUsageSession`, `closeUsageSession`,
@@ -23,11 +20,10 @@
       `GET /api/runs/:id/stream?after=`, `POST /api/runs/:id/stop`,
       `GET /api/workspaces/:id/files?path=`.
     - `lib/store.ts` keeps runs/events in memory on `globalThis` (no DB yet);
-      `lib/runner.ts` runs `runTask` against a `LocalSandbox` and appends every step.
+      `lib/runner.ts` runs `runTask` against the sandbox from `createSandbox`
+      (local or Box) and appends every step.
 - All packages test/typecheck; root `pnpm typecheck` / `test` / `build` are green.
-- `services/*`, `infra/*`, `evals` are **not yet wired into prod** — `arcetecture.md` §7 lists them;
-  `services/sandbox-daemon/server.mjs` defines the daemon HTTP contract the
-  `FlyClient`/daemon clients talk to.
+- `evals` is **not yet wired into prod** — `arcetecture.md` §7 lists it.
 
 ## Commands (run these to verify)
 
@@ -69,10 +65,10 @@ test spins up an in-process OpenAI-compatible SSE server, so no API key is neede
 
 ## When implementing
 
-- Follow the monorepo layout in `arcetecture.md` §7 (`/apps/web`, `/packages/{agent,sandbox,db,shared}`, `/services/{sandbox-daemon,worker}`, `/infra/fly-image`, `/evals`).
+- Follow the monorepo layout in `arcetecture.md` §7 (`/apps/web`, `/packages/{agent,sandbox,db,shared}`, `/evals`).
 - Locked-in decisions (don't re-litigate without cause):
-  - **Fly Machines, not Fly Sprites** — cost; all sandbox access goes through the `Sandbox` interface (`arcetecture.md` §2.4) so the backend is swappable.
-  - **Agent loop runs outside the sandbox** — model keys and the Fly token never enter the microVM.
+  - **Upstash Box, not Fly Machines** — cost; all sandbox access goes through the `Sandbox` interface (`arcetecture.md` §2.4) so the backend is swappable. The Fly Machines backend and its daemon were removed.
+  - **Agent loop runs outside the sandbox** — model keys and the Box API key never enter the microVM.
   - **AI SDK `ToolLoopAgent`** is the default harness; `arcetecture.md` §3.4 warns option names (`stopWhen`, `prepareStep`) must be checked against the installed SDK version.
   - **Everything is an append-only event row** (`events` table) — replayable, resumable UI; persist every step. Today `apps/web` uses an in-memory `globalThis` store; swap it for `packages/db` when that lands.
   - **Verification is mandatory**: a task is not done until build/test/lint pass or the agent explains why not.

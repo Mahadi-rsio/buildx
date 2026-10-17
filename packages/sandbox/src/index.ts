@@ -1,6 +1,6 @@
 /**
  * The backend-agnostic sandbox contract (arcetecture.md §2.4). Every adapter
- * (Fly Machines today; Sprites / Vercel Sandbox / Firecracker later) implements
+ * (Upstash Box today; Sprites / Vercel Sandbox / Firecracker later) implements
  * this interface so the agent harness never depends on a specific backend.
  */
 
@@ -32,68 +32,11 @@ export type ProcId = string;
 export type CheckpointId = string;
 
 export { LocalSandbox, type LocalSandboxOptions } from "./local";
+export { BoxSandbox, type BoxSandboxOptions } from "./box-sandbox";
 export {
-  DaemonSandbox,
-  type DaemonSandboxOptions,
-  type FsEntry,
-  type ReadResult,
-} from "./daemon";
-export {
-  LazySandbox,
-  type LazySandboxOptions,
-  type LazySandboxConnection,
-} from "./lazy-sandbox";
-
-export {
-  MachinesApiClient,
-  ConcurrencyLimiter,
-  FlyApiError,
-  type FlyClient,
-  type FlyClientOptions,
-  type FlyMethod,
-  type FlyRequestOptions,
-  type FlyApp,
-  type FlyMachine,
-  type FlyVolume,
-  type FlyLease,
-  type FlyWaitResult,
-  type FlyIpAssignments,
-  type MachineConfig,
-} from "./fly-client";
-
-export {
-  createWorkspace,
-  createWorkspaceApp,
-  ensureRunning,
-  archive,
-  reconcile,
-  workspaceAppName,
-  workspaceMachineConfig,
-  workspaceBackupKey,
-  daemonBaseUrlFor,
-  type WorkspaceMachineConfigInput,
-  type CreateWorkspaceAppInput,
-  type CreateWorkspaceAppResult,
-  type CreateWorkspaceInput,
-  type CreateWorkspaceResult,
-  type EnsureRunningInput,
-  type EnsureRunningResult,
-  type ArchiveInput,
-  type ArchiveResult,
-  type ReconcileResult,
-} from "./fly-manager";
-
-export {
-  daemonHealth,
-  daemonInit,
-  daemonSync,
-  waitForDaemonHealth,
-  DaemonApiError,
-  type DaemonHealth,
-  type DaemonInitInput,
-  type DaemonSyncInput,
-  type DaemonSyncResult,
-} from "./daemon-client";
+  LazyBoxSandbox,
+  type LazyBoxSandboxOptions,
+} from "./lazy-box";
 
 export interface Sandbox {
   readonly id: string;

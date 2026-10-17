@@ -1,5 +1,5 @@
 import { getCurrentUser, unauthorized } from "@/lib/auth/server";
-import { getRun } from "@/lib/store";
+import { getRun, getRunByWorkspaceId } from "@/lib/store";
 import {
   captureWorkspaceSnapshot,
   compareAgainstBaseline,
@@ -17,8 +17,8 @@ function message(error: unknown): string {
  * `GET /api/workspaces/:id/diff` — unified diff between the run-start baseline
  * snapshot and the workspace's current contents (arcetecture.md §6). The
  * baseline is captured lazily for older runs that predate snapshotting. Reads
- * through the run's `WorkspaceSource` so it works for local and remote
- * (Fly daemon) sandboxes alike.
+ * through the run's `WorkspaceSource` so it works for local and box
+ * sandboxes alike.
  */
 export async function GET(
   _request: Request,
@@ -27,7 +27,7 @@ export async function GET(
   if (!(await getCurrentUser())) return unauthorized();
 
   const { id } = await params;
-  const run = getRun(id);
+  const run = getRun(id) ?? getRunByWorkspaceId(id);
   if (!run) {
     return Response.json({ error: "not_found", id }, { status: 404 });
   }

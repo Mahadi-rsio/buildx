@@ -3,7 +3,7 @@ import { join, resolve } from "node:path";
 /**
  * Root under which every run gets its own scratch workspace. Defaults to
  * `<cwd>/.workspaces` (gitignored; `cwd` is `apps/web` under Next) and can be
- * redirected with `BUILDX_WORKSPACE_DIR` for CI or Fly Machines images.
+ * redirected with `BUILDX_WORKSPACE_DIR` for CI.
  */
 export function workspaceRoot(): string {
   return resolve(

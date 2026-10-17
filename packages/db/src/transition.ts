@@ -6,7 +6,7 @@ import type { Db } from "./client";
  * Atomic status transition: a single conditional UPDATE that only succeeds when
  * the row is currently in `from`. Returns whether the row moved. This is the
  * only way status changes happen — two concurrent callers can never both win,
- * which is what makes `ensureRunning`/`archive` safe (plan.md phases 4 & 7).
+ * which is what makes workspace lifecycle managers safe.
  */
 export async function transition(
   db: Db,

@@ -37,8 +37,6 @@ export interface StoredRun {
   /** Run-start snapshot for the workspace diff (arcetecture §6). Capture is
    *  lazy: the first `GET /api/workspaces/:id/diff` fills this when missing. */
   baseline?: Baseline;
-  /** Internal workspace id from `workspaces` (one per user). */
-  remoteWorkspaceId?: string;
   /** Workspace lifecycle + quota state surfaced by Phase 10 UI. */
   workspace: WorkspaceRuntime;
 }
@@ -103,7 +101,7 @@ export function getRun(id: string): StoredRun | undefined {
 }
 
 export function getRunByWorkspaceId(workspaceId: string): StoredRun | undefined {
-  return listRuns().find((run) => run.workspaceId === workspaceId);
+  return listRuns().find((run) => run.id === workspaceId);
 }
 
 export function listRuns(): StoredRun[] {

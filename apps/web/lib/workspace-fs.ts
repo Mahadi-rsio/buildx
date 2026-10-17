@@ -15,7 +15,7 @@ export type Baseline = Map<string, string>;
 
 /**
  * Capture the current workspace contents as a baseline. Reads through a
- * `WorkspaceSource` so local and remote (Fly daemon) runs behave the same.
+ * `WorkspaceSource` so local and box runs behave the same.
  */
 export async function captureWorkspaceSnapshot(
   source: WorkspaceSource,

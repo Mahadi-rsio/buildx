@@ -19,10 +19,10 @@ export function createS3Client(config: StorageEnv): S3Client {
 }
 
 /**
- * Create an S3 client used only to *sign* presigned URLs for sandboxes (Fly
- * Machines). The signing endpoint (`S3_PUBLIC_ENDPOINT`) must be reachable from
- * those machines; the credential material never leaves the web backend — the
- * URL is time-limited and signed by the Fly-side instance's own key only.
+ * Create an S3 client used only to *sign* presigned URLs for sandboxes. The
+ * signing endpoint (`S3_PUBLIC_ENDPOINT`) must be reachable from those
+ * sandboxes; the credential material never leaves the web backend — the URL is
+ * time-limited and signed by the sandbox-side instance's own key only.
  */
 export function createS3SigningClient(config: StorageEnv): S3Client {
   return new S3Client({
