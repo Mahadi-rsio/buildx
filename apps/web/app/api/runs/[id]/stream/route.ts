@@ -35,10 +35,10 @@ function sleep(ms: number): Promise<void> {
 function waitForWake(run: Awaited<ReturnType<typeof getRun>>): Promise<void> {
   return new Promise((resolve) => {
     const onEvent = (): void => {
-      run?.subscribers.delete(onEvent);
+      run?.runtime.subscribers.delete(onEvent);
       resolve();
     };
-    run?.subscribers.add(onEvent);
+    run?.runtime.subscribers.add(onEvent);
     void sleep(POLL_MS).then(onEvent);
   });
 }

@@ -33,12 +33,12 @@ export async function GET(
 
   try {
     const source = sourceForRun(run);
-    if (!run.baseline) {
-      run.baseline = await captureWorkspaceSnapshot(source);
+    if (!run.runtime.baseline) {
+      run.runtime.baseline = await captureWorkspaceSnapshot(source);
     }
     const response: DiffResponse = await compareAgainstBaseline(
       source,
-      run.baseline,
+      run.runtime.baseline,
     );
     return Response.json(response);
   } catch (error) {

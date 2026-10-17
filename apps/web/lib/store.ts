@@ -22,9 +22,38 @@ import type {
   WorkspaceUsage,
 } from "./types";
 import type { Baseline } from "./workspace-fs";
+import type { Db } from "@buildx/db";
 
 /** Trigger lazy baseline capture on first diff request (arcetecture §6). */
 export const captureBaseline = Symbol.for("__buildx.captureBaseline");
+
+/** Thrown when a write targets a run this process no longer owns (terminal or
+ *  lost its lease). Callers must stop emitting and defer to the run's owner. */
+export class StaleRunError extends Error {
+  constructor(runId: string, action: string) {
+    super(`stale run ${runId}: ${action}`);
+    this.name = "StaleRunError";
+  }
+}
+
+/**
+ * Process-local overlay for a run — state that only exists inside this VM and
+ * must never be treated as durable or shared across instances.
+ */
+export interface RunRuntime {
+  /** Live SSE subscribers for the next event (see `subscribe`). */
+  subscribers: Set<(event: RunEvent) => void>;
+  /** Aborted by `/stop`, lease loss, or worker shutdown to stop the loop. */
+  controller: AbortController;
+  /** Set once this process's lease was reclaimed elsewhere (or expired and
+   *  another worker took the run). Every persistent write is fenced by this. */
+  lostOwnership: boolean;
+  /** Workspace lifecycle + quota state surfaced by the UI (transient view). */
+  workspace: WorkspaceRuntime;
+  /** Run-start snapshot for the workspace diff (arcetecture §6). Capture is
+   *  lazy: the first `GET /api/workspaces/:id/diff` fills this when missing. */
+  baseline?: Baseline;
+}
 
 export interface StoredRun {
   id: string;
@@ -42,20 +71,17 @@ export interface StoredRun {
   stats?: RunStats;
   /** Lease id owning this run while it is being executed (set by the worker). */
   leaseId?: string;
+  /** Durable view of the claim deadline; refreshed from Postgres, never a
+   *  source of truth on its own. */
+  leaseExpiresAt?: number;
   /** Append-only event log (arcetecture.md §4), cached per process. */
   events: RunEvent[];
-  /** Live SSE subscribers waiting for the next event (process-local). */
-  subscribers: Set<(event: RunEvent) => void>;
-  /** Aborted by `POST /api/runs/:id/stop` (process-local). */
-  controller: AbortController;
-  /** Run-start snapshot for the workspace diff (arcetecture §6). Capture is
-   *  lazy: the first `GET /api/workspaces/:id/diff` fills this when missing. */
-  baseline?: Baseline;
-  /** Workspace lifecycle + quota state surfaced by Phase 10 UI (process-local). */
-  workspace: WorkspaceRuntime;
+  /** Process-local runtime overlay (subscribers, abort, lost-ownership fence,
+   *  workspace view). Never reconstructed from Postgres. */
+  runtime: RunRuntime;
 }
 
-type RunRow = typeof runsTable.$inferSelect;
+export type RunRow = typeof runsTable.$inferSelect;
 
 /**
  * DB-backed run/event store. Durable fields live in Postgres (`runs` +
@@ -63,6 +89,7 @@ type RunRow = typeof runsTable.$inferSelect;
  * persisted — SSE subscriber sets, AbortControllers, the lazy diff baseline,
  * and the transient workspace-quota view. A run is hydrated from Postgres on
  * first touch after a process restart, so runs survive dev-server reloads.
+ * Never conflate `StoredRun.runtime` (this VM) with durable engine state.
  */
 const globalForStore = globalThis as unknown as {
   __BUILDX_RUNS__?: Map<string, StoredRun>;
@@ -75,19 +102,16 @@ function cachedRuns(): Map<string, StoredRun> {
   return globalForStore.__BUILDX_RUNS__;
 }
 
-function freshRuntime(): {
-  subscribers: StoredRun["subscribers"];
-  controller: StoredRun["controller"];
-  workspace: WorkspaceRuntime;
-} {
+function freshRuntime(): RunRuntime {
   return {
     subscribers: new Set(),
     controller: new AbortController(),
+    lostOwnership: false,
     workspace: { status: "idle" },
   };
 }
 
-/** Copy durable row fields onto a run object. */
+/** Copy durable row fields onto a run object. Never touches `run.runtime`. */
 function syncFromRow(run: StoredRun, row: RunRow): void {
   run.userId = row.userId;
   run.workspaceName = row.workspaceName ?? "workspace";
@@ -96,6 +120,7 @@ function syncFromRow(run: StoredRun, row: RunRow): void {
   run.model = row.model ?? DEFAULT_MODEL;
   run.maxSteps = row.maxSteps;
   run.leaseId = row.leaseId ?? undefined;
+  run.leaseExpiresAt = row.leaseExpiresAt?.getTime() ?? undefined;
   run.updatedAt = row.updatedAt.getTime();
   run.error = row.error ?? undefined;
   const hasUsage =
@@ -136,10 +161,9 @@ async function hydrateRun(row: RunRow): Promise<StoredRun> {
     updatedAt: row.updatedAt.getTime(),
     error: row.error ?? undefined,
     leaseId: row.leaseId ?? undefined,
+    leaseExpiresAt: row.leaseExpiresAt?.getTime() ?? undefined,
     events: [],
-    subscribers: runtime.subscribers,
-    controller: runtime.controller,
-    workspace: runtime.workspace,
+    runtime: runtime,
   };
   const stats =
     row.stepCount > 0 || row.inputTokens > 0 || row.outputTokens > 0
@@ -198,10 +222,13 @@ function enqueueNow(): { createdAt: Date; updatedAt: Date } {
  * execution to the lease-based job worker (arcetecture.md §9); the request
  * does not drive the run anymore. Duplicate submissions with the same
  * `idempotencyKey` (or a racing retry hitting the unique index) return the
- * already-queued run.
+ * already-queued run with `created: false`. `db` may be injected for tests.
  */
-export async function createRun(args: CreateRunArgs): Promise<StoredRun> {
-  const db = getDb();
+export async function createRun(
+  args: CreateRunArgs,
+  deps?: { db?: Db },
+): Promise<{ run: StoredRun; created: boolean }> {
+  const db = deps?.db ?? getDb();
 
   if (args.idempotencyKey) {
     const [existing] = await db
@@ -213,45 +240,55 @@ export async function createRun(args: CreateRunArgs): Promise<StoredRun> {
           eq(runsTable.idempotencyKey, args.idempotencyKey),
         ),
       );
-    if (existing) return hydrateRun(existing);
+    if (existing) {
+      const run = await hydrateRun(existing);
+      return { run, created: false };
+    }
   }
 
   const id = randomUUID();
   const timestamps = enqueueNow();
-  const row = await db
-    .insert(runsTable)
-    .values({
-      id,
-      userId: args.userId,
-      model: args.model,
-      status: "queued",
-      task: args.task,
-      workspaceName: args.workspaceName,
-      maxSteps: args.maxSteps,
-      idempotencyKey: args.idempotencyKey ?? null,
-      createdAt: timestamps.createdAt,
-      updatedAt: timestamps.updatedAt,
-    })
-    .returning()
-    .then((rows) => rows[0])
-    .catch(async (error: unknown) => {
-      const unique =
-        (error as { code?: string })?.code === "23505" &&
-        (error as { constraint?: string })?.constraint !==
-          "runs_one_active_per_user_idx";
-      if (!unique) throw error;
-      const [existing] = await db
-        .select()
-        .from(runsTable)
-        .where(
-          and(
-            eq(runsTable.userId, args.userId),
-            eq(runsTable.idempotencyKey, args.idempotencyKey ?? ""),
-          ),
-        );
-      if (!existing) throw error;
-      return existing;
-    });
+  let row: RunRow;
+  try {
+    const rows = await db
+      .insert(runsTable)
+      .values({
+        id,
+        userId: args.userId,
+        model: args.model,
+        status: "queued",
+        task: args.task,
+        workspaceName: args.workspaceName,
+        maxSteps: args.maxSteps,
+        idempotencyKey: args.idempotencyKey ?? null,
+        createdAt: timestamps.createdAt,
+        updatedAt: timestamps.updatedAt,
+      })
+      .returning();
+    row = rows[0];
+  } catch (error: unknown) {
+    const err = (error as { cause?: unknown }).cause;
+    const target = (err && typeof err === "object" ? err : error) as {
+      code?: string;
+      constraint?: string;
+    };
+    const unique =
+      target.code === "23505" &&
+      target.constraint !== "runs_one_active_per_user_idx";
+    if (!unique) throw error;
+    const [existing] = await db
+      .select()
+      .from(runsTable)
+      .where(
+        and(
+          eq(runsTable.userId, args.userId),
+          eq(runsTable.idempotencyKey, args.idempotencyKey ?? ""),
+        ),
+      );
+    if (!existing) throw error;
+    const run = await hydrateRun(existing);
+    return { run, created: false };
+  }
 
   const runtime = freshRuntime();
   runtime.workspace.usage = args.usage;
@@ -267,12 +304,10 @@ export async function createRun(args: CreateRunArgs): Promise<StoredRun> {
     createdAt: row.createdAt.getTime() ?? Date.now(),
     updatedAt: row.updatedAt.getTime() ?? Date.now(),
     events: [],
-    subscribers: runtime.subscribers,
-    controller: runtime.controller,
-    workspace: runtime.workspace,
+    runtime,
   };
   cachedRuns().set(run.id, run);
-  return run;
+  return { run, created: true };
 }
 
 /** Resolve a run by id, hydrating from Postgres on a cache miss. */
@@ -295,6 +330,84 @@ export async function getRunRow(id: string): Promise<RunRow | undefined> {
     .where(eq(runsTable.id, id));
   if (!row) return undefined;
   return row;
+}
+
+/**
+ * Bind a freshly claimed run row to its process-local record. The claim (not a
+ * cached snapshot) is authoritative: it overwrites durable fields and hands the
+ * object a fresh AbortController so a run recovered after a lease loss starts
+ * clean instead of inheriting an aborted signal. Returns the owned run.
+ */
+export async function bindClaim(row: RunRow): Promise<StoredRun> {
+  const existing = cachedRuns().get(row.id);
+  const run = existing ?? (await hydrateRun(row));
+  syncFromRow(run, row);
+  run.runtime.lostOwnership = false;
+  // A new lease owns the run now; whatever this VM did on a previous lease of
+  // this same run id is irrelevant. SSE subscribers are part of the runtime and
+  // survive (the request path keeps watching the same run object).
+  run.runtime.controller = new AbortController();
+  return run;
+}
+
+/**
+ * Re-read a cached run's durable fields from Postgres (the source of truth).
+ * Never touches `run.runtime`, so a lease handoff in another instance is
+ * reflected here without breaking this VM's live SSE subscribers.
+ */
+export async function refreshRun(id: string): Promise<StoredRun | undefined> {
+  const row = await getRunRow(id);
+  if (!row) return undefined;
+  const existing = cachedRuns().get(id);
+  if (existing) {
+    syncFromRow(existing, row);
+    return existing;
+  }
+  return hydrateRun(row);
+}
+
+/**
+ * Fence this process's run after a lease loss: future persistent writes throw
+ * `StaleRunError` and the in-flight agent loop is aborted. Returns the run.
+ */
+export function markLostOwnership(runId: string): StoredRun | undefined {
+  const run = cachedRuns().get(runId);
+  if (!run) return undefined;
+  if (!run.runtime.lostOwnership) {
+    run.runtime.lostOwnership = true;
+    run.runtime.controller.abort();
+  }
+  return run;
+}
+
+/** The run this user originally created with `idempotencyKey`, if any. */
+export async function getRunForIdempotencyKey(
+  userId: string,
+  idempotencyKey: string,
+): Promise<StoredRun | undefined> {
+  const [row] = await getDb()
+    .select()
+    .from(runsTable)
+    .where(
+      and(
+        eq(runsTable.userId, userId),
+        eq(runsTable.idempotencyKey, idempotencyKey),
+      ),
+    );
+  return row ? hydrateRun(row) : undefined;
+}
+
+/**
+ * Roll back a freshly queued run when its creating request must be rejected
+ * (e.g. the final daily quota slot went to a racing request). Only removes a
+ * row still sitting in the queue; once claimed, the row stands on its own.
+ */
+export async function removeQueuedRun(runId: string): Promise<boolean> {
+  const rows = await getDb()
+    .delete(runsTable)
+    .where(and(eq(runsTable.id, runId), eq(runsTable.status, "queued")));
+  cachedRuns().delete(runId);
+  return (rows.rowCount ?? 0) > 0;
 }
 
 /** Resolve a run by its workspace id (equal to the run id today). */
@@ -331,11 +444,16 @@ function enqueueAppend<T>(
 ): Promise<T> {
   const previous = appendTails.get(runId) ?? Promise.resolve();
   const next = previous.then(task);
-  next.catch(() => {
-    // A failed append must not reject/pause later appends; each caller still
-    // observes its own error through the returned promise.
-  });
-  appendTails.set(runId, next);
+  // The caller observes the real outcome through `next`. The *tail* stored for
+  // the next caller is a settled copy, so one failed append (e.g. a lease that
+  // just flipped) must never poison the chain and swallow later events.
+  appendTails.set(
+    runId,
+    next.then(
+      () => undefined,
+      () => undefined,
+    ),
+  );
   return next;
 }
 
@@ -353,19 +471,30 @@ export async function flushAppends(...runIds: string[]): Promise<void> {
  * Append an event: persist it to the `events` row, assign its DB-assigned id,
  * remember it on the run, and fan it out to live SSE subscribers. Appends to
  * one run are serialized; concurrent callers see run-consistent ordering.
+ * Rejects with `StaleRunError` when this process no longer owns the run (it
+ * went terminal or its lease was reclaimed), so a stale worker can never write
+ * events out of order onto a run that already moved on.
  */
 export function appendEvent(
   run: StoredRun,
   input: RunEventInput,
+  deps?: { db?: Db },
 ): Promise<RunEvent> {
-  return enqueueAppend(run.id, () => doAppendEvent(run, input));
+  return enqueueAppend(run.id, () => doAppendEvent(run, input, deps?.db));
 }
 
 async function doAppendEvent(
   run: StoredRun,
   input: RunEventInput,
+  dbOverride?: Db,
 ): Promise<RunEvent> {
-  const db = getDb();
+  if (run.runtime.lostOwnership) {
+    throw new StaleRunError(run.id, "appendEvent after lease loss");
+  }
+  if (isTerminalStatus(run.status)) {
+    throw new StaleRunError(run.id, "appendEvent after terminal status");
+  }
+  const db = dbOverride ?? getDb();
   const ts = new Date(input.ts);
   const [row] = await db
     .insert(eventsTable)
@@ -386,19 +515,21 @@ async function doAppendEvent(
   run.events.push(event);
   run.updatedAt = event.ts;
 
-  for (const subscriber of [...run.subscribers]) {
+  for (const subscriber of [...run.runtime.subscribers]) {
     try {
       subscriber(event);
     } catch {
-      run.subscribers.delete(subscriber);
+      run.runtime.subscribers.delete(subscriber);
     }
   }
   return event;
 }
 
 /** Persist step/usage counters surfaced on the run summary. Skipped when we no
- *  longer own the run's lease (it was reclaimed by another worker). */
+ *  longer own the run (lease lost or already terminal), so a stale owner's
+ *  counters never overwrite the reclaiming worker's values. */
 export async function persistStats(run: StoredRun): Promise<void> {
+  if (run.runtime.lostOwnership || isTerminalStatus(run.status)) return;
   const usage = run.stats?.usage;
   await getDb()
     .update(runsTable)
@@ -432,6 +563,8 @@ export async function finishRun(
   status: TerminalRunStatus,
   error?: string,
 ): Promise<boolean> {
+  // A fenced process must not act (or appear to act) as the run's owner.
+  if (run.runtime.lostOwnership) return false;
   const applied = await finalizeRun(getDb(), {
     runId: run.id,
     leaseId: run.leaseId ?? "",
@@ -458,8 +591,8 @@ export async function cancelRun(
   reason?: string,
 ): Promise<boolean> {
   const newly = await requestCancellation(getDb(), { runId: run.id, reason });
-  if (newly && !run.controller.signal.aborted) {
-    run.controller.abort();
+  if (newly && !run.runtime.controller.signal.aborted) {
+    run.runtime.controller.abort();
   }
   return newly;
 }
@@ -480,7 +613,7 @@ export function toRunSummary(run: StoredRun): RunSummary {
     updatedAt: run.updatedAt,
     error: run.error,
     stats: run.stats,
-    workspace: run.workspace,
+    workspace: run.runtime.workspace,
     eventCount: run.events.length,
   };
 }

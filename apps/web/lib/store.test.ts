@@ -7,8 +7,12 @@ import {
   claimNextQueuedRun,
   events as eventsTable,
   getDb,
+  heartbeatRun,
   inArray,
   isRunCancelled,
+  readRunControl,
+  recoverTimedOutRuns,
+  releaseRunLease,
   runs as runsTable,
   sql,
   user,
@@ -16,6 +20,7 @@ import {
 import { loadRootEnv } from "@buildx/shared/node";
 import {
   appendEvent,
+  bindClaim,
   cancelRun,
   createRun,
   finishRun,
@@ -23,7 +28,10 @@ import {
   getRun,
   listEventsAfter,
   listRunsForUser,
+  markLostOwnership,
   persistStats,
+  StaleRunError,
+  type RunRow,
 } from "./store";
 
 loadRootEnv();
@@ -55,15 +63,60 @@ async function newUser(): Promise<string> {
   return id;
 }
 
+/** Claims this specific run directly (the global queue can pick another user's
+ *  leftover run in a shared database, so lease-guard tests target their own). */
+async function claimRunForTest(runId: string, leaseId: string): Promise<RunRow> {
+  const [row] = await db!
+    .update(runsTable)
+    .set({
+      status: "running",
+      leaseId,
+      startedAt: new Date(),
+    })
+    .where(sql`${runsTable.id} = ${runId}`)
+    .returning();
+  assert.ok(row, "claim target must exist");
+  return row;
+}
+
 after(async () => {
   if (skipReason || createdUsers.length === 0) return;
   await db!.delete(user).where(inArray(user.id, createdUsers));
 });
 
+/** A `Db` that rejects exactly the next `insert().values().returning()` query,
+ *  then behaves normally. The fake builder keeps the drizzle chain shape so the
+ *  store's `.values().returning()` call sites are exercised. */
+function failingInsertOnce(database: Db): Db {
+  let failed = false;
+  return new Proxy(database, {
+    get(target, prop) {
+      if (prop === "insert") {
+        return () => ({
+          values: () => ({
+            returning: () => {
+              if (!failed) {
+                failed = true;
+                return Promise.reject(
+                  new Error("injected transient insert failure"),
+                );
+              }
+              throw new Error("the failing proxy was used more than once");
+            },
+          }),
+        });
+      }
+      const value = (target as unknown as Record<string, unknown>)[String(prop)];
+      if (typeof value === "function") return value.bind(target);
+      return value;
+    },
+  });
+}
+
 test("run, events and stats round-trip through Postgres", { skip: skipReason }, async () => {
   const uid = await newUser();
 
-  const run = await createRun({
+  const { run } = await createRun({
     userId: uid,
     workspaceName: "loop",
     task: "make a file",
@@ -75,7 +128,8 @@ test("run, events and stats round-trip through Postgres", { skip: skipReason }, 
   const claimed = await claimNextQueuedRun(db!, { leaseId: "lease-1" });
   assert.equal(claimed?.id, run.id, "enqueue-only row is claimable");
   assert.equal(claimed?.status, "running");
-  run.leaseId = claimed!.leaseId ?? "lease-1";
+  await bindClaim(claimed!);
+  assert.equal(run.leaseId, "lease-1");
 
   const t1 = Date.now();
   const first = await appendEvent(run, {
@@ -134,6 +188,7 @@ test("idempotencyKey replays the original run", { skip: skipReason }, async () =
     maxSteps: 5,
     idempotencyKey: "post-run-1",
   });
+  assert.equal(first.created, true);
   const second = await createRun({
     userId: uid,
     workspaceName: "idem",
@@ -142,7 +197,8 @@ test("idempotencyKey replays the original run", { skip: skipReason }, async () =
     maxSteps: 5,
     idempotencyKey: "post-run-1",
   });
-  assert.equal(second.id, first.id, "same key returns the original run");
+  assert.equal(second.created, false, "a replay did not create a second row");
+  assert.equal(second.run.id, first.run.id, "same key returns the original run");
 
   const other = await createRun({
     userId: uid,
@@ -151,7 +207,7 @@ test("idempotencyKey replays the original run", { skip: skipReason }, async () =
     model: "gpt-4o-mini",
     maxSteps: 5,
   });
-  assert.notEqual(other.id, first.id, "no key / different key queues a new run");
+  assert.notEqual(other.run.id, first.run.id, "no key / different key queues a new run");
 
   const dbRuns = await db!
     .select()
@@ -162,7 +218,7 @@ test("idempotencyKey replays the original run", { skip: skipReason }, async () =
 
 test("cancelRun persists the flag and aborts the local controller", { skip: skipReason }, async () => {
   const uid = await newUser();
-  const run = await createRun({
+  const { run } = await createRun({
     userId: uid,
     workspaceName: "stop",
     task: "go until stopped",
@@ -171,7 +227,7 @@ test("cancelRun persists the flag and aborts the local controller", { skip: skip
   });
 
   assert.equal(await cancelRun(run, "user requested"), true);
-  assert.equal(run.controller.signal.aborted, true);
+  assert.equal(run.runtime.controller.signal.aborted, true);
   const state = await isRunCancelled(db!, run.id);
   assert.equal(state.cancelled, true);
   assert.equal(state.reason, "user requested");
@@ -180,9 +236,40 @@ test("cancelRun persists the flag and aborts the local controller", { skip: skip
   assert.equal(await cancelRun(run), false);
 });
 
+test("cross-instance cancellation is observable via readRunControl", { skip: skipReason }, async () => {
+  const uid = await newUser();
+  const { run } = await createRun({
+    userId: uid,
+    workspaceName: "stop-remote",
+    task: "go until stopped",
+    model: "gpt-4o-mini",
+    maxSteps: 5,
+  });
+  const claimed = await claimRunForTest(run.id, "lease-stop");
+  await bindClaim(claimed);
+
+  // Another instance persists the stop without touching this process.
+  await db!.execute(sql`
+    UPDATE runs SET cancelled_at = now(), cancel_reason = 'stopped by the user'
+    WHERE id = ${run.id}
+  `);
+
+  const control = await readRunControl(db!, {
+    runId: run.id,
+    leaseId: "lease-stop",
+  });
+  assert.equal(control.cancelled, true);
+  assert.equal(control.reason, "stopped by the user");
+  assert.equal(control.ownsLease, true, "we still own the lease, we just stop");
+
+  // The worker answers the persisted flag; completed is refused on a cancelled run.
+  assert.equal(await finishRun(run, "completed"), false);
+  assert.equal(await finishRun(run, "cancelled", "stopped by the user"), true);
+});
+
 test("listEventsAfter returns only newer events plus the row status", { skip: skipReason }, async () => {
   const uid = await newUser();
-  const run = await createRun({
+  const { run } = await createRun({
     userId: uid,
     workspaceName: "replay",
     task: "replay me",
@@ -221,7 +308,7 @@ test("listRunsForUser excludes other users' runs", { skip: skipReason }, async (
   const uid = await newUser();
   const other = await newUser();
 
-  const run = await createRun({
+  const { run } = await createRun({
     userId: uid,
     workspaceName: "mine",
     task: "mine",
@@ -239,4 +326,168 @@ test("listRunsForUser excludes other users' runs", { skip: skipReason }, async (
   const mine = await listRunsForUser(uid);
   assert.ok(mine.some((r) => r.id === run.id));
   assert.ok(mine.every((r) => r.userId === uid));
+});
+
+test("bindClaim propagates the claim so the worker never writes under a stale lease", { skip: skipReason }, async () => {
+  const uid = await newUser();
+  const { run } = await createRun({
+    userId: uid,
+    workspaceName: "bind",
+    task: "bind me",
+    model: "gpt-4o-mini",
+    maxSteps: 5,
+  });
+
+  // The cached object was hydrated as `queued`. Claim, then bind: the SAME
+  // object must reflect the authoritative claim before the worker writes.
+  const claimed = await claimRunForTest(run.id, "lease-propagate");
+  assert.equal(claimed.id, run.id);
+
+  const bound = await bindClaim(claimed);
+  assert.equal(bound.id, run.id, "bind returns the process-local record");
+  assert.equal(bound.status, "running", "claim status reaches the cached object");
+  assert.equal(bound.leaseId, "lease-propagate");
+  assert.equal(bound.runtime.lostOwnership, false);
+
+  const event = await appendEvent(bound, {
+    type: "status",
+    data: { status: "running" },
+    ts: Date.now(),
+  });
+  assert.ok(event.id > 0, "a bound worker can persist events");
+  assert.equal(await finishRun(bound, "completed"), true);
+  assert.equal(bound.leaseId, undefined, "finalize clears the local lease view");
+});
+
+test("appends and finalizes after a terminal transition are rejected", { skip: skipReason }, async () => {
+  const uid = await newUser();
+  const { run } = await createRun({
+    userId: uid,
+    workspaceName: "stale",
+    task: "stale writes",
+    model: "gpt-4o-mini",
+    maxSteps: 5,
+  });
+  const claimed = await claimRunForTest(run.id, "lease-term");
+  await bindClaim(claimed);
+  assert.equal(await finishRun(run, "completed"), true);
+
+  await assert.rejects(
+    appendEvent(run, { type: "text", data: { text: "late" }, ts: Date.now() }),
+    StaleRunError,
+    "a stale worker cannot append onto a completed run",
+  );
+  assert.equal(await finishRun(run, "failed"), false, "terminal is immutable");
+});
+
+test("lease loss fences the old owner and preserves the new owner's write access", { skip: skipReason }, async () => {
+  const uid = await newUser();
+  const { run } = await createRun({
+    userId: uid,
+    workspaceName: "fence",
+    task: "fence me",
+    model: "gpt-4o-mini",
+    maxSteps: 5,
+  });
+
+  // Worker A owns the run.
+  const claimA = await claimRunForTest(run.id, "lease-A");
+  assert.equal(claimA.id, run.id);
+  const workerA = await bindClaim(claimA);
+  assert.equal(
+    (await readRunControl(db!, { runId: run.id, leaseId: "lease-A" })).ownsLease,
+    true,
+  );
+
+  // A's lease lapses; recovery requeues the run and worker B reclaims it.
+  await db!
+    .update(runsTable)
+    .set({ leaseExpiresAt: sql`now() - interval '1 second'` })
+    .where(sql`${runsTable.id} = ${run.id}`);
+  await recoverTimedOutRuns(db!);
+  const claimB = await claimRunForTest(run.id, "lease-B");
+  assert.equal(claimB.id, run.id, "recovered run is claimable again");
+
+  // A's heartbeat fails and A fences itself (simulating A's own process).
+  assert.equal(
+    await heartbeatRun(db!, { runId: run.id, leaseId: "lease-A" }),
+    false,
+    "stale lease no longer heartbeats",
+  );
+  assert.equal(await releaseRunLease(db!, { runId: run.id, leaseId: "lease-A" }), false);
+  markLostOwnership(run.id);
+  assert.equal(workerA.runtime.lostOwnership, true);
+  assert.equal(workerA.runtime.controller.signal.aborted, true, "fence stops the loop");
+
+  await assert.rejects(
+    appendEvent(workerA, { type: "text", data: { text: "late" }, ts: Date.now() }),
+    StaleRunError,
+    "a fenced process cannot keep emitting events",
+  );
+  await persistStats(workerA); // a fenced stats write is a silent no-op (no throw, no clobber)
+  assert.equal(await finishRun(workerA, "failed"), false, "fenced owner cannot finalize");
+
+  // Worker B binds the same process-local record, gets a clean signal, and runs.
+  const workerB = await bindClaim(claimB!);
+  assert.equal(workerB.runtime.lostOwnership, false);
+  assert.equal(workerB.runtime.controller.signal.aborted, false);
+
+  const event = await appendEvent(workerB, {
+    type: "text",
+    data: { text: "fresh start" },
+    ts: Date.now(),
+  });
+  assert.ok(event.id > 0);
+  assert.equal(await finishRun(workerB, "completed"), true);
+
+  const [row] = await db!
+    .select({ status: runsTable.status, error: runsTable.error })
+    .from(runsTable)
+    .where(sql`${runsTable.id} = ${run.id}`);
+  assert.equal(row.status, "completed");
+});
+
+test("a failed append does not poison the chain and order is preserved", { skip: skipReason }, async () => {
+  const uid = await newUser();
+  const { run } = await createRun({
+    userId: uid,
+    workspaceName: "chain",
+    task: "ordered events",
+    model: "gpt-4o-mini",
+    maxSteps: 5,
+  });
+  const claimed = await claimRunForTest(run.id, "lease-chain");
+  await bindClaim(claimed);
+
+  // The FIRST append hits an injected transient insert failure...
+  await assert.rejects(
+    appendEvent(run, { type: "text", data: { text: "boom" }, ts: Date.now() }, { db: failingInsertOnce(db!) }),
+    /injected transient insert failure/,
+  );
+  // ...and the SECOND append must still land (the tail recovers, never poisons).
+  const ok = await appendEvent(run, { type: "text", data: { text: "after" }, ts: Date.now() });
+  assert.ok(ok.id > 0);
+  await flushAppends(run.id);
+
+  const snapshot = await listEventsAfter(run.id, 0);
+  assert.deepEqual(
+    snapshot.events.filter((e) => e.type === "text").map((e) => e.data.text),
+    ["after"],
+    "failed event was surfaced (not persisted), following events survived",
+  );
+
+  // Concurrent appends persist in caller order.
+  const p1 = appendEvent(run, { type: "text", data: { text: "1" }, ts: Date.now() });
+  const p2 = appendEvent(run, { type: "text", data: { text: "2" }, ts: Date.now() + 1 });
+  const p3 = appendEvent(run, { type: "text", data: { text: "3" }, ts: Date.now() + 2 });
+  const p4 = appendEvent(run, { type: "text", data: { text: "4" }, ts: Date.now() + 3 });
+  const p5 = appendEvent(run, { type: "text", data: { text: "5" }, ts: Date.now() + 4 });
+  await Promise.all([p1, p2, p3, p4, p5]);
+
+  const ordered = await listEventsAfter(run.id, snapshot.events.at(-1)!.id);
+  assert.deepEqual(
+    ordered.events.filter((e) => e.type === "text").map((e) => e.data.text),
+    ["1", "2", "3", "4", "5"],
+  );
+  assert.equal(await finishRun(run, "completed"), true);
 });

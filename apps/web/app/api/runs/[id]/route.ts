@@ -1,6 +1,6 @@
 import { getCurrentUser, unauthorized } from "@/lib/auth/server";
 import { findOwnedRun, notFound } from "@/lib/authz";
-import { toRunDetail } from "@/lib/store";
+import { refreshRun, toRunDetail } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
@@ -13,7 +13,10 @@ export async function GET(
   if (!user) return unauthorized();
 
   const { id } = await params;
-  const run = await findOwnedRun(id, user.id);
-  if (!run) return notFound(id);
+  const owned = await findOwnedRun(id, user.id);
+  if (!owned) return notFound(id);
+  // Postgres is the source of truth for status/lease: reflect transitions that
+  // happened in another instance instead of serving a stale cached snapshot.
+  const run = (await refreshRun(id)) ?? owned;
   return Response.json(await toRunDetail(run));
 }

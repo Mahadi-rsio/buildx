@@ -1,16 +1,7 @@
 import { createRunSchema, envStatus } from "@buildx/shared";
-import {
-  DAILY_REQUEST_LIMIT,
-  MONTHLY_CPU_HOURS,
-  consumeDailyRequest,
-  dailyRequestCount,
-  dhakaDay,
-  monthlyCpuSecondsUsed,
-  nextDhakaReset,
-} from "@buildx/db";
 import { getCurrentUser, unauthorized } from "@/lib/auth/server";
-import { getDb } from "@buildx/db";
-import { createRun, listRunsForUser, toRunSummary } from "@/lib/store";
+import { listRunsForUser, toRunSummary } from "@/lib/store";
+import { enqueueRunForUser } from "@/lib/run-creation";
 
 export const dynamic = "force-dynamic";
 
@@ -26,8 +17,9 @@ export async function GET(): Promise<Response> {
  * `POST /api/runs` — enqueue a run as a `queued` row (arcetecture.md §5.2,
  * §9). Execution is driven by the durable job worker once it claims the run's
  * lease; the request returns as soon as the row is persisted. A repeat call
- * with the same `idempotencyKey` returns the original run instead of queuing
- * a second one.
+ * with the same `idempotencyKey` returns the original run instead of queuing a
+ * second one and does not consume a quota slot. A day at its hard limit is
+ * rejected with `429` before anything is queued.
  */
 export async function POST(request: Request): Promise<Response> {
   const user = await getCurrentUser();
@@ -55,10 +47,19 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   const selectedModel = parsed.data.model?.trim() || config.model;
-  const db = getDb();
-  const day = dhakaDay();
-  const consumed = await consumeDailyRequest(db, user.id, day);
-  if (consumed == null) {
+  const result = await enqueueRunForUser({
+    user: {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+    },
+    task: parsed.data.task.trim(),
+    model: selectedModel,
+    maxSteps: parsed.data.maxSteps ?? config.maxSteps,
+    idempotencyKey: parsed.data.idempotencyKey,
+  });
+
+  if (result.kind === "quota_exhausted") {
     return Response.json(
       {
         error: "daily_quota_exhausted",
@@ -69,28 +70,7 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
-  const [usedCpuSeconds, usedDaily] = await Promise.all([
-    monthlyCpuSecondsUsed(db, user.id),
-    dailyRequestCount(db, user.id, day),
-  ]);
-
-  const run = await createRun({
-    userId: user.id,
-    workspaceName: user.name?.trim() || user.email.split("@")[0] || "workspace",
-    task: parsed.data.task.trim(),
-    model: selectedModel,
-    maxSteps: parsed.data.maxSteps ?? config.maxSteps,
-    idempotencyKey: parsed.data.idempotencyKey,
-    usage: {
-      cpuHoursUsed: Number((usedCpuSeconds / 3600).toFixed(2)),
-      cpuHoursLimit: MONTHLY_CPU_HOURS,
-      dailyRequestsUsed: usedDaily,
-      dailyRequestsLimit: DAILY_REQUEST_LIMIT,
-      nextDhakaResetAt: nextDhakaReset().getTime(),
-    },
-  });
-
-  // Execution is queued, not tied to this request: the job worker (spawned by
-  // instrumentation) claims the run and drives `startRun`.
-  return Response.json(toRunSummary(run), { status: 201 });
+  // Newly queued runs are 201; idempotent replays return the original run.
+  const status = result.kind === "created" ? 201 : 200;
+  return Response.json(toRunSummary(result.run), { status });
 }

@@ -10,6 +10,7 @@ import {
   finalizeRun,
   heartbeatRun,
   isRunCancelled,
+  readRunControl,
   recoverTimedOutRuns,
   releaseRunLease,
   releaseWorkspaceLock,
@@ -153,6 +154,43 @@ test("cancel flow: request, observe, finalize as cancelled; completed refused", 
     await finalizeRun(db!, { runId, leaseId: "lease-cancel", status: "cancelled" }),
     true,
   );
+});
+
+test("readRunControl reports cancellation and lease ownership in one read", { skip: skipReason }, async () => {
+  const userId = await newUser();
+  const runId = await insertRun(userId);
+
+  // Queued (unclaimed): not ours, not cancelled.
+  assert.deepEqual(await readRunControl(db!, { runId, leaseId: "lease-me" }), {
+    cancelled: false,
+    reason: null,
+    ownsLease: false,
+  });
+
+  await claimNextQueuedRun(db!, { leaseId: "lease-me" });
+  assert.deepEqual(await readRunControl(db!, { runId, leaseId: "lease-me" }), {
+    cancelled: false,
+    reason: null,
+    ownsLease: true,
+  });
+  // A stale lease that no longer owns the run is surfaced as not-ours.
+  assert.deepEqual(await readRunControl(db!, { runId, leaseId: "lease-stale" }), {
+    cancelled: false,
+    reason: null,
+    ownsLease: false,
+  });
+
+  await requestCancellation(db!, { runId, reason: "stopped by the user" });
+  const control = await readRunControl(db!, { runId, leaseId: "lease-me" });
+  assert.equal(control.cancelled, true);
+  assert.equal(control.reason, "stopped by the user");
+  assert.equal(control.ownsLease, true);
+  // A vanished run reads as foreign and safe-to-ignore.
+  assert.deepEqual(await readRunControl(db!, { runId: randomUUID(), leaseId: "lease-gone" }), {
+    cancelled: false,
+    reason: null,
+    ownsLease: false,
+  });
 });
 
 test("recoverTimedOutRuns requeues broken leases and cancels stopped runs", { skip: skipReason }, async () => {

@@ -1,7 +1,7 @@
 import { isTerminalStatus } from "@buildx/shared";
 import { getCurrentUser, unauthorized } from "@/lib/auth/server";
 import { findOwnedRun, notFound } from "@/lib/authz";
-import { cancelRun, getRun, toRunSummary } from "@/lib/store";
+import { cancelRun, refreshRun, toRunSummary } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
@@ -21,21 +21,22 @@ export async function POST(
   if (!user) return unauthorized();
 
   const { id } = await params;
-  const run = await findOwnedRun(id, user.id);
-  if (!run) return notFound(id);
+  const owned = await findOwnedRun(id, user.id);
+  if (!owned) return notFound(id);
+
+  // Re-read durable fields from Postgres: the cached object may predate a
+  // terminal transition or lease handoff in another instance, and a stale owner
+  // must not decide the request here.
+  const run = (await refreshRun(id)) ?? owned;
 
   if (isTerminalStatus(run.status)) {
     return Response.json(toRunSummary(run));
   }
 
-  const newlyRequested = await cancelRun(
-    run,
-    "stopped by the user",
-  );
-  void newlyRequested;
+  await cancelRun(run, "stopped by the user");
 
   // Re-read so the response reflects the persisted state even when the
   // cancelling process isn't the one executing the run.
-  const refreshed = (await getRun(run.id)) ?? run;
+  const refreshed = (await refreshRun(run.id)) ?? run;
   return Response.json(toRunSummary(refreshed));
 }

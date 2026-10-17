@@ -171,6 +171,33 @@ export async function isRunCancelled(
 }
 
 /**
+ * One-round-trip control-plane read for a run: whether a cancellation is
+ * pending and whether the caller still owns the lease. The executing worker
+ * polls this between agent steps so it stops promptly on `/stop` and fences
+ * itself the moment another instance takes over its lease.
+ */
+export async function readRunControl(
+  db: Db,
+  input: { runId: string; leaseId: string },
+): Promise<{ cancelled: boolean; reason: string | null; ownsLease: boolean }> {
+  const rows = await db
+    .select({
+      cancelledAt: runs.cancelledAt,
+      cancelReason: runs.cancelReason,
+      leaseId: runs.leaseId,
+    })
+    .from(runs)
+    .where(eq(runs.id, input.runId));
+  const row = rows[0];
+  if (!row) return { cancelled: false, reason: null, ownsLease: false };
+  return {
+    cancelled: Boolean(row.cancelledAt),
+    reason: row.cancelReason ?? null,
+    ownsLease: row.leaseId === input.leaseId,
+  };
+}
+
+/**
  * Terminal transition guarded by (a) we still own the lease and (b) the run is
  * not already terminal. For `completed`/`failed` the run must NOT have been
  * cancelled; for `cancelled` it must HAVE been (the worker answers an external

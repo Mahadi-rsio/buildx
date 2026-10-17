@@ -49,6 +49,8 @@ async function closeRun(
   status: TerminalRunStatus,
   message?: string,
 ): Promise<void> {
+  // A fenced process must not write onto a run the reclaiming worker owns.
+  if (run.runtime.lostOwnership) return;
   const last = [...run.events].reverse().find((event) => event.type === "status");
   if (!last || !isTerminalStatus(last.data.status)) {
     await appendEvent(run, {
@@ -68,10 +70,10 @@ async function closeRun(
  * routine never touches the queue itself.
  */
 export async function startRun(run: StoredRun): Promise<void> {
-  // Stopped before we got scheduled — the worker handles the terminal
-  // finalize for this case; returning here leaves the lease for the worker's
-  // post-loop fallback.
-  if (isTerminalStatus(run.status) || run.controller.signal.aborted) return;
+  // Stopped (or fenced) before we got scheduled — the worker handles the
+  // terminal finalize for this case; returning here leaves the lease for the
+  // worker's post-loop fallback.
+  if (isTerminalStatus(run.status) || run.runtime.controller.signal.aborted) return;
 
   const config = envStatus();
   if (!config.hasApiKey) {
@@ -94,7 +96,7 @@ export async function startRun(run: StoredRun): Promise<void> {
     // Local mode snapshots immediately; box mode snapshots lazily once a
     // workspace has actually been restored.
     if (sandboxSettings().kind === "local") {
-      run.baseline = await captureWorkspaceSnapshot(sourceForRun(run));
+      run.runtime.baseline = await captureWorkspaceSnapshot(sourceForRun(run));
     }
 
     const result = await runTask({
@@ -102,12 +104,21 @@ export async function startRun(run: StoredRun): Promise<void> {
       sandbox,
       model: run.model,
       maxSteps: run.maxSteps,
-      abortSignal: run.controller.signal,
+      abortSignal: run.runtime.controller.signal,
       onEvent: (event) => {
-        void appendEvent(run, event);
+        // Fire-and-forget: the append chain serializes per-run writes. Errors
+        // are surfaced (a failed append must not silently drop the event
+        // stream) without letting a transient failure abort execution.
+        void appendEvent(run, event).catch((error) => {
+          console.error(
+            `[buildx-worker] event append failed (run ${run.id})`,
+            error,
+          );
+        });
       },
     });
 
+    if (run.runtime.lostOwnership) return;
     run.stats = { steps: result.steps, usage: result.usage };
     await persistStats(run);
     await closeRun(
@@ -116,9 +127,14 @@ export async function startRun(run: StoredRun): Promise<void> {
       result.status === "failed" ? "the agent run failed" : undefined,
     );
   } catch (error) {
+    // A fenced run is owned by the reclaiming worker now — nothing to write.
+    if (run.runtime.lostOwnership) {
+      console.warn(`[buildx-worker] fenced during run ${run.id}; skipping writes`);
+      return;
+    }
     const message = error instanceof Error ? error.message : String(error);
     if (/monthly CPU budget exhausted/i.test(message)) {
-      run.workspace.message = "Your work is saved.";
+      run.runtime.workspace.message = "Your work is saved.";
     }
     await appendEvent(run, {
       type: "error",
@@ -127,7 +143,7 @@ export async function startRun(run: StoredRun): Promise<void> {
     });
     await closeRun(
       run,
-      run.controller.signal.aborted ? "cancelled" : "failed",
+      run.runtime.controller.signal.aborted ? "cancelled" : "failed",
       message,
     );
   } finally {

@@ -39,13 +39,14 @@ async function ensureUser(id: string): Promise<void> {
 let seq = 0;
 async function makeRun(userId: string) {
   seq += 1;
-  return createRun({
+  const { run } = await createRun({
     userId,
     workspaceName: "ws",
     task: `task ${seq}`,
     model: "gpt-4o-mini",
     maxSteps: 5,
   });
+  return run;
 }
 
 after(async () => {

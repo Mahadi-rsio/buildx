@@ -1,44 +1,138 @@
 import { randomUUID } from "node:crypto";
 import { isTerminalStatus } from "@buildx/shared";
 import {
+  acquireWorkspaceLock,
   claimNextQueuedRun,
   getDb,
   heartbeatRun,
-  isRunCancelled,
+  readRunControl,
   recoverTimedOutRuns,
   releaseRunLease,
   releaseWorkspaceLock,
   renewWorkspaceLock,
-  acquireWorkspaceLock,
   sql,
   type Db,
 } from "@buildx/db";
 import { startRun } from "./runner";
 import {
   appendEvent,
+  bindClaim as bindClaimStore,
   finishRun,
   flushAppends,
-  getRun,
+  type StoredRun,
   type TerminalRunStatus,
 } from "./store";
+import { sandboxSettings } from "./sandbox";
 
 const LEASE_TTL_MS = 60_000;
 const LOCK_TTL_MS = 60_000;
 const HEARTBEAT_MS = 15_000;
-const CLAIM_BACKOFF_MS = 2_000;
+const WATCHDOG_MS = 1_500;
+const LOOP_FAST_MS = 100;
+const LOOP_IDLE_MS = 2_000;
+const STARTUP_BACKOFF_MS = 500;
+const MAX_BACKOFF_MS = 30_000;
+
+/** Tunables for the worker loop; tests shrink the poll intervals. */
+export interface WorkerConfig {
+  leaseTtlMs: number;
+  lockTtlMs: number;
+  heartbeatMs: number;
+  watchdogMs: number;
+  loopIdleMs: number;
+  loopFastMs: number;
+  startupBackoffMs: number;
+  maxBackoffMs: number;
+}
+
+const DEFAULT_CONFIG: WorkerConfig = {
+  leaseTtlMs: LEASE_TTL_MS,
+  lockTtlMs: LOCK_TTL_MS,
+  heartbeatMs: HEARTBEAT_MS,
+  watchdogMs: WATCHDOG_MS,
+  loopIdleMs: LOOP_IDLE_MS,
+  loopFastMs: LOOP_FAST_MS,
+  startupBackoffMs: STARTUP_BACKOFF_MS,
+  maxBackoffMs: MAX_BACKOFF_MS,
+};
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function log(error: unknown): void {
+  console.error("[buildx-worker]", error);
 }
 
 const workerState = globalThis as unknown as {
   __BUILDX_WORKER_STOPPED__?: boolean;
 };
 
-function panic(err: unknown): void {
-  // Surface startup errors (e.g. a guard that detects a misconfigured
-  // sandbox) loudly instead of silently idling.
-  console.error("[buildx-worker]", err);
+/**
+ * Identity of the workspace a run mutates, used as the workspace-lock key.
+ * Box mode gives every run of a user the same persistent workspace (one box
+ * per user), so the user's runs contend on a single lock — that is what keeps
+ * two instances from mutating the same persistent VM at once. Local mode gives
+ * each run its own scratch directory, so locks are per-run.
+ */
+export function workspaceIdentityFor(
+  run: Pick<StoredRun, "id" | "userId">,
+): string {
+  try {
+    if (sandboxSettings().kind === "box") return `user:${run.userId}`;
+  } catch {
+    // Sandbox not configured (read-only tooling): fall back to the per-run key
+    // rather than failing the lock acquisition.
+  }
+  return `run:${run.id}`;
+}
+
+/**
+ * Every operation the worker performs against the engine, injectable so tests
+ * can exercise the loop without a live Postgres or model provider.
+ */
+export interface WorkerDeps {
+  db: Db;
+  claimNextQueuedRun: typeof claimNextQueuedRun;
+  recoverTimedOutRuns: typeof recoverTimedOutRuns;
+  readRunControl: typeof readRunControl;
+  heartbeatRun: typeof heartbeatRun;
+  acquireWorkspaceLock: typeof acquireWorkspaceLock;
+  renewWorkspaceLock: typeof renewWorkspaceLock;
+  releaseRunLease: typeof releaseRunLease;
+  releaseWorkspaceLock: typeof releaseWorkspaceLock;
+  bindClaim: typeof bindClaimStore;
+  appendEvent: typeof appendEvent;
+  flushAppends: typeof flushAppends;
+  finishRun: typeof finishRun;
+  startRun: typeof startRun;
+  workspaceIdentityFor: (run: Pick<StoredRun, "id" | "userId">) => string;
+  /** Interval/backoff overrides (defaults are production-tuned). */
+  config?: Partial<WorkerConfig>;
+}
+
+function configOf(deps: WorkerDeps): WorkerConfig {
+  return deps.config ? { ...DEFAULT_CONFIG, ...deps.config } : DEFAULT_CONFIG;
+}
+
+export function defaultDeps(): WorkerDeps {
+  return {
+    db: getDb(),
+    claimNextQueuedRun,
+    recoverTimedOutRuns,
+    readRunControl,
+    heartbeatRun,
+    acquireWorkspaceLock,
+    renewWorkspaceLock,
+    releaseRunLease,
+    releaseWorkspaceLock,
+    bindClaim: bindClaimStore,
+    appendEvent,
+    flushAppends,
+    finishRun,
+    startRun,
+    workspaceIdentityFor,
+  };
 }
 
 /**
@@ -47,127 +141,283 @@ function panic(err: unknown): void {
  * a renewable lease, and clean up after it. Returns `true` when a run was
  * processed so the loop can poll again promptly.
  */
-async function processNextRun(db: Db): Promise<boolean> {
-  // Recover leases that expired under another process (or this one before the
-  // heartbeat kicked in) before claiming, so stalled runs can move on.
-  await recoverTimedOutRuns(db).then((recovered) => {
-    if (recovered > 0) console.log(`[buildx-worker] recovered ${recovered} stalled run(s)`);
-  });
+export async function processNextRun(deps: WorkerDeps): Promise<boolean> {
+  const cfg = configOf(deps);
+  await deps
+    .recoverTimedOutRuns(deps.db)
+    .then((recovered) => {
+      if (recovered > 0) {
+        console.log(`[buildx-worker] recovered ${recovered} stalled run(s)`);
+      }
+    })
+    .catch((error) => console.error("[buildx-worker] recovery failed", error));
 
   const leaseId = randomUUID();
-  const claimed = await claimNextQueuedRun(db, { leaseId, leaseTtlMs: LEASE_TTL_MS });
+  const claimed = await deps.claimNextQueuedRun(deps.db, {
+    leaseId,
+    leaseTtlMs: cfg.leaseTtlMs,
+  });
   if (!claimed) return false;
 
-  const run = await getRun(claimed.id);
-  if (!run) {
-    await releaseRunLease(db, { runId: claimed.id, leaseId });
-    return false;
-  }
-
-  // The workspace lock serializes access to the user's persistent workspace
-  // (belt-and-suspenders on top of the per-user single-running guard). If it's
-  // busy, hand the lease back and retry later.
-  const workspaceId = run.id;
-  const lockOk = await acquireWorkspaceLock(db, {
-    workspaceId,
-    leaseId,
-    ttlMs: LOCK_TTL_MS,
+  // The claim is the authoritative durable state. Rebind the (possibly cached)
+  // run object to it so every append/persist/finalize carries THIS lease, never
+  // a stale one from an earlier snapshot or an old claim in this VM.
+  const run = await deps.bindClaim(claimed).catch((error) => {
+    console.error(`[buildx-worker] failed to bind claim for ${claimed.id}`, error);
+    return undefined;
   });
-  if (!lockOk) {
-    await releaseRunLease(db, { runId: run.id, leaseId });
+  if (!run) {
+    await deps.releaseRunLease(deps.db, { runId: claimed.id, leaseId }).catch(log);
     return false;
   }
 
-  const heartbeat = setInterval(() => {
-    void heartbeatRun(db, { runId: run.id, leaseId, leaseTtlMs: LEASE_TTL_MS }).then(
-      (stillOurs) => {
-        if (!stillOurs) return;
-        void renewWorkspaceLock(db, { workspaceId, leaseId, ttlMs: LOCK_TTL_MS });
-      },
-    );
-  }, HEARTBEAT_MS);
-
-  const stop = async (): Promise<void> => {
-    clearInterval(heartbeat);
-    await releaseWorkspaceLock(db, { workspaceId, leaseId });
-    // No-op when the lease was already released by a terminal `finishRun`.
-    await releaseRunLease(db, { runId: run.id, leaseId });
-  };
+  const session = await acquireSession(deps, run, leaseId);
+  if (!session) return false; // workspace busy or worker stopped; retry later
 
   try {
-    const cancelState = await isRunCancelled(db, run.id);
-    if (cancelState.cancelled) {
-      await finalizeEarly(run, cancelState.reason ?? "stopped before the agent started");
+    const state = await deps.readRunControl(deps.db, {
+      runId: run.id,
+      leaseId,
+    });
+    if (state.cancelled) {
+      await finalizeEarly(
+        deps,
+        run,
+        state.reason ?? "stopped before the agent started",
+      );
       return true;
     }
-    await startRun(run);
+
+    await deps.startRun(run);
+
     // `startRun` can return without a terminal transition only when its
-    // early-abort guard fired; finalize from the persisted cancel flag so the
-    // lease never silently expires.
+    // early-abort guard fired. If the lease was lost mid-run, the reclaiming
+    // worker owns the row — refuse to finalize as a stale owner. Otherwise
+    // answer the persisted cancel flag so the lease never silently expires.
     if (!isTerminalStatus(run.status)) {
-      const cancelled = await isRunCancelled(db, run.id);
-      await finalizeEarly(
-        run,
-        cancelled.reason ??
-          (cancelled.cancelled
-            ? "stopped before the agent started"
-            : "the worker lost the run"),
-        cancelled.cancelled ? "cancelled" : "failed",
-      );
+      if (run.runtime.lostOwnership) {
+        console.warn(
+          `[buildx-worker] run ${run.id} lost its lease during execution; not finalizing`,
+        );
+      } else {
+        const control = await deps.readRunControl(deps.db, {
+          runId: run.id,
+          leaseId,
+        });
+        await finalizeEarly(
+          deps,
+          run,
+          control.reason ??
+            (control.cancelled
+              ? "stopped before the agent started"
+              : "the worker lost the run"),
+          control.cancelled ? "cancelled" : "failed",
+        );
+      }
     }
     return true;
   } finally {
-    await stop();
+    await session.release();
   }
+}
+
+interface RunSession {
+  release: () => Promise<void>;
+}
+
+/**
+ * Take the workspace lock and start the lease keep-alive + control-plane
+ * watchdog (cancellation/ownership polling). Returns `undefined` when the
+ * workspace is busy or the worker was asked to stop — the lease is handed back
+ * and the run is retried on a later loop.
+ */
+async function acquireSession(
+  deps: WorkerDeps,
+  run: StoredRun,
+  leaseId: string,
+): Promise<RunSession | undefined> {
+  const cfg = configOf(deps);
+  if (workerState.__BUILDX_WORKER_STOPPED__) {
+    await deps.releaseRunLease(deps.db, { runId: run.id, leaseId }).catch(log);
+    return undefined;
+  }
+
+  const workspaceId = deps.workspaceIdentityFor(run);
+  const lockOk = await deps
+    .acquireWorkspaceLock(deps.db, { workspaceId, leaseId, ttlMs: cfg.lockTtlMs })
+    .catch(() => false);
+  if (!lockOk) {
+    await deps.releaseRunLease(deps.db, { runId: run.id, leaseId }).catch(log);
+    return undefined;
+  }
+
+  let fenced = false;
+  const timers: Array<NodeJS.Timeout> = [];
+
+  /** Fence every persistent write and stop the in-flight agent loop. Safe to
+   *  call more than once (only the first fences). */
+  const fenceLostOwnership = (reason: string): void => {
+    if (fenced) return;
+    fenced = true;
+    for (const timer of timers) clearInterval(timer);
+    console.warn(`[buildx-worker] fenced run ${run.id}: ${reason}`);
+    run.runtime.lostOwnership = true;
+    if (!run.runtime.controller.signal.aborted) {
+      run.runtime.controller.abort();
+    }
+  };
+
+  // Lease + workspace-lock renewal. A heartbeat DB error is an *uncertain*
+  // lease state: we must not assume ownership forever, but a single hiccup
+  // shouldn't fence a healthy run — if the DB stays down our lease lapses and
+  // `recoverTimedOutRuns` reclaims the run.
+  const keepalive = setInterval(() => {
+    void (async () => {
+      try {
+        const stillOurs = await deps.heartbeatRun(deps.db, {
+          runId: run.id,
+          leaseId,
+          leaseTtlMs: cfg.leaseTtlMs,
+        });
+        if (!stillOurs) {
+          fenceLostOwnership("lease expired (recovered by another worker)");
+          return;
+        }
+      } catch (error) {
+        console.error("[buildx-worker] heartbeat error (uncertain lease)", error);
+        return;
+      }
+      try {
+        const kept = await deps.renewWorkspaceLock(deps.db, {
+          workspaceId,
+          leaseId,
+          ttlMs: cfg.lockTtlMs,
+        });
+        if (!kept) fenceLostOwnership("workspace lock stolen");
+      } catch (error) {
+        console.error("[buildx-worker] workspace lock renew error", error);
+      }
+    })();
+  }, cfg.heartbeatMs);
+  timers.push(keepalive);
+
+  // Cancellation + ownership watchdog: polls frequently so `/stop` is honored
+  // promptly, and fences the moment another instance takes the lease.
+  const watchdog = setInterval(() => {
+    void deps
+      .readRunControl(deps.db, { runId: run.id, leaseId })
+      .then((control) => {
+        if (control.cancelled && !run.runtime.controller.signal.aborted) {
+          // The agent loop stops; runner/worker finalize the run as cancelled.
+          run.runtime.controller.abort();
+        }
+        if (!control.ownsLease) {
+          fenceLostOwnership("lease taken over by another instance");
+        }
+      })
+      .catch((error) => {
+        console.error("[buildx-worker] watchdog error", error);
+      });
+  }, cfg.watchdogMs);
+  timers.push(watchdog);
+
+  return {
+    async release() {
+      for (const timer of timers) clearInterval(timer);
+      // Both releases are lease-guarded: after a terminal finalize or a fence
+      // they no-op against a lease we no longer own.
+      await deps.releaseWorkspaceLock(deps.db, { workspaceId, leaseId }).catch(log);
+      await deps.releaseRunLease(deps.db, { runId: run.id, leaseId }).catch(log);
+    },
+  };
 }
 
 /** Append the terminal status event, flush, and run the guarded finalize. */
 async function finalizeEarly(
-  run: Parameters<typeof startRun>[0],
+  deps: WorkerDeps,
+  run: StoredRun,
   message: string,
   status: TerminalRunStatus = "cancelled",
 ): Promise<void> {
   try {
-    await appendEvent(run, {
+    if (run.runtime.lostOwnership) {
+      console.warn(`[buildx-worker] skipping finalize for fenced run ${run.id}`);
+      return;
+    }
+    await deps.appendEvent(run, {
       type: "status",
       data: { status, message },
       ts: Date.now(),
     });
-    await flushAppends(run.id);
-    await finishRun(run, status, message);
+    await deps.flushAppends(run.id);
+    await deps.finishRun(run, status, message);
   } catch (error) {
     console.error("[buildx-worker] finalize failed", error);
   }
 }
 
 /**
- * Durable job worker: claims leases, heartbeats them, executes runs detachantly
+ * Durable job worker: claims leases, heartbeats them, executes runs detached
  * from the request that created them, and recovers stalled work. Runs one loop
- * per process until `stopWorker` is called. The run loop never rejects — errors
- * are logged and the loop continues.
+ * per process until `stopWorker()`; the loop never rejects. A transient
+ * database outage at startup (or mid-loop) is retried with bounded exponential
+ * backoff instead of permanently disabling the worker.
  */
-export async function runWorker(options?: { signal?: AbortSignal }): Promise<void> {
-  const db = getDb();
-  try {
-    await db.execute(sql`SELECT 1`);
-  } catch (error) {
-    panic(error);
-    return;
+export async function runWorker(
+  options: { signal?: AbortSignal; deps?: WorkerDeps } = {},
+): Promise<void> {
+  const deps = options.deps ?? defaultDeps();
+  const cfg = configOf(deps);
+  const signal = options.signal;
+  const shouldRun = (): boolean =>
+    !workerState.__BUILDX_WORKER_STOPPED__ && !signal?.aborted;
+
+  if (!shouldRun()) return;
+
+  // Startup connectivity gate: there is no "execute with no queue" fallback, so
+  // simply retry with backoff until the database is reachable.
+  let backoffMs = cfg.startupBackoffMs;
+  for (;;) {
+    if (!shouldRun()) return;
+    try {
+      await deps.db.execute(sql`SELECT 1`);
+      break;
+    } catch (error) {
+      console.error(
+        `[buildx-worker] database unavailable; retrying in ${backoffMs}ms`,
+        error,
+      );
+      await sleep(backoffMs);
+      backoffMs = Math.min(backoffMs * 2, cfg.maxBackoffMs);
+    }
   }
 
-  const signal = options?.signal;
-  if (workerState.__BUILDX_WORKER_STOPPED__) return;
-
-  while (!workerState.__BUILDX_WORKER_STOPPED__ && !signal?.aborted) {
-    const processed = await processNextRun(db).catch((error) => {
-      console.error("[buildx-worker] loop iteration failed", error);
-      return false;
-    });
-    await sleep(processed ? 100 : CLAIM_BACKOFF_MS);
+  while (shouldRun()) {
+    try {
+      const processed = await processNextRun(deps);
+      backoffMs = cfg.startupBackoffMs; // any completed iteration resets backoff
+      await sleep(processed ? cfg.loopFastMs : cfg.loopIdleMs);
+    } catch (error) {
+      console.error(
+        `[buildx-worker] loop iteration failed; retrying in ${backoffMs}ms`,
+        error,
+      );
+      await sleep(backoffMs);
+      backoffMs = Math.min(backoffMs * 2, cfg.maxBackoffMs);
+    }
   }
 }
 
 /** Signal the worker loop to stop after the current iteration. */
 export function stopWorker(): void {
   workerState.__BUILDX_WORKER_STOPPED__ = true;
+}
+
+export function isWorkerStopped(): boolean {
+  return Boolean(workerState.__BUILDX_WORKER_STOPPED__);
+}
+
+/** Clear the stopped flag so the loop can start again (tests / HMR). */
+export function resetWorkerForTest(): void {
+  delete workerState.__BUILDX_WORKER_STOPPED__;
 }
