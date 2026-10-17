@@ -1,14 +1,14 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { runTask } from "@buildx/agent";
-import type { RunStatus } from "@buildx/shared";
 import { envStatus, isTerminalStatus } from "@buildx/shared";
 import {
   appendEvent,
   finishRun,
-  markRunning,
+  flushAppends,
   persistStats,
   type StoredRun,
+  type TerminalRunStatus,
 } from "./store";
 import { captureWorkspaceSnapshot } from "./workspace-fs";
 import { createSandbox, sandboxSettings } from "./sandbox";
@@ -41,10 +41,12 @@ async function seedWorkspace(run: StoredRun): Promise<void> {
 /**
  * Ensure the run ends with exactly one terminal `status` event so SSE clients
  * always see the stream close, even when the loop dies before emitting its own.
+ * Flushes the append chain first so Postgres observes every event in order
+ * before the lease-guarded terminal transition runs.
  */
 async function closeRun(
   run: StoredRun,
-  status: RunStatus,
+  status: TerminalRunStatus,
   message?: string,
 ): Promise<void> {
   const last = [...run.events].reverse().find((event) => event.type === "status");
@@ -55,16 +57,20 @@ async function closeRun(
       ts: Date.now(),
     });
   }
+  await flushAppends(run.id);
   await finishRun(run, status, status === "failed" ? message : undefined);
 }
 
 /**
- * Execute one queued run: seed + start the sandbox, drive `runTask`, append
- * every step to the event store, and tear the sandbox down. Runs detached from
- * the request that created it (arcetecture.md §5.2).
+ * Execute one claimed run: seed + start the sandbox, drive `runTask`, append
+ * every step to the event store, and tear the sandbox down. Called by the job
+ * worker once it owns the run's lease (the claim sets `status: running`); this
+ * routine never touches the queue itself.
  */
 export async function startRun(run: StoredRun): Promise<void> {
-  // Stopped before we got scheduled — the stop route already closed the run.
+  // Stopped before we got scheduled — the worker handles the terminal
+  // finalize for this case; returning here leaves the lease for the worker's
+  // post-loop fallback.
   if (isTerminalStatus(run.status) || run.controller.signal.aborted) return;
 
   const config = envStatus();
@@ -84,7 +90,6 @@ export async function startRun(run: StoredRun): Promise<void> {
   try {
     await sandbox.start();
     await seedWorkspace(run);
-    await markRunning(run);
 
     // Local mode snapshots immediately; box mode snapshots lazily once a
     // workspace has actually been restored.
@@ -99,7 +104,7 @@ export async function startRun(run: StoredRun): Promise<void> {
       maxSteps: run.maxSteps,
       abortSignal: run.controller.signal,
       onEvent: (event) => {
-        appendEvent(run, event);
+        void appendEvent(run, event);
       },
     });
 
@@ -107,7 +112,7 @@ export async function startRun(run: StoredRun): Promise<void> {
     await persistStats(run);
     await closeRun(
       run,
-      result.status,
+      result.status as TerminalRunStatus,
       result.status === "failed" ? "the agent run failed" : undefined,
     );
   } catch (error) {

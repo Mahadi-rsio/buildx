@@ -7,9 +7,10 @@ import type {
   ReadRange,
   Sandbox,
 } from "./index";
-import { Box } from "@upstash/box";
+import { Box, BoxError } from "@upstash/box";
 import type { BoxSize, Runtime } from "@upstash/box";
 import { resolveWorkspacePath } from "./path";
+import { abortError, ChunkBuffer, exitMarker } from "./buffer";
 
 const WORKSPACE = "/workspace/home";
 
@@ -23,6 +24,22 @@ export interface BoxSandboxOptions {
   /** Pre-attached Box instance (for testing or restore). */
   box?: Box;
 }
+
+/** True when the Box SDK reported "not found" (404) for an existing box. */
+function isNotFound(error: unknown): boolean {
+  return (
+    error instanceof BoxError &&
+    typeof error.statusCode === "number" &&
+    error.statusCode === 404
+  );
+}
+
+/**
+ * In-process guard so two concurrent `start()` calls for the same box name
+ * (e.g. the resolver building a LazyBoxSandbox from parallel route handlers)
+ * cannot double-create a box on the Upstash side.
+ */
+const pendingStarts = new Map<string, Promise<Box>>();
 
 /**
  * A `Sandbox` backend for Upstash Box.
@@ -54,23 +71,42 @@ export class BoxSandbox implements Sandbox {
   }
 
   async start(): Promise<void> {
-    if (this.box) return; // already initialized
+    if (this.box) return; // already attached (tests / restore)
 
-    if (this.box === null) {
-      // Try to get an existing box by name (idempotent re-connect)
+    // Share one provision/reconnect promise per box name so concurrent start()
+    // calls never race Box.create (each would otherwise provision a duplicate
+    // box — the getByName-then-create pattern is not atomic across callers).
+    const inFlight = pendingStarts.get(this.name);
+    if (inFlight) {
+      this.box = await inFlight;
+      return;
+    }
+
+    const promise = (async (): Promise<Box> => {
       try {
-        this.box = await Box.getByName(this.name);
-      } catch {
-        // Box not found; create a new one
-        this.box = await Box.create({
-          name: this.name,
-          runtime: this.runtime,
-          size: this.size,
-          initCommand: this.initCommand,
+        return await Box.getByName(this.name, {
           apiKey: this.apiKey,
           baseUrl: this.baseUrl,
         });
+      } catch (error) {
+        if (isNotFound(error)) {
+          return await Box.create({
+            name: this.name,
+            runtime: this.runtime,
+            size: this.size,
+            initCommand: this.initCommand,
+            apiKey: this.apiKey,
+            baseUrl: this.baseUrl,
+          });
+        }
+        throw error;
       }
+    })();
+    pendingStarts.set(this.name, promise);
+    try {
+      this.box = await promise;
+    } finally {
+      pendingStarts.delete(this.name);
     }
   }
 
@@ -90,85 +126,91 @@ export class BoxSandbox implements Sandbox {
   }
 
   async *exec(cmd: string, opts?: ExecOptions): AsyncIterable<ExecChunk> {
-    if (!this.box) {
-      yield* this.dummyExec();
-      return;
-    }
+    if (!this.box) throw new Error("sandbox not started");
 
     const env = opts?.env
       ? Object.entries(opts.env).map(([k, v]) => `${k}=${v}`)
       : undefined;
 
-    const cwd = opts?.cwd
-      ? `${WORKSPACE}/${opts.cwd.replace(/^\.?\//, "")}`
-      : WORKSPACE;
+    // Validate the cwd against the workspace root (rejects `..` traversal); the
+    // relative path given by tools is resolved inside the box's workspace.
+    const cwd = opts?.cwd ? this.resolvePath(opts.cwd) : WORKSPACE;
 
-    const chunks: ExecChunk[] = [];
+    // Bounded head+tail collector: a runaway command can never exhaust memory.
+    const buffer = new ChunkBuffer();
     let done = false;
-    let timeoutHit = false;
-
-    const onChunk = (stream: "stdout" | "stderr", data: string) => {
-      chunks.push({ stream, data });
-    };
+    let exitCode = 0;
+    let failure: Error | null = null;
+    let notify: (() => void) | undefined;
+    const wake = (): void => notify?.();
 
     const session = await this.box.exec.session({
       cmd,
       cwd,
       env,
-      onStdout: (data: Uint8Array) => onChunk("stdout", Buffer.from(data).toString("utf8")),
-      onStderr: (data: Uint8Array) => onChunk("stderr", Buffer.from(data).toString("utf8")),
+      onStdout: (data: Uint8Array) => {
+        buffer.push({ stream: "stdout", data: Buffer.from(data).toString("utf8") });
+        wake();
+      },
+      onStderr: (data: Uint8Array) => {
+        buffer.push({ stream: "stderr", data: Buffer.from(data).toString("utf8") });
+        wake();
+      },
     });
 
-    const exitPromise = session.wait().then(() => {
+    const error = abortError("command aborted");
+
+    const exitPromise = session.wait().then((code) => {
+      exitCode = code;
       done = true;
+      wake();
     });
 
     const timeoutMs = opts?.timeoutMs;
     const timer =
       timeoutMs && timeoutMs > 0
         ? setTimeout(() => {
-            timeoutHit = true;
+            failure = new Error(`command timed out after ${timeoutMs}ms`);
             session.terminate(1000);
+            wake();
           }, timeoutMs)
         : undefined;
 
+    const abort = (): void => {
+      if (!failure) failure = error;
+      session.terminate(500);
+      wake();
+    };
+    if (opts?.signal?.aborted) {
+      abort();
+    } else {
+      opts?.signal?.addEventListener("abort", abort, { once: true });
+    }
+
     try {
       while (true) {
-        if (chunks.length > 0) {
-          yield chunks.shift()!;
-          if (done) break;
+        if (!buffer.empty) {
+          yield* buffer.drain();
           continue;
         }
-        if (done) {
-          // Process exited; drain any remaining chunks
-          while (chunks.length > 0) {
-            yield chunks.shift()!;
-          }
-          break;
-        }
-        if (timeoutHit) {
-          throw new Error(`command timed out after ${opts?.timeoutMs}ms`);
-        }
-        // Wait briefly for next chunk or exit event
-        await new Promise<void>(resolve => setTimeout(resolve, 100));
+        if (done || failure) break;
+        await new Promise<void>((resolve) => {
+          notify = resolve;
+          if (done || failure || !buffer.empty) resolve();
+        }).finally(() => {
+          notify = undefined;
+        });
       }
-      await exitPromise;
-      if (timeoutHit) {
-        throw new Error(`command timed out after ${opts?.timeoutMs}ms`);
-      }
+      if (!failure) await exitPromise;
+      if (!buffer.empty) yield* buffer.drain();
+      if (failure) throw failure;
+      const marker = exitMarker(exitCode);
+      if (marker) yield marker;
     } finally {
       if (timer) clearTimeout(timer);
+      opts?.signal?.removeEventListener("abort", abort);
       session.close();
     }
-  }
-
-  private async *dummyExec(): AsyncIterable<ExecChunk> {
-    // Fallback when no box is available (e.g. test without API key).
-    yield ({
-      stream: "stdout",
-      data: "sandbox not ready",
-    });
-    return;
   }
 
   async readFile(path: string, range?: ReadRange): Promise<string> {

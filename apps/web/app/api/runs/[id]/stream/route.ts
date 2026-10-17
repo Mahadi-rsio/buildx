@@ -2,10 +2,12 @@ import type { RunEvent } from "@buildx/shared";
 import { isTerminalStatus } from "@buildx/shared";
 import { getCurrentUser, unauthorized } from "@/lib/auth/server";
 import { findOwnedRun, notFound } from "@/lib/authz";
+import { getRun, listEventsAfter } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
 const encoder = new TextEncoder();
+const POLL_MS = 1_000;
 
 /**
  * One SSE frame. `id` lets EventSource resume via `Last-Event-ID`; `data` wraps
@@ -21,11 +23,34 @@ function frame(event: RunEvent): Uint8Array {
   );
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Wait for one in-process append (fast path when this process is executing the
+ * run) or the poll interval, whichever comes first — the DB poll is always the
+ * source of truth across instances.
+ */
+function waitForWake(run: Awaited<ReturnType<typeof getRun>>): Promise<void> {
+  return new Promise((resolve) => {
+    const onEvent = (): void => {
+      run?.subscribers.delete(onEvent);
+      resolve();
+    };
+    run?.subscribers.add(onEvent);
+    void sleep(POLL_MS).then(onEvent);
+  });
+}
+
 /**
  * `GET /api/runs/:id/stream?after=<eventId>` — replays events after `after`
  * (arcetecture.md §5.2), then pushes live appends until the run is terminal.
- * Reconnects resume from the browser's `Last-Event-ID` header, which takes
- * precedence over the initial `?after` so a reconnect never re-replays.
+ * Events are read straight from Postgres so any worker instance's appends are
+ * visible; a process-local subscriber speeds up delivery when this process
+ * happens to be the one executing the run. Reconnects resume from the browser's
+ * `Last-Event-ID` header, which takes precedence over the initial `?after` so a
+ * reconnect never re-replays.
  */
 export async function GET(
   request: Request,
@@ -42,16 +67,18 @@ export async function GET(
   const resume = request.headers.get("last-event-id");
   const after = Number(resume ?? url.searchParams.get("after") ?? "0") || 0;
 
-  let detach = (): void => {};
+  // Fast-path subject: the run object (and its live SSE subscribers) when this
+  // process has it cached, otherwise `undefined` → pure-poll mode.
+  const subject = await getRun(id);
 
   const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
+    async start(controller) {
       let closed = false;
+      let cursor = after;
 
       const close = (): void => {
         if (closed) return;
         closed = true;
-        detach();
         try {
           controller.close();
         } catch {
@@ -67,38 +94,33 @@ export async function GET(
           close();
           return;
         }
+        cursor = event.id;
         if (event.type === "status" && isTerminalStatus(event.data.status)) {
           close();
         }
       };
 
-      for (const event of run.events) {
-        if (event.id > after) send(event);
-      }
-      if (closed || isTerminalStatus(run.status)) {
-        close();
-        return;
-      }
-
-      const onEvent = (event: RunEvent): void => send(event);
-      run.subscribers.add(onEvent);
-
-      const heartbeat = setInterval(() => {
-        if (closed) return;
-        try {
-          controller.enqueue(encoder.encode(`: ping ${Date.now()}\n\n`));
-        } catch {
-          close();
+      const tick = async (): Promise<void> => {
+        const snapshot = await listEventsAfter(id, cursor);
+        for (const event of snapshot.events) {
+          if (closed) return;
+          send(event);
         }
-      }, 15_000);
-
-      detach = (): void => {
-        run.subscribers.delete(onEvent);
-        clearInterval(heartbeat);
+        if (!closed && isTerminalStatus(snapshot.status)) close();
       };
+
+      try {
+        await tick();
+        while (!closed) {
+          await waitForWake(subject);
+          await tick();
+        }
+      } catch {
+        close();
+      }
     },
     cancel() {
-      detach();
+      // No-op: queued poll ticks fall through on their own timeout.
     },
   });
 

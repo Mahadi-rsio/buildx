@@ -54,6 +54,34 @@ function boxNameFor(ctx: SandboxRunContext): string {
  */
 export function sandboxSettings(): SandboxSettings {
   const boxApiKey = (process.env.UPSTASH_BOX_API_KEY ?? "").trim();
+  const explicit = (process.env.BUILDX_SANDBOX_KIND ?? "").trim().toLowerCase();
+
+  // Explicit override wins: `BUILDX_SANDBOX_KIND=box` forces Box, `local`
+  // forces the local sandbox (tests/dev without a Box key). Box mode always
+  // needs a key.
+  if (explicit === "box") {
+    if (!boxApiKey) {
+      throw new Error(
+        "BUILDX_SANDBOX_KIND=box requires UPSTASH_BOX_API_KEY to be set",
+      );
+    }
+    return {
+      kind: "box",
+      boxApiKey,
+      boxBaseUrl: (process.env.UPSTASH_BOX_BASE_URL ?? "").trim() || undefined,
+      boxRuntime: (process.env.UPSTASH_BOX_RUNTIME ?? "").trim() || undefined,
+      boxSize: (process.env.UPSTASH_BOX_SIZE ?? "").trim() || undefined,
+    };
+  }
+  if (explicit === "local") {
+    return { kind: "local" };
+  }
+  if (explicit) {
+    throw new Error(
+      `BUILDX_SANDBOX_KIND must be "box" or "local", got "${explicit}"`,
+    );
+  }
+
   if (boxApiKey) {
     return {
       kind: "box",
@@ -62,6 +90,14 @@ export function sandboxSettings(): SandboxSettings {
       boxRuntime: (process.env.UPSTASH_BOX_RUNTIME ?? "").trim() || undefined,
       boxSize: (process.env.UPSTASH_BOX_SIZE ?? "").trim() || undefined,
     };
+  }
+
+  // No key and no explicit override: never silently run jobs on this machine
+  // in production. Dev/test keep the convenient local sandbox.
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "No sandbox configured: set UPSTASH_BOX_API_KEY or BUILDX_SANDBOX_KIND=local",
+    );
   }
   return { kind: "local" };
 }

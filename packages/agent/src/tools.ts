@@ -61,9 +61,13 @@ export function buildTools(sandbox: Sandbox) {
         .optional()
         .describe("Kill the command after this many milliseconds"),
     }),
-    execute: async ({ command, cwd, timeoutMs }) => {
+    execute: async ({ command, cwd, timeoutMs }, options) => {
       let output = "";
-      for await (const chunk of sandbox.exec(command, { cwd, timeoutMs })) {
+      for await (const chunk of sandbox.exec(command, {
+        cwd,
+        timeoutMs,
+        signal: options?.abortSignal,
+      })) {
         output += chunk.data;
       }
       return { output: truncate(output.trimEnd() || "(no output)") };
@@ -161,7 +165,7 @@ export function buildTools(sandbox: Sandbox) {
         .optional()
         .describe("Maximum directory depth; defaults to 2"),
     }),
-    execute: async ({ path, depth }) => {
+    execute: async ({ path, depth }, options) => {
       const dir = path && path.length > 0 ? path : ".";
       const maxDepth = depth ?? 2;
       const prune = IGNORED_DIRS.map((name) => `-name ${shellQuote(name)}`).join(
@@ -171,7 +175,9 @@ export function buildTools(sandbox: Sandbox) {
 
       let stdout = "";
       let stderr = "";
-      for await (const chunk of sandbox.exec(command)) {
+      for await (const chunk of sandbox.exec(command, {
+        signal: options?.abortSignal,
+      })) {
         if (chunk.stream === "stdout") stdout += chunk.data;
         else stderr += chunk.data;
       }

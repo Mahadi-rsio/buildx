@@ -15,5 +15,5 @@ export async function GET(
   const { id } = await params;
   const run = await findOwnedRun(id, user.id);
   if (!run) return notFound(id);
-  return Response.json(toRunDetail(run));
+  return Response.json(await toRunDetail(run));
 }

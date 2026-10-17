@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
 import { LocalSandbox } from "./local";
+import type { ExecChunk } from "./index";
 
 let dir: string;
 let sandbox: LocalSandbox;
@@ -69,4 +70,32 @@ test("exec with a timeout does not hang", async () => {
     // drain
   }
   assert.ok(Date.now() - started < 3000, "command should be killed by timeout");
+});
+
+test("exec throws AbortError when the signal aborts mid-command", async () => {
+  const controller = new AbortController();
+  const promise = (async () => {
+    for await (const _chunk of sandbox.exec("sleep 30", {
+      signal: controller.signal,
+    })) {
+      // drain
+    }
+  })();
+
+  controller.abort();
+
+  await assert.rejects(
+    promise,
+    (error: unknown) => (error as Error).name === "AbortError",
+  );
+});
+
+test("exec emits an exit marker for non-zero exit codes", async () => {
+  const chunks: ExecChunk[] = [];
+  for await (const chunk of sandbox.exec("exit 3")) {
+    chunks.push(chunk);
+  }
+  const marker = chunks.at(-1);
+  assert.strictEqual(marker?.stream, "stderr");
+  assert.match(marker?.data ?? "", /command exited with code 3/);
 });

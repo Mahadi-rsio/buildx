@@ -11,6 +11,7 @@ import type {
   Sandbox,
 } from "./index";
 import { resolveWorkspacePath } from "./path";
+import { abortError, ChunkBuffer, exitMarker } from "./buffer";
 
 export interface LocalSandboxOptions {
   /** Directory the sandbox is rooted at; created if missing. */
@@ -75,12 +76,15 @@ export class LocalSandbox implements Sandbox {
       }
     };
 
-    const queue: ExecChunk[] = [];
+    const buffer = new ChunkBuffer();
     let closed = false;
+    let exitCode: number | null = null;
+    let failure: Error | null = null;
     let notify: (() => void) | undefined;
+    const wake = (): void => notify?.();
     const push = (chunk: ExecChunk): void => {
-      queue.push(chunk);
-      notify?.();
+      buffer.push(chunk);
+      wake();
     };
 
     child.stdout?.on("data", (data: Buffer) =>
@@ -90,13 +94,14 @@ export class LocalSandbox implements Sandbox {
       push({ stream: "stderr", data: data.toString() }),
     );
     child.on("error", (error: Error) => {
-      push({ stream: "stderr", data: `${error.message}\n` });
+      failure = error;
       closed = true;
-      notify?.();
+      wake();
     });
-    child.on("close", () => {
+    child.on("close", (code: number | null) => {
+      exitCode = code;
       closed = true;
-      notify?.();
+      wake();
     });
 
     const timer =
@@ -104,20 +109,39 @@ export class LocalSandbox implements Sandbox {
         ? setTimeout(killTree, opts.timeoutMs)
         : undefined;
 
+    const abort = (): void => {
+      if (!failure) failure = abortError("command aborted");
+      killTree();
+      wake();
+    };
+    if (opts.signal?.aborted) {
+      abort();
+    } else {
+      opts.signal?.addEventListener("abort", abort, { once: true });
+    }
+
     try {
-      while (!closed || queue.length > 0) {
-        if (queue.length === 0) {
-          await new Promise<void>((res) => {
-            notify = res;
-          });
+      while (true) {
+        if (!buffer.empty) {
+          yield* buffer.drain();
+          continue;
+        }
+        if (closed || failure) break;
+        await new Promise<void>((resolve) => {
+          notify = resolve;
+          if (closed || failure || !buffer.empty) resolve();
+        }).finally(() => {
           notify = undefined;
-        }
-        while (queue.length > 0) {
-          yield queue.shift() as ExecChunk;
-        }
+        });
       }
+      if (!buffer.empty) yield* buffer.drain();
+      if (failure) throw failure;
+      const marker = exitMarker(exitCode ?? 0);
+      if (marker) yield marker;
     } finally {
       if (timer) clearTimeout(timer);
+      opts.signal?.removeEventListener("abort", abort);
+      killTree();
     }
   }
 

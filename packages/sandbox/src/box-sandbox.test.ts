@@ -2,14 +2,30 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import { Box } from "@upstash/box";
+import { BoxError } from "@upstash/box";
 import { BoxSandbox } from "./box-sandbox";
+
+interface BoxMockOptions {
+  /** Replacement for `session.wait()`; defaults to resolving `0` after 5ms. */
+  wait?: () => Promise<number>;
+  /** Chunk emitted to the session's stdout callback at creation time. */
+  stdout?: Uint8Array;
+  /** Chunk emitted to the session's stderr callback at creation time. */
+  stderr?: Uint8Array;
+}
+
+/** Default synchronous chunks emitted when a session is created. */
+const DEFAULT_STDOUT = Buffer.from("hello world");
+const DEFAULT_STDERR = Buffer.from("error message");
 
 /**
  * Build a mock Box with enough of the SDK surface for BoxSandbox to work.
- * `sessionWait` lets tests control when `session.wait()` resolves (used to
- * exercise the timeout path).
+ * `wait` lets tests control when (and with what code) `session.wait()`
+ * resolves — used to exercise the exit-marker and timeout paths.
  */
-function makeMockBox(sessionWait?: () => Promise<number>): Box {
+function makeMockBox(options: BoxMockOptions = {}): Box {
+  const stdout = options.stdout ?? DEFAULT_STDOUT;
+  const stderr = options.stderr ?? DEFAULT_STDERR;
   const storage = new Map<string, string>([
     ["/workspace/home/README.md", "hello world"],
   ]);
@@ -77,15 +93,15 @@ function makeMockBox(sessionWait?: () => Promise<number>): Box {
         onStderr?: (data: Uint8Array) => void;
       }) => {
         if (opts.onStdout) {
-          opts.onStdout(Buffer.from("hello world"));
+          opts.onStdout(stdout);
         }
         if (opts.onStderr) {
-          opts.onStderr(Buffer.from("error message"));
+          opts.onStderr(stderr);
         }
         let resolveWait: ((code: number) => void) | undefined;
         const wait = () =>
-          sessionWait
-            ? sessionWait()
+          options.wait
+            ? options.wait()
             : new Promise<number>((resolve) => {
                 resolveWait = resolve;
                 setTimeout(() => resolve(0), 5);
@@ -133,8 +149,8 @@ function makeMockBox(sessionWait?: () => Promise<number>): Box {
 
 let mockBox: Box;
 
-function makeSandbox(sessionWait?: () => Promise<number>): BoxSandbox {
-  mockBox = makeMockBox(sessionWait);
+function makeSandbox(options: BoxMockOptions = {}): BoxSandbox {
+  mockBox = makeMockBox(options);
   return new BoxSandbox({
     name: "test-box",
     apiKey: "dummy-key",
@@ -165,7 +181,7 @@ test("BoxSandbox.exec streams chunks", async () => {
 test("BoxSandbox.exec with timeout throws", async () => {
   // session.wait() never resolves on its own; only terminate() (triggered by
   // the timeout timer) resolves it.
-  const s = makeSandbox(() => new Promise<number>(() => {}));
+  const s = makeSandbox({ wait: () => new Promise<number>(() => {}) });
   await s.start();
 
   let threw = false;
@@ -205,6 +221,105 @@ test("BoxSandbox.writeFile creates/overwrites file", async () => {
   await s.writeFile("new.txt", "new content");
   const content = await s.readFile("new.txt");
   assert.strictEqual(content, "new content");
+});
+
+test("BoxSandbox.exec emits an exit marker for non-zero exit codes", async () => {
+  const s = makeSandbox({ wait: async () => 7 });
+  await s.start();
+
+  const chunks: ExecChunk[] = [];
+  for await (const chunk of s.exec("false")) {
+    chunks.push(chunk);
+  }
+
+  assert.strictEqual(chunks.length, 3);
+  const marker = chunks.at(-1);
+  assert.strictEqual(marker?.stream, "stderr");
+  assert.match(marker?.data ?? "", /command exited with code 7/);
+});
+
+test("BoxSandbox.exec throws AbortError when the signal is already aborted", async () => {
+  const s = makeSandbox();
+  await s.start();
+
+  const controller = new AbortController();
+  controller.abort();
+
+  await assert.rejects(
+    async () => {
+      for await (const _ of s.exec("sleep 10", { signal: controller.signal })) {
+        // consume
+      }
+    },
+    (error: unknown) => (error as Error).name === "AbortError",
+  );
+});
+
+test("BoxSandbox.exec marks an abort mid-run with AbortError", async () => {
+  // wait() never resolves on its own; only terminate (from abort) resolves it.
+  const s = makeSandbox({ wait: () => new Promise<number>(() => {}) });
+  await s.start();
+
+  const controller = new AbortController();
+  const promise = (async () => {
+    for await (const _ of s.exec("sleep 10", { signal: controller.signal })) {
+      // consume
+    }
+  })();
+
+  controller.abort();
+
+  await assert.rejects(promise, (error: unknown) => (error as Error).name === "AbortError");
+});
+
+test("BoxSandbox.exec caps output with a truncation marker", async () => {
+  const payload = Buffer.from("x".repeat(400 * 1024));
+  const s = makeSandbox({ stdout: payload, stderr: Buffer.alloc(0) });
+  await s.start();
+
+  let stdoutBytes = 0;
+  let sawMarker = false;
+  for await (const chunk of s.exec("dump")) {
+    if (chunk.stream === "stdout") stdoutBytes += Buffer.byteLength(chunk.data, "utf8");
+    if (chunk.stream === "stderr" && /output truncated/.test(chunk.data)) {
+      sawMarker = true;
+    }
+  }
+
+  // Head (64KiB) + tail (256KiB) survive; the middle is elided with a marker.
+  assert.equal(stdoutBytes, (64 + 256) * 1024);
+  assert.equal(sawMarker, true);
+});
+
+test("BoxSandbox.start creates the box when getByName returns 404", async () => {
+  const created = makeMockBox({ wait: async () => 0 });
+  const originalGet = Box.getByName;
+  const originalCreate = Box.create;
+  Box.getByName = async () => {
+    throw new BoxError("box not found", 404);
+  };
+  Box.create = async () => created;
+  try {
+    const s = new BoxSandbox({ name: "brand-new", apiKey: "k" });
+    await s.start();
+    assert.strictEqual(s["box"], created);
+  } finally {
+    Box.getByName = originalGet;
+    Box.create = originalCreate;
+  }
+});
+
+test("BoxSandbox.start rethrows non-404 errors from getByName", async () => {
+  const originalGet = Box.getByName;
+  Box.getByName = async () => {
+    throw new BoxError("unauthorized", 401);
+  };
+  try {
+    const s = new BoxSandbox({ name: "forbidden", apiKey: "k" });
+    await assert.rejects(() => s.start(), /unauthorized/);
+  } finally {
+    Box.getByName = originalGet;
+  }
 });
 
 test("BoxSandbox.startBackground returns log path", async () => {

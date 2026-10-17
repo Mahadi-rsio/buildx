@@ -1,7 +1,18 @@
 import { randomUUID } from "node:crypto";
 import { DEFAULT_MODEL, isTerminalStatus } from "@buildx/shared";
 import type { RunEvent, RunEventInput, RunStatus } from "@buildx/shared";
-import { and, asc, desc, eq, getDb, runs as runsTable, events as eventsTable } from "@buildx/db";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gt,
+  finalizeRun,
+  getDb,
+  requestCancellation,
+  events as eventsTable,
+  runs as runsTable,
+} from "@buildx/db";
 import { workspaceDirFor } from "./paths";
 import type {
   RunDetail,
@@ -29,6 +40,8 @@ export interface StoredRun {
   updatedAt: number;
   error?: string;
   stats?: RunStats;
+  /** Lease id owning this run while it is being executed (set by the worker). */
+  leaseId?: string;
   /** Append-only event log (arcetecture.md §4), cached per process. */
   events: RunEvent[];
   /** Live SSE subscribers waiting for the next event (process-local). */
@@ -82,6 +95,7 @@ function syncFromRow(run: StoredRun, row: RunRow): void {
   run.status = row.status;
   run.model = row.model ?? DEFAULT_MODEL;
   run.maxSteps = row.maxSteps;
+  run.leaseId = row.leaseId ?? undefined;
   run.updatedAt = row.updatedAt.getTime();
   run.error = row.error ?? undefined;
   const hasUsage =
@@ -121,6 +135,7 @@ async function hydrateRun(row: RunRow): Promise<StoredRun> {
     createdAt: row.createdAt.getTime(),
     updatedAt: row.updatedAt.getTime(),
     error: row.error ?? undefined,
+    leaseId: row.leaseId ?? undefined,
     events: [],
     subscribers: runtime.subscribers,
     controller: runtime.controller,
@@ -168,41 +183,42 @@ export interface CreateRunArgs {
   model: string;
   maxSteps: number;
   usage?: WorkspaceUsage;
+  /** Optional client-supplied key: a repeat request with the same key returns
+   *  the original run instead of queuing a second one. */
+  idempotencyKey?: string;
 }
 
+function enqueueNow(): { createdAt: Date; updatedAt: Date } {
+  const now = new Date();
+  return { createdAt: now, updatedAt: now };
+}
+
+/**
+ * Enqueue a run. Executes as a single `INSERT` of a `queued` row and hands
+ * execution to the lease-based job worker (arcetecture.md §9); the request
+ * does not drive the run anymore. Duplicate submissions with the same
+ * `idempotencyKey` (or a racing retry hitting the unique index) return the
+ * already-queued run.
+ */
 export async function createRun(args: CreateRunArgs): Promise<StoredRun> {
   const db = getDb();
 
-  // Single-instance executor: a `running` row that no process is executing is
-  // stale (crashed or killed dev server). Reclaim it so the DB partial unique
-  // index (`one active run per user`) can't block new runs. Runs this process
-  // is actually executing are left alone. The DB worker that lands later
-  // replaces this with lease expiry + heartbeat (arcetecture.md §9).
-  const stale = await db
-    .select({ id: runsTable.id })
-    .from(runsTable)
-    .where(
-      and(
-        eq(runsTable.userId, args.userId),
-        eq(runsTable.status, "running"),
-      ),
-    );
-  for (const row of stale) {
-    const active = cachedRuns().get(row.id);
-    if (active && !isTerminalStatus(active.status)) continue;
-    await db
-      .update(runsTable)
-      .set({
-        status: "failed",
-        error: "interrupted by a new run (previous process exited)",
-        endedAt: new Date(),
-      })
-      .where(eq(runsTable.id, row.id));
+  if (args.idempotencyKey) {
+    const [existing] = await db
+      .select()
+      .from(runsTable)
+      .where(
+        and(
+          eq(runsTable.userId, args.userId),
+          eq(runsTable.idempotencyKey, args.idempotencyKey),
+        ),
+      );
+    if (existing) return hydrateRun(existing);
   }
 
   const id = randomUUID();
-  const now = new Date();
-  const [row] = await db
+  const timestamps = enqueueNow();
+  const row = await db
     .insert(runsTable)
     .values({
       id,
@@ -212,10 +228,30 @@ export async function createRun(args: CreateRunArgs): Promise<StoredRun> {
       task: args.task,
       workspaceName: args.workspaceName,
       maxSteps: args.maxSteps,
-      createdAt: now,
-      updatedAt: now,
+      idempotencyKey: args.idempotencyKey ?? null,
+      createdAt: timestamps.createdAt,
+      updatedAt: timestamps.updatedAt,
     })
-    .returning();
+    .returning()
+    .then((rows) => rows[0])
+    .catch(async (error: unknown) => {
+      const unique =
+        (error as { code?: string })?.code === "23505" &&
+        (error as { constraint?: string })?.constraint !==
+          "runs_one_active_per_user_idx";
+      if (!unique) throw error;
+      const [existing] = await db
+        .select()
+        .from(runsTable)
+        .where(
+          and(
+            eq(runsTable.userId, args.userId),
+            eq(runsTable.idempotencyKey, args.idempotencyKey ?? ""),
+          ),
+        );
+      if (!existing) throw error;
+      return existing;
+    });
 
   const runtime = freshRuntime();
   runtime.workspace.usage = args.usage;
@@ -228,8 +264,8 @@ export async function createRun(args: CreateRunArgs): Promise<StoredRun> {
     model: row.model ?? DEFAULT_MODEL,
     maxSteps: row.maxSteps,
     workspaceDir: workspaceDirFor(row.id),
-    createdAt: now.getTime(),
-    updatedAt: now.getTime(),
+    createdAt: row.createdAt.getTime() ?? Date.now(),
+    updatedAt: row.updatedAt.getTime() ?? Date.now(),
     events: [],
     subscribers: runtime.subscribers,
     controller: runtime.controller,
@@ -249,6 +285,16 @@ export async function getRun(id: string): Promise<StoredRun | undefined> {
     .where(eq(runsTable.id, id));
   if (!row) return undefined;
   return hydrateRun(row);
+}
+
+/** Resolve the DB row for a run, hydrating the cache on a miss. */
+export async function getRunRow(id: string): Promise<RunRow | undefined> {
+  const [row] = await getDb()
+    .select()
+    .from(runsTable)
+    .where(eq(runsTable.id, id));
+  if (!row) return undefined;
+  return row;
 }
 
 /** Resolve a run by its workspace id (equal to the run id today). */
@@ -273,10 +319,49 @@ export async function listRunsForUser(userId: string): Promise<StoredRun[]> {
 }
 
 /**
- * Append an event: persist it to the `events` row, assign its DB-assigned id,
- * remember it on the run, and fan it out to live SSE subscribers.
+ * Serialize + persist an event append. Appends to the same run are chained on
+ * a per-run tail promise so the *storage order* matches the caller order even
+ * when callers race (flush-then-finalize in the runner relies on this).
  */
-export async function appendEvent(
+const appendTails = new Map<string, Promise<unknown>>();
+
+function enqueueAppend<T>(
+  runId: string,
+  task: () => T | Promise<T>,
+): Promise<T> {
+  const previous = appendTails.get(runId) ?? Promise.resolve();
+  const next = previous.then(task);
+  next.catch(() => {
+    // A failed append must not reject/pause later appends; each caller still
+    // observes its own error through the returned promise.
+  });
+  appendTails.set(runId, next);
+  return next;
+}
+
+/** Drain the append queue for a run — await before finalizing so every event
+ *  this process emitted is in Postgres first. */
+export async function flushAppends(...runIds: string[]): Promise<void> {
+  await Promise.all(
+    runIds.map((runId) =>
+      Promise.resolve(appendTails.get(runId) ?? Promise.resolve()),
+    ),
+  );
+}
+
+/**
+ * Append an event: persist it to the `events` row, assign its DB-assigned id,
+ * remember it on the run, and fan it out to live SSE subscribers. Appends to
+ * one run are serialized; concurrent callers see run-consistent ordering.
+ */
+export function appendEvent(
+  run: StoredRun,
+  input: RunEventInput,
+): Promise<RunEvent> {
+  return enqueueAppend(run.id, () => doAppendEvent(run, input));
+}
+
+async function doAppendEvent(
   run: StoredRun,
   input: RunEventInput,
 ): Promise<RunEvent> {
@@ -311,17 +396,8 @@ export async function appendEvent(
   return event;
 }
 
-/** Mark a run as executing (persists status and started_at). */
-export async function markRunning(run: StoredRun): Promise<void> {
-  run.status = "running";
-  run.updatedAt = Date.now();
-  await getDb()
-    .update(runsTable)
-    .set({ status: "running", updatedAt: new Date(run.updatedAt) })
-    .where(eq(runsTable.id, run.id));
-}
-
-/** Persist step/usage counters surfaced on the run summary. */
+/** Persist step/usage counters surfaced on the run summary. Skipped when we no
+ *  longer own the run's lease (it was reclaimed by another worker). */
 export async function persistStats(run: StoredRun): Promise<void> {
   const usage = run.stats?.usage;
   await getDb()
@@ -332,28 +408,60 @@ export async function persistStats(run: StoredRun): Promise<void> {
       outputTokens: usage?.outputTokens ?? 0,
       updatedAt: new Date(),
     })
-    .where(eq(runsTable.id, run.id));
+    .where(
+      run.leaseId
+        ? and(eq(runsTable.id, run.id), eq(runsTable.leaseId, run.leaseId))
+        : eq(runsTable.id, run.id),
+    );
 }
 
-/** Move a run to a (usually terminal) status, remembering the failure reason. */
+/** Statuses a run can be finalized as (only terminal transitions are legal). */
+export type TerminalRunStatus = Exclude<
+  RunStatus,
+  "queued" | "running" | "waiting_input"
+>;
+
+/**
+ * Move a run to a (usually terminal) status, remembering the failure reason.
+ * Uses the lease-guarded transition in `packages/db`, so a lost lease makes
+ * the write a no-op (the reclaiming worker owns the row now). Returns whether
+ * the transition ran; subsequent callers should re-read the row for truth.
+ */
 export async function finishRun(
   run: StoredRun,
-  status: RunStatus,
+  status: TerminalRunStatus,
   error?: string,
-): Promise<void> {
-  run.status = status;
-  run.updatedAt = Date.now();
-  if (error !== undefined) run.error = error;
-  const terminal = isTerminalStatus(status);
-  await getDb()
-    .update(runsTable)
-    .set({
-      status,
-      error: error ?? run.error ?? null,
-      ...(terminal ? { endedAt: new Date() } : {}),
-      updatedAt: new Date(run.updatedAt),
-    })
-    .where(eq(runsTable.id, run.id));
+): Promise<boolean> {
+  const applied = await finalizeRun(getDb(), {
+    runId: run.id,
+    leaseId: run.leaseId ?? "",
+    status,
+    error,
+  });
+  if (applied) {
+    run.status = status;
+    run.updatedAt = Date.now();
+    if (error !== undefined) run.error = error;
+    run.leaseId = undefined;
+  }
+  return applied;
+}
+
+/**
+ * Cancel a run: persist the durable cancellation request (visible to every
+ * worker instance) and abort this process's loop if it happens to be running
+ * it. Terminal and already-cancelled runs are a no-op. Returns whether the
+ * cancellation was newly requested.
+ */
+export async function cancelRun(
+  run: StoredRun,
+  reason?: string,
+): Promise<boolean> {
+  const newly = await requestCancellation(getDb(), { runId: run.id, reason });
+  if (newly && !run.controller.signal.aborted) {
+    run.controller.abort();
+  }
+  return newly;
 }
 
 export function isRunning(run: StoredRun): boolean {
@@ -377,6 +485,47 @@ export function toRunSummary(run: StoredRun): RunSummary {
   };
 }
 
-export function toRunDetail(run: StoredRun): RunDetail {
-  return { ...toRunSummary(run), events: run.events };
+export async function toRunDetail(run: StoredRun): Promise<RunDetail> {
+  const events = await loadEvents(run.id);
+  return { ...toRunSummary(run), events };
+}
+
+export interface RunSnapshot {
+  status: RunStatus;
+  updatedAt: number;
+  events: RunEvent[];
+}
+
+/**
+ * Events appended after `afterId` (exclusive), straight from Postgres so any
+ * worker/instance's appends are visible. The current row status rides along
+ * so SSE clients can close on terminal without replaying history.
+ */
+export async function listEventsAfter(
+  runId: string,
+  afterId: number,
+): Promise<RunSnapshot> {
+  const [rows, runRows] = await Promise.all([
+    getDb()
+      .select()
+      .from(eventsTable)
+      .where(and(eq(eventsTable.runId, runId), gt(eventsTable.id, afterId)))
+      .orderBy(asc(eventsTable.id)),
+    getDb()
+      .select({ status: runsTable.status, updatedAt: runsTable.updatedAt })
+      .from(runsTable)
+      .where(eq(runsTable.id, runId)),
+  ]);
+  const run = runRows[0];
+  return {
+    status: run?.status ?? "failed",
+    updatedAt: run?.updatedAt.getTime() ?? 0,
+    events: rows.map((row) => ({
+      id: row.id,
+      runId: row.runId,
+      type: row.type as RunEvent["type"],
+      ts: row.createdAt.getTime(),
+      data: (row.payload as Record<string, unknown>) ?? {},
+    })) as unknown as RunEvent[],
+  };
 }

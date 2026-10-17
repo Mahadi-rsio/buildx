@@ -1,13 +1,17 @@
 import { isTerminalStatus } from "@buildx/shared";
 import { getCurrentUser, unauthorized } from "@/lib/auth/server";
 import { findOwnedRun, notFound } from "@/lib/authz";
-import { appendEvent, finishRun, toRunSummary } from "@/lib/store";
+import { cancelRun, getRun, toRunSummary } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
 /**
- * `POST /api/runs/:id/stop` — abort the loop. A queued run is cancelled
- * immediately; a running one stops as soon as `runTask` observes the abort.
+ * `POST /api/runs/:id/stop` — durable, cross-instance cancellation. Persists
+ * the cancel flag on the run row (`cancelled_at`) so whichever worker holds
+ * the lease observes it and stops the loop, then aborts the process-local
+ * AbortController in case this process is the one executing it. A queued run
+ * is cancelled once the worker claims it; a running one stops as soon as the
+ * agent loop sees the abort.
  */
 export async function POST(
   _request: Request,
@@ -24,17 +28,14 @@ export async function POST(
     return Response.json(toRunSummary(run));
   }
 
-  run.controller.abort();
+  const newlyRequested = await cancelRun(
+    run,
+    "stopped by the user",
+  );
+  void newlyRequested;
 
-  if (run.status === "queued") {
-    const message = "stopped before the agent started";
-    await appendEvent(run, {
-      type: "status",
-      data: { status: "cancelled", message },
-      ts: Date.now(),
-    });
-    await finishRun(run, "cancelled", message);
-  }
-
-  return Response.json(toRunSummary(run));
+  // Re-read so the response reflects the persisted state even when the
+  // cancelling process isn't the one executing the run.
+  const refreshed = (await getRun(run.id)) ?? run;
+  return Response.json(toRunSummary(refreshed));
 }

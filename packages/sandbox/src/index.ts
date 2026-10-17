@@ -15,6 +15,12 @@ export interface ExecOptions {
   env?: Record<string, string>;
   /** Kill the command after this many milliseconds. */
   timeoutMs?: number;
+  /**
+   * Abort the command (kills the process tree) when this signal fires. The
+   * iterator then throws an `AbortError` so callers can distinguish worker
+   * cancellation from a command that simply failed.
+   */
+  signal?: AbortSignal;
 }
 
 export interface ExecChunk {

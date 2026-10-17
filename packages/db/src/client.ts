@@ -54,7 +54,7 @@ export * from "./schema";
 export { Pool } from "pg";
 export { sql } from "drizzle-orm";
 /** Query helpers for building where clauses on the shared schema objects. */
-export { and, asc, desc, eq, inArray, isNull, like, not, or } from "drizzle-orm";
+export { and, asc, desc, eq, gt, inArray, isNull, like, not, or } from "drizzle-orm";
 
 /**
  * Take a Postgres advisory lock for the duration of `fn`. Only one process ever

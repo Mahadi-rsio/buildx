@@ -10,7 +10,6 @@ import {
 } from "@buildx/db";
 import { getCurrentUser, unauthorized } from "@/lib/auth/server";
 import { getDb } from "@buildx/db";
-import { startRun } from "@/lib/runner";
 import { createRun, listRunsForUser, toRunSummary } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
@@ -24,8 +23,11 @@ export async function GET(): Promise<Response> {
 }
 
 /**
- * `POST /api/runs` — create a run and start it detached
- * (arcetecture.md §5.2, simplified from `/api/projects/:id/tasks`).
+ * `POST /api/runs` — enqueue a run as a `queued` row (arcetecture.md §5.2,
+ * §9). Execution is driven by the durable job worker once it claims the run's
+ * lease; the request returns as soon as the row is persisted. A repeat call
+ * with the same `idempotencyKey` returns the original run instead of queuing
+ * a second one.
  */
 export async function POST(request: Request): Promise<Response> {
   const user = await getCurrentUser();
@@ -78,6 +80,7 @@ export async function POST(request: Request): Promise<Response> {
     task: parsed.data.task.trim(),
     model: selectedModel,
     maxSteps: parsed.data.maxSteps ?? config.maxSteps,
+    idempotencyKey: parsed.data.idempotencyKey,
     usage: {
       cpuHoursUsed: Number((usedCpuSeconds / 3600).toFixed(2)),
       cpuHoursLimit: MONTHLY_CPU_HOURS,
@@ -87,8 +90,7 @@ export async function POST(request: Request): Promise<Response> {
     },
   });
 
-  // Fire and forget: `startRun` never rejects and appends every step itself.
-  void startRun(run);
-
+  // Execution is queued, not tied to this request: the job worker (spawned by
+  // instrumentation) claims the run and drives `startRun`.
   return Response.json(toRunSummary(run), { status: 201 });
 }

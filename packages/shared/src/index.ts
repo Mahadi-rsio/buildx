@@ -136,6 +136,7 @@ export const createRunSchema = z.object({
   task: z.string().min(1, "task is required"),
   model: z.string().min(1).optional(),
   maxSteps: z.number().int().positive().max(1000).optional(),
+  idempotencyKey: z.string().min(1).max(128).optional(),
 });
 export type CreateRunRequest = z.infer<typeof createRunSchema>;
 

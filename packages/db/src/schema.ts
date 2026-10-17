@@ -251,6 +251,15 @@ export const runs = pgTable(
     startedAt: timestamp("started_at", { withTimezone: true }),
     endedAt: timestamp("ended_at", { withTimezone: true }),
     error: text("error"),
+    /** Claim token of the worker running this run (null while queued). */
+    leaseId: text("lease_id"),
+    /** Instant the worker's lease expires; broken leases are recovered. */
+    leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+    /** Set by `POST /api/runs/:id/stop`, honored by the executing worker. */
+    cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
+    cancelReason: text("cancel_reason"),
+    /** Optional dedupe key: at most one run per (user, key) pair. */
+    idempotencyKey: text("idempotency_key"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -261,11 +270,44 @@ export const runs = pgTable(
   },
   (table) => [
     index("runs_taskId_idx").on(table.taskId),
+    // Queue scanner: queued runs, oldest first, on the `FOR UPDATE SKIP LOCKED`
+    // claim path used by the job worker.
+    index("runs_status_createdAt_idx").on(table.status, table.createdAt),
     // At most one running run per user (plan phase 4).
     uniqueIndex("runs_one_active_per_user_idx")
       .on(table.userId)
       .where(sql`${table.status} = 'running'`),
+    // Idempotency: redirect a retried POST to the original run.
+    uniqueIndex("runs_idempotency_key_idx")
+      .on(table.userId, table.idempotencyKey)
+      .where(sql`${table.idempotencyKey} IS NOT NULL`),
   ],
+);
+
+/**
+ * Durable workspace lock (arcetecture.md §9). Grants exclusive mutation rights
+ * on a workspace to the worker holding the lease. Today `workspace_id` equals
+ * the run id (each run gets its own scratch workspace); keeping the lock as its
+ * own row means shared workspaces and external writers can join later without a
+ * schema change.
+ */
+export const workspaceLocks = pgTable(
+  "workspace_locks",
+  {
+    workspaceId: text("workspace_id").primaryKey(),
+    leaseId: text("lease_id").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .$onUpdate(() => new Date())
+      .notNull(),
+  },
+  (table) => [index("workspace_locks_expiresAt_idx").on(table.expiresAt)],
 );
 
 export const messages = pgTable(
