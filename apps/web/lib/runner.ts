@@ -3,7 +3,13 @@ import { join } from "node:path";
 import { runTask } from "@buildx/agent";
 import type { RunStatus } from "@buildx/shared";
 import { envStatus, isTerminalStatus } from "@buildx/shared";
-import { appendEvent, finishRun, type StoredRun } from "./store";
+import {
+  appendEvent,
+  finishRun,
+  markRunning,
+  persistStats,
+  type StoredRun,
+} from "./store";
 import { captureWorkspaceSnapshot } from "./workspace-fs";
 import { createSandbox, sandboxSettings } from "./sandbox";
 import { sourceForRun } from "./workspace-source";
@@ -36,18 +42,26 @@ async function seedWorkspace(run: StoredRun): Promise<void> {
  * Ensure the run ends with exactly one terminal `status` event so SSE clients
  * always see the stream close, even when the loop dies before emitting its own.
  */
-function closeRun(run: StoredRun, status: RunStatus, message?: string): void {
+async function closeRun(
+  run: StoredRun,
+  status: RunStatus,
+  message?: string,
+): Promise<void> {
   const last = [...run.events].reverse().find((event) => event.type === "status");
   if (!last || !isTerminalStatus(last.data.status)) {
-    appendEvent(run, { type: "status", data: { status, message }, ts: Date.now() });
+    await appendEvent(run, {
+      type: "status",
+      data: { status, message },
+      ts: Date.now(),
+    });
   }
-  finishRun(run, status, status === "failed" ? message : undefined);
+  await finishRun(run, status, status === "failed" ? message : undefined);
 }
 
 /**
  * Execute one queued run: seed + start the sandbox, drive `runTask`, append
- * every step to the in-memory event store, and tear the sandbox down. Runs
- * detached from the request that created it (arcetecture.md §5.2).
+ * every step to the event store, and tear the sandbox down. Runs detached from
+ * the request that created it (arcetecture.md §5.2).
  */
 export async function startRun(run: StoredRun): Promise<void> {
   // Stopped before we got scheduled — the stop route already closed the run.
@@ -57,8 +71,8 @@ export async function startRun(run: StoredRun): Promise<void> {
   if (!config.hasApiKey) {
     const message =
       "OPENAI_API_KEY is not set. Copy .env.example to .env.local, add your key, and restart the dev server.";
-    appendEvent(run, { type: "error", data: { message }, ts: Date.now() });
-    closeRun(run, "failed", message);
+    await appendEvent(run, { type: "error", data: { message }, ts: Date.now() });
+    await closeRun(run, "failed", message);
     return;
   }
 
@@ -70,8 +84,7 @@ export async function startRun(run: StoredRun): Promise<void> {
   try {
     await sandbox.start();
     await seedWorkspace(run);
-    run.status = "running";
-    run.updatedAt = Date.now();
+    await markRunning(run);
 
     // Local mode snapshots immediately; box mode snapshots lazily once a
     // workspace has actually been restored.
@@ -91,7 +104,8 @@ export async function startRun(run: StoredRun): Promise<void> {
     });
 
     run.stats = { steps: result.steps, usage: result.usage };
-    closeRun(
+    await persistStats(run);
+    await closeRun(
       run,
       result.status,
       result.status === "failed" ? "the agent run failed" : undefined,
@@ -101,8 +115,12 @@ export async function startRun(run: StoredRun): Promise<void> {
     if (/monthly CPU budget exhausted/i.test(message)) {
       run.workspace.message = "Your work is saved.";
     }
-    appendEvent(run, { type: "error", data: { message }, ts: Date.now() });
-    closeRun(
+    await appendEvent(run, {
+      type: "error",
+      data: { message },
+      ts: Date.now(),
+    });
+    await closeRun(
       run,
       run.controller.signal.aborted ? "cancelled" : "failed",
       message,

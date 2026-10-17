@@ -1,7 +1,7 @@
 import type { RunEvent } from "@buildx/shared";
 import { isTerminalStatus } from "@buildx/shared";
 import { getCurrentUser, unauthorized } from "@/lib/auth/server";
-import { getRun } from "@/lib/store";
+import { findOwnedRun, notFound } from "@/lib/authz";
 
 export const dynamic = "force-dynamic";
 
@@ -31,13 +31,12 @@ export async function GET(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
-  if (!(await getCurrentUser())) return unauthorized();
+  const user = await getCurrentUser();
+  if (!user) return unauthorized();
 
   const { id } = await params;
-  const run = getRun(id);
-  if (!run) {
-    return Response.json({ error: "not_found", id }, { status: 404 });
-  }
+  const run = await findOwnedRun(id, user.id);
+  if (!run) return notFound(id);
 
   const url = new URL(request.url);
   const resume = request.headers.get("last-event-id");

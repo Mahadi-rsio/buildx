@@ -11,14 +11,16 @@ import {
 import { getCurrentUser, unauthorized } from "@/lib/auth/server";
 import { getDb } from "@buildx/db";
 import { startRun } from "@/lib/runner";
-import { createRun, listRuns, toRunSummary } from "@/lib/store";
+import { createRun, listRunsForUser, toRunSummary } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
-/** `GET /api/runs` — newest first. */
+/** `GET /api/runs` — the caller's runs, newest first. */
 export async function GET(): Promise<Response> {
-  if (!(await getCurrentUser())) return unauthorized();
-  return Response.json({ runs: listRuns().map(toRunSummary) });
+  const user = await getCurrentUser();
+  if (!user) return unauthorized();
+  const runs = await listRunsForUser(user.id);
+  return Response.json({ runs: runs.map(toRunSummary) });
 }
 
 /**
@@ -70,7 +72,7 @@ export async function POST(request: Request): Promise<Response> {
     dailyRequestCount(db, user.id, day),
   ]);
 
-  const run = createRun({
+  const run = await createRun({
     userId: user.id,
     workspaceName: user.name?.trim() || user.email.split("@")[0] || "workspace",
     task: parsed.data.task.trim(),

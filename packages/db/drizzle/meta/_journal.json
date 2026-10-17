@@ -15,6 +15,13 @@
       "when": 1792142411289,
       "tag": "0001_busy_killer_shrike",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792204428261,
+      "tag": "0002_little_randall_flagg",
+      "breakpoints": true
     }
   ]
 }

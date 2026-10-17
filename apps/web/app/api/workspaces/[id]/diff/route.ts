@@ -1,5 +1,5 @@
 import { getCurrentUser, unauthorized } from "@/lib/auth/server";
-import { getRun, getRunByWorkspaceId } from "@/lib/store";
+import { findOwnedRun, notFound } from "@/lib/authz";
 import {
   captureWorkspaceSnapshot,
   compareAgainstBaseline,
@@ -24,13 +24,12 @@ export async function GET(
   _request: Request,
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
-  if (!(await getCurrentUser())) return unauthorized();
+  const user = await getCurrentUser();
+  if (!user) return unauthorized();
 
   const { id } = await params;
-  const run = getRun(id) ?? getRunByWorkspaceId(id);
-  if (!run) {
-    return Response.json({ error: "not_found", id }, { status: 404 });
-  }
+  const run = await findOwnedRun(id, user.id);
+  if (!run) return notFound(id);
 
   try {
     const source = sourceForRun(run);

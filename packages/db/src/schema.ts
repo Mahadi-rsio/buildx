@@ -238,6 +238,12 @@ export const runs = pgTable(
     }),
     model: text("model"),
     status: text("status").$type<RunStatus>().notNull().default("queued"),
+    /** Prompt given to the agent (mirrors `tasks.prompt` for ad-hoc runs created
+     *  through the dashboard, which own no `tasks` row). */
+    task: text("task"),
+    /** Human label for the sandbox workspace backing this run. */
+    workspaceName: text("workspace_name"),
+    maxSteps: integer("max_steps").notNull().default(40),
     stepCount: integer("step_count").notNull().default(0),
     inputTokens: integer("input_tokens").notNull().default(0),
     outputTokens: integer("output_tokens").notNull().default(0),
@@ -247,6 +253,10 @@ export const runs = pgTable(
     error: text("error"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .$onUpdate(() => new Date())
       .notNull(),
   },
   (table) => [
