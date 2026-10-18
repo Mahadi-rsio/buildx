@@ -88,7 +88,10 @@ export async function processQueueMessage(
   const startRunFn = deps.startRun ?? startRun;
 
   const { runId } = msg.body;
+  const correlationId = msg.body.correlationId || runId;
   const attempts = msg.attempts ?? 1;
+
+  console.log(`[queue-consumer][${correlationId}] processing message for run ${runId} (attempt ${attempts})`);
 
   // 1. Idempotency & state check: inspect existing run in Neon
   const [existingRow] = await db
@@ -97,7 +100,7 @@ export async function processQueueMessage(
     .where(eq(runsTable.id, runId));
 
   if (!existingRow) {
-    console.warn(`[queue-consumer] run ${runId} not found in database; acknowledging`);
+    console.warn(`[queue-consumer][${correlationId}] run ${runId} not found in database; acknowledging`);
     msg.ack();
     return;
   }
@@ -234,7 +237,9 @@ export async function processQueueMessage(
     }
 
     // 5. Execute run against remote Box sandbox
+    console.log(`[queue-consumer][${correlationId}] starting run execution for ${runId}`);
     await startRunFn(run);
+    console.log(`[queue-consumer][${correlationId}] finished run execution for ${runId}`);
 
     // If cancellation was requested during execution
     if (run.runtime.controller.signal.aborted) {
@@ -244,7 +249,7 @@ export async function processQueueMessage(
     msg.ack();
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
-    console.error(`[queue-consumer] execution error on run ${runId}:`, error);
+    console.error(`[queue-consumer][${correlationId}] execution error on run ${runId}:`, errorMsg);
 
     // Ensure remote Box is cleaned up/suspended on error
     await cancelRemoteBoxExecution(run.userId);

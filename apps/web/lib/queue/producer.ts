@@ -20,19 +20,22 @@ export async function dispatchRunToQueue(
   message: RunDispatchMessage,
   options: DispatchRunOptions = {},
 ): Promise<boolean> {
+  const correlationId = message.correlationId || message.runId;
+  console.log(`[queue-producer][${correlationId}] dispatching run ${message.runId} to Cloudflare Queue`);
   const queue = options.queue ?? getCloudflareBindings().BUILDX_QUEUE;
   if (!queue) {
-    console.warn("[queue-producer] no queue binding available");
+    console.warn(`[queue-producer][${correlationId}] no queue binding available`);
     return false;
   }
 
   try {
     await queue.send(message);
+    console.log(`[queue-producer][${correlationId}] message sent to queue successfully for run ${message.runId}`);
 
     if (message.outboxId && options.db) {
       await markOutboxPublished(options.db, message.outboxId).catch((err) => {
         console.error(
-          `[queue-producer] failed to mark outbox ${message.outboxId} published`,
+          `[queue-producer][${correlationId}] failed to mark outbox ${message.outboxId} published`,
           err,
         );
       });
@@ -42,8 +45,8 @@ export async function dispatchRunToQueue(
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
     console.error(
-      `[queue-producer] failed to dispatch run ${message.runId} to queue`,
-      error,
+      `[queue-producer][${correlationId}] failed to dispatch run ${message.runId} to queue:`,
+      errorMsg,
     );
 
     if (message.outboxId && options.db) {
@@ -52,7 +55,7 @@ export async function dispatchRunToQueue(
         error: errorMsg,
       }).catch((err) => {
         console.error(
-          `[queue-producer] failed to record outbox ${message.outboxId} failure`,
+          `[queue-producer][${correlationId}] failed to record outbox ${message.outboxId} failure:`,
           err,
         );
       });

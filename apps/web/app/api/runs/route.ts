@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { createRunSchema, envStatus } from "@buildx/shared";
 import { getCurrentUser, unauthorized } from "@/lib/auth/server";
 import { listRunsForUser, toRunSummary } from "@/lib/store";
@@ -32,9 +33,15 @@ export async function GET(request?: Request): Promise<Response> {
  * rejected with `429` before anything is queued.
  */
 export async function POST(request: Request): Promise<Response> {
+  const correlationId = request.headers.get("x-correlation-id") || randomUUID();
   try {
+    console.log(`[POST /api/runs][${correlationId}] run creation request received`);
     const user = await getCurrentUser(request.headers);
-    if (!user) return unauthorized();
+    if (!user) {
+      console.warn(`[POST /api/runs][${correlationId}] unauthenticated user`);
+      return unauthorized();
+    }
+    console.log(`[POST /api/runs][${correlationId}] authenticated user=${user.id}`);
 
     const body = await request.json().catch(() => null);
     const parsed = createRunSchema.safeParse(body);
@@ -58,6 +65,7 @@ export async function POST(request: Request): Promise<Response> {
     }
 
     const selectedModel = parsed.data.model?.trim() || config.model;
+    console.log(`[POST /api/runs][${correlationId}] enqueuing run for user=${user.id} model=${selectedModel}`);
     const result = await enqueueRunForUser({
       user: {
         id: user.id,
@@ -68,9 +76,11 @@ export async function POST(request: Request): Promise<Response> {
       model: selectedModel,
       maxSteps: parsed.data.maxSteps ?? config.maxSteps,
       idempotencyKey: parsed.data.idempotencyKey,
+      correlationId,
     });
 
     if (result.kind === "quota_exhausted") {
+      console.warn(`[POST /api/runs][${correlationId}] quota exhausted for user=${user.id}`);
       return Response.json(
         {
           error: "daily_quota_exhausted",
@@ -81,11 +91,12 @@ export async function POST(request: Request): Promise<Response> {
       );
     }
 
+    console.log(`[POST /api/runs][${correlationId}] run created with id=${result.run.id} status=${result.run.status}`);
     // Newly queued runs are 201; idempotent replays return the original run.
     const status = result.kind === "created" ? 201 : 200;
     return Response.json(toRunSummary(result.run), { status });
   } catch (error: unknown) {
-    console.error("[POST /api/runs] error:", error);
+    console.error(`[POST /api/runs][${correlationId}] error:`, error);
     const message =
       error instanceof Error ? error.message : "Internal Server Error";
     return Response.json(

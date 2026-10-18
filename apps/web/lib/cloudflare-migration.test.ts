@@ -262,3 +262,124 @@ test("kv-cache: stores and retrieves cache with TTL", async () => {
   const val = await getCache<{ foo: string }>("test:disposable:key");
   assert.deepEqual(val, { foo: "bar" });
 });
+
+// 7. Queue dispatch failure handling
+test(
+  "queue dispatch failure: updates persisted run to failed with a safe, visible error",
+  { skip: skipReason },
+  async () => {
+    const userId = await newUser();
+    const failingQueue = {
+      async send() {
+        throw new Error("Cloudflare Queue binding unavailable or network error");
+      },
+    };
+
+    const res = await enqueueRunForUser({
+      user: { id: userId, email: `cf-fail-${userId}@test.local` },
+      task: "test dispatch failure task",
+      model: "gpt-4o",
+      maxSteps: 10,
+      db: db!,
+      queue: failingQueue,
+    });
+
+    assert.equal(res.kind, "created");
+    if (res.kind === "created") {
+      createdRuns.push(res.run.id);
+
+      // Returned run must reflect failed status and safe error
+      assert.equal(res.run.status, "failed");
+      assert.equal(
+        res.run.error,
+        "Failed to dispatch run to execution queue",
+      );
+
+      // Persisted row in Neon must also be marked failed
+      const [dbRow] = await db!
+        .select()
+        .from(runsTable)
+        .where(eq(runsTable.id, res.run.id));
+      assert.ok(dbRow);
+      assert.equal(dbRow.status, "failed");
+      assert.equal(
+        dbRow.error,
+        "Failed to dispatch run to execution queue",
+      );
+      assert.ok(dbRow.endedAt);
+
+      // Outbox failure must be recorded
+      const [outboxRow] = await db!
+        .select()
+        .from(outbox)
+        .where(eq(outbox.runId, res.run.id));
+      assert.ok(outboxRow);
+      assert.ok(outboxRow.lastError?.includes("Cloudflare Queue binding unavailable"));
+    }
+  },
+);
+
+// 8. Successful end-to-end queue dispatch and consumer execution
+test(
+  "end-to-end queue dispatch and consumer execution: awaited publish and consumer claim",
+  { skip: skipReason },
+  async () => {
+    const userId = await newUser();
+    const dispatchedMessages: unknown[] = [];
+    const testQueue = {
+      async send(msg: unknown) {
+        dispatchedMessages.push(msg);
+      },
+    };
+
+    const res = await enqueueRunForUser({
+      user: { id: userId, email: `cf-e2e-${userId}@test.local` },
+      task: "Hi",
+      model: "gpt-4o",
+      maxSteps: 10,
+      db: db!,
+      queue: testQueue,
+    });
+
+    assert.equal(res.kind, "created");
+    if (res.kind === "created") {
+      createdRuns.push(res.run.id);
+
+      assert.equal(res.run.status, "queued");
+      assert.equal(dispatchedMessages.length, 1);
+
+      // Outbox must be marked published immediately because publish was awaited
+      const [outboxRow] = await db!
+        .select()
+        .from(outbox)
+        .where(eq(outbox.runId, res.run.id));
+      assert.ok(outboxRow);
+      assert.equal(outboxRow.status, "published");
+      assert.ok(outboxRow.publishedAt);
+
+      // Consumer processes the message
+      let executed = false;
+      let ackCalled = false;
+      const queueMsg = {
+        id: "msg-e2e-1",
+        body: dispatchedMessages[0] as { runId: string },
+        ack() {
+          ackCalled = true;
+        },
+        retry() {},
+      };
+
+      await processQueueMessage(queueMsg, {
+        db: db!,
+        startRun: async (run) => {
+          executed = true;
+          assert.equal(run.id, res.run.id);
+        },
+      });
+
+      assert.equal(executed, true, "startRun must be called by the queue consumer");
+      assert.equal(ackCalled, true, "message must be acknowledged by consumer");
+    }
+  },
+);
+

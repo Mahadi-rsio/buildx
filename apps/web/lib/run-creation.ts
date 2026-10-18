@@ -14,6 +14,7 @@ import {
   insertOutboxMessage,
   type Db,
 } from "@buildx/db";
+import type { QueueBinding } from "./cloudflare/context";
 import type { WorkspaceUsage } from "./types";
 import {
   getRunForIdempotencyKey,
@@ -49,8 +50,11 @@ export interface EnqueueRunInput {
   model: string;
   maxSteps: number;
   idempotencyKey?: string;
+  correlationId?: string;
   /** Injectable for tests; defaults to the app's database. */
   db?: Db;
+  /** Injectable queue binding for tests. */
+  queue?: QueueBinding;
 }
 
 async function usageFor(db: Db, userId: string): Promise<WorkspaceUsage> {
@@ -184,21 +188,49 @@ export async function enqueueRunForUser(
     }
 
     if (result.kind === "created" && result.outboxId) {
-      // Asynchronously attempt dispatch to Cloudflare Queue (and mark outbox published on success)
-      void dispatchRunToQueue(
-        {
-          runId: result.row.id,
-          idempotencyKey: input.idempotencyKey,
-          outboxId: result.outboxId,
-          step: 0,
-        },
-        { db },
-      ).catch((err) => {
-        console.error(
-          `[run-creation] initial queue dispatch failed for ${result.row.id}`,
-          err,
+      const correlationId = input.correlationId || result.row.id;
+      console.log(`[run-creation][${correlationId}] awaiting queue dispatch for run=${result.row.id} outbox=${result.outboxId}`);
+      let dispatched = false;
+      try {
+        dispatched = await dispatchRunToQueue(
+          {
+            runId: result.row.id,
+            idempotencyKey: input.idempotencyKey,
+            outboxId: result.outboxId,
+            step: 0,
+            correlationId,
+          },
+          { db, queue: input.queue },
         );
-      });
+      } catch (err) {
+        console.error(`[run-creation][${correlationId}] queue dispatch threw error for run=${result.row.id}:`, err);
+        dispatched = false;
+      }
+
+      if (!dispatched) {
+        console.error(`[run-creation][${correlationId}] queue dispatch failed for run=${result.row.id}; updating status to failed`);
+        const now = new Date();
+        const safeError = "Failed to dispatch run to execution queue";
+        await db
+          .update(runsTable)
+          .set({
+            status: "failed",
+            endedAt: now,
+            error: safeError,
+            updatedAt: now,
+          })
+          .where(eq(runsTable.id, result.row.id))
+          .catch((err) => {
+            console.error(`[run-creation][${correlationId}] failed to update run to failed:`, err);
+          });
+
+        result.row.status = "failed";
+        result.row.error = safeError;
+        result.row.endedAt = now;
+        result.row.updatedAt = now;
+      } else {
+        console.log(`[run-creation][${correlationId}] queue dispatch succeeded for run=${result.row.id}`);
+      }
     }
 
     const run = await hydrateRun(result.row);

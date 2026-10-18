@@ -18,15 +18,10 @@ export function proxy(request: NextRequest): NextResponse {
   const { pathname } = request.nextUrl;
   const hasSession = Boolean(getSessionCookie(request));
 
-  // Already signed in: keep users off the auth pages.
-  if (hasSession && PUBLIC_AUTH_PATHS.has(pathname)) {
-    return NextResponse.redirect(new URL("/", request.url));
-  }
+  // Public auth pages are always reachable.
+  if (PUBLIC_AUTH_PATHS.has(pathname)) return NextResponse.next();
 
   if (hasSession) return NextResponse.next();
-
-  // Public auth pages are reachable without a session.
-  if (PUBLIC_AUTH_PATHS.has(pathname)) return NextResponse.next();
 
   // API callers get a JSON 401 rather than an HTML redirect.
   if (pathname.startsWith("/api/")) {

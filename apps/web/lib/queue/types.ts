@@ -4,4 +4,5 @@ export interface RunDispatchMessage {
   step?: number;
   outboxId?: string;
   attempt?: number;
+  correlationId?: string;
 }

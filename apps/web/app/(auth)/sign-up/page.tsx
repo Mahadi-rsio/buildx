@@ -1,3 +1,6 @@
+import { headers } from "next/headers";
+import { redirect } from "next/navigation";
+import { auth } from "@/lib/auth/auth";
 import {
   Card,
   CardContent,
@@ -9,7 +12,11 @@ import { SignUpForm } from "@/components/auth/sign-up-form";
 
 export const dynamic = "force-dynamic";
 
-export default function SignUpPage() {
+export default async function SignUpPage() {
+  const session = await auth.api.getSession({ headers: await headers() });
+  if (session) {
+    redirect("/");
+  }
   return (
     <Card>
       <CardHeader>
