@@ -14,10 +14,10 @@ export const dynamic = "force-dynamic";
  * agent loop sees the abort.
  */
 export async function POST(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ): Promise<Response> {
-  const user = await getCurrentUser();
+  const user = await getCurrentUser(request.headers);
   if (!user) return unauthorized();
 
   const { id } = await params;

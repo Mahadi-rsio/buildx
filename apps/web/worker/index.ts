@@ -6,19 +6,22 @@
 import openNextHandler from "../.open-next/worker.js";
 import { handleQueueBatch, type QueueBatch } from "../lib/queue/consumer";
 import type { RunDispatchMessage } from "../lib/queue/types";
+import { setWorkerEnv } from "../lib/cloudflare/context";
 
 export default {
   // Re-export Next.js HTTP/SSE fetch handler from OpenNext
   async fetch(request: Request, env: unknown, ctx: unknown): Promise<Response> {
+    setWorkerEnv(env);
     return (openNextHandler as { fetch: (req: Request, env: unknown, ctx: unknown) => Promise<Response> }).fetch(request, env, ctx);
   },
 
   // Cloudflare Queue consumer entry point
   async queue(
     batch: QueueBatch<RunDispatchMessage>,
-    _env: unknown,
+    env: unknown,
     _ctx: unknown,
   ): Promise<void> {
+    setWorkerEnv(env);
     await handleQueueBatch(batch);
   },
 };

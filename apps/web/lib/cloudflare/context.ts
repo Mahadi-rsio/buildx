@@ -128,6 +128,19 @@ export function getSimulatedKV(): MemoryKV {
   return simulatedKV;
 }
 
+let currentWorkerEnv: CloudflareEnv | undefined;
+
+export function setWorkerEnv(env: unknown): void {
+  if (env && typeof env === "object") {
+    currentWorkerEnv = env as CloudflareEnv;
+    for (const [key, val] of Object.entries(env)) {
+      if (typeof val === "string" && val.length > 0) {
+        process.env[key] = val;
+      }
+    }
+  }
+}
+
 /**
  * Safely retrieve Cloudflare environment bindings.
  * Returns real bindings in Cloudflare Workers, or simulated fallbacks in local/test.
@@ -138,6 +151,10 @@ export function getCloudflareBindings(): CloudflareEnv {
     if (ctx && ctx.env) return ctx.env as unknown as CloudflareEnv;
   } catch {
     // Expected when running outside Cloudflare Worker environment (e.g. tests, node scripts)
+  }
+
+  if (currentWorkerEnv) {
+    return currentWorkerEnv;
   }
 
   return {

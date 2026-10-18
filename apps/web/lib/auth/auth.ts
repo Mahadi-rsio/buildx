@@ -23,7 +23,7 @@ export const auth = betterAuth({
   secret,
   baseURL,
   database: drizzleAdapter(getDb(), { provider: "pg", schema }),
-  trustedOrigins: [baseURL],
+  trustedOrigins: [baseURL, "https://buildx.rsioex.workers.dev", "https://buildx.rsioex.workers.dev/api/auth"],
 
   emailAndPassword: {
     enabled: true,

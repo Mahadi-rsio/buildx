@@ -24,19 +24,27 @@ export function useCreateRun() {
             model: args.model?.trim() || undefined,
           }),
         });
-        const data = (await res.json()) as {
-          id?: string;
-          message?: string;
-          error?: string;
-        };
+        const contentType = res.headers.get("content-type") ?? "";
+        let data: { id?: string; message?: string; error?: string } = {};
+        if (contentType.includes("application/json")) {
+          data = (await res.json().catch(() => ({}))) as typeof data;
+        } else {
+          const text = await res.text().catch(() => "");
+          data = { message: text || `HTTP ${res.status} ${res.statusText}` };
+        }
+
         if (!res.ok || !data.id) {
           setError(data.message ?? data.error ?? "Could not start the run");
           return null;
         }
         router.push(`/runs/${data.id}`);
         return data.id;
-      } catch {
-        setError("Network error — is the dev server running?");
+      } catch (err) {
+        setError(
+          err instanceof Error && err.message
+            ? `Failed to start run: ${err.message}`
+            : "Network error — is the dev server running?",
+        );
         return null;
       } finally {
         setSubmitting(false);

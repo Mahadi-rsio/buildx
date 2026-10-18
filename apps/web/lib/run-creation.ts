@@ -94,9 +94,24 @@ export async function enqueueRunForUser(
     database: Db,
     fn: (tx: Db) => Promise<T>,
   ): Promise<T> => {
+    // The neon-http driver does not support multi-statement transactions and
+    // throws "No transactions support in neon-http driver". Execute directly.
+    if (database.constructor?.name === "NeonHttpDatabase") {
+      return fn(database);
+    }
     const db_ = database as Db & { transaction?: (fn: (tx: Db) => Promise<T>) => Promise<T> };
     if (typeof db_.transaction === "function") {
-      return db_.transaction(fn);
+      try {
+        return await db_.transaction(fn);
+      } catch (err) {
+        if (
+          err instanceof Error &&
+          err.message.includes("No transactions support in neon-http driver")
+        ) {
+          return fn(database);
+        }
+        throw err;
+      }
     }
     return fn(database);
   };

@@ -6,11 +6,21 @@ import { enqueueRunForUser } from "@/lib/run-creation";
 export const dynamic = "force-dynamic";
 
 /** `GET /api/runs` — the caller's runs, newest first. */
-export async function GET(): Promise<Response> {
-  const user = await getCurrentUser();
-  if (!user) return unauthorized();
-  const runs = await listRunsForUser(user.id);
-  return Response.json({ runs: runs.map(toRunSummary) });
+export async function GET(request?: Request): Promise<Response> {
+  try {
+    const user = await getCurrentUser(request?.headers);
+    if (!user) return unauthorized();
+    const runs = await listRunsForUser(user.id);
+    return Response.json({ runs: runs.map(toRunSummary) });
+  } catch (error: unknown) {
+    console.error("[GET /api/runs] error:", error);
+    const message =
+      error instanceof Error ? error.message : "Internal Server Error";
+    return Response.json(
+      { error: "internal_error", message, runs: [] },
+      { status: 500 },
+    );
+  }
 }
 
 /**
@@ -22,55 +32,65 @@ export async function GET(): Promise<Response> {
  * rejected with `429` before anything is queued.
  */
 export async function POST(request: Request): Promise<Response> {
-  const user = await getCurrentUser();
-  if (!user) return unauthorized();
+  try {
+    const user = await getCurrentUser(request.headers);
+    if (!user) return unauthorized();
 
-  const body = await request.json().catch(() => null);
-  const parsed = createRunSchema.safeParse(body);
-  if (!parsed.success) {
-    return Response.json(
-      { error: "invalid_request", issues: parsed.error.issues },
-      { status: 400 },
-    );
-  }
+    const body = await request.json().catch(() => null);
+    const parsed = createRunSchema.safeParse(body);
+    if (!parsed.success) {
+      return Response.json(
+        { error: "invalid_request", issues: parsed.error.issues },
+        { status: 400 },
+      );
+    }
 
-  const config = envStatus();
-  if (!config.hasApiKey) {
-    return Response.json(
-      {
-        error: "missing_api_key",
-        message:
-          "OPENAI_API_KEY is not set. Copy .env.example to .env.local, add your key, and restart the dev server.",
+    const config = envStatus();
+    if (!config.hasApiKey) {
+      return Response.json(
+        {
+          error: "missing_api_key",
+          message:
+            "OPENAI_API_KEY is not set. Copy .env.example to .env.local, add your key, and restart the dev server.",
+        },
+        { status: 400 },
+      );
+    }
+
+    const selectedModel = parsed.data.model?.trim() || config.model;
+    const result = await enqueueRunForUser({
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
       },
-      { status: 400 },
-    );
-  }
+      task: parsed.data.task.trim(),
+      model: selectedModel,
+      maxSteps: parsed.data.maxSteps ?? config.maxSteps,
+      idempotencyKey: parsed.data.idempotencyKey,
+    });
 
-  const selectedModel = parsed.data.model?.trim() || config.model;
-  const result = await enqueueRunForUser({
-    user: {
-      id: user.id,
-      name: user.name,
-      email: user.email,
-    },
-    task: parsed.data.task.trim(),
-    model: selectedModel,
-    maxSteps: parsed.data.maxSteps ?? config.maxSteps,
-    idempotencyKey: parsed.data.idempotencyKey,
-  });
+    if (result.kind === "quota_exhausted") {
+      return Response.json(
+        {
+          error: "daily_quota_exhausted",
+          message:
+            "Daily request limit reached. Your work is saved — try again after the Dhaka reset.",
+        },
+        { status: 429 },
+      );
+    }
 
-  if (result.kind === "quota_exhausted") {
+    // Newly queued runs are 201; idempotent replays return the original run.
+    const status = result.kind === "created" ? 201 : 200;
+    return Response.json(toRunSummary(result.run), { status });
+  } catch (error: unknown) {
+    console.error("[POST /api/runs] error:", error);
+    const message =
+      error instanceof Error ? error.message : "Internal Server Error";
     return Response.json(
-      {
-        error: "daily_quota_exhausted",
-        message:
-          "Daily request limit reached. Your work is saved — try again after the Dhaka reset.",
-      },
-      { status: 429 },
+      { error: "internal_error", message },
+      { status: 500 },
     );
   }
-
-  // Newly queued runs are 201; idempotent replays return the original run.
-  const status = result.kind === "created" ? 201 : 200;
-  return Response.json(toRunSummary(result.run), { status });
 }

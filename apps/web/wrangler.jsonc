@@ -39,28 +39,35 @@
   "kv_namespaces": [
     {
       "binding": "BUILDX_KV",
-      "id": "buildx-cache-kv"
+      "id": "e6fc3e1b39e743f5b203d86467e7fa9d"
     }
   ],
   "vars": {
     "BUILDX_SANDBOX_KIND": "box",
     "AGENT_MODEL": "gpt-4o",
     "AGENT_MAX_STEPS": "40",
-    "OPENNEXT_CLOUDFLARE": "true"
+    "OPENNEXT_CLOUDFLARE": "true",
+    "BUILDX_DB_DRIVER": "neon-http"
   },
   "env": {
     "production": {
       "vars": {
         "NODE_ENV": "production",
         "BUILDX_SANDBOX_KIND": "box",
-        "OPENNEXT_CLOUDFLARE": "true"
+        "AGENT_MODEL": "gpt-4o",
+        "AGENT_MAX_STEPS": "40",
+        "OPENNEXT_CLOUDFLARE": "true",
+        "BUILDX_DB_DRIVER": "neon-http"
       }
     },
     "preview": {
       "vars": {
         "NODE_ENV": "production",
         "BUILDX_SANDBOX_KIND": "box",
-        "OPENNEXT_CLOUDFLARE": "true"
+        "AGENT_MODEL": "gpt-4o",
+        "AGENT_MAX_STEPS": "40",
+        "OPENNEXT_CLOUDFLARE": "true",
+        "BUILDX_DB_DRIVER": "neon-http"
       }
     }
   }

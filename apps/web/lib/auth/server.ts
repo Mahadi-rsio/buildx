@@ -3,13 +3,14 @@ import { redirect } from "next/navigation";
 import { auth } from "./auth";
 
 /** Server-side session lookup (validates against the database). */
-export async function getSession() {
-  return auth.api.getSession({ headers: await headers() });
+export async function getSession(customHeaders?: Headers | Record<string, string>) {
+  const h = customHeaders ?? (await headers());
+  return auth.api.getSession({ headers: h });
 }
 
 /** The signed-in user, or `null` when unauthenticated. */
-export async function getCurrentUser() {
-  const session = await getSession();
+export async function getCurrentUser(customHeaders?: Headers | Record<string, string>) {
+  const session = await getSession(customHeaders);
   return session?.user ?? null;
 }
 
