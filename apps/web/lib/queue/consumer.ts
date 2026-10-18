@@ -4,9 +4,11 @@ import {
   claimRunById,
   finalizeRun,
   getDb,
+  heartbeatRun,
   readRunControl,
   releaseRunLease,
   releaseWorkspaceLock,
+  renewWorkspaceLock,
   requeueRun,
   runs as runsTable,
   eq,
@@ -20,7 +22,7 @@ import {
   finishRun,
   type StoredRun,
 } from "../store";
-import { sandboxSettings, tryGetWorkspaceBox } from "../sandbox";
+import { cancelRemoteBoxExecution, sandboxSettings } from "../sandbox";
 import type { RunDispatchMessage } from "./types";
 
 export interface QueueMessage<T = unknown> {
@@ -57,23 +59,7 @@ function workspaceIdentityFor(run: Pick<StoredRun, "id" | "userId">): string {
   return `run:${run.id}`;
 }
 
-/**
- * Handle remote Box cancellation decoupled from database leases.
- * Because database leases cannot automatically stop running processes in the remote VM,
- * remote Box processes are explicitly paused / terminated.
- */
-export async function cancelRemoteBoxExecution(userId: string): Promise<void> {
-  try {
-    const box = await tryGetWorkspaceBox(userId);
-    if (box) {
-      await box.suspend().catch((err) => {
-        console.warn(`[queue-consumer] failed to suspend box for user ${userId}`, err);
-      });
-    }
-  } catch (error) {
-    console.warn(`[queue-consumer] error cancelling remote box for user ${userId}`, error);
-  }
-}
+export { cancelRemoteBoxExecution };
 
 /**
  * Process a single queue message idempotently.
@@ -236,10 +222,69 @@ export async function processQueueMessage(
       return;
     }
 
-    // 5. Execute run against remote Box sandbox
-    console.log(`[queue-consumer][${correlationId}] starting run execution for ${runId}`);
-    await startRunFn(run);
-    console.log(`[queue-consumer][${correlationId}] finished run execution for ${runId}`);
+    // 5. Execute run against remote Box sandbox with active cancellation watchdog
+    let watchdogTimer: ReturnType<typeof setInterval> | undefined;
+    const cleanupWatchdog = () => {
+      if (watchdogTimer) {
+        clearInterval(watchdogTimer);
+        watchdogTimer = undefined;
+      }
+    };
+
+    watchdogTimer = setInterval(() => {
+      void (async () => {
+        try {
+          const ctrl = await readRunControl(db, {
+            runId,
+            leaseId,
+            fencingToken: run.fencingToken,
+          });
+
+          if (!ctrl.ownsLease) {
+            console.warn(`[queue-consumer] lost lease mid-run for ${runId}`);
+            run.runtime.lostOwnership = true;
+            if (!run.runtime.controller.signal.aborted) {
+              run.runtime.controller.abort();
+            }
+            cleanupWatchdog();
+            return;
+          }
+
+          if (ctrl.cancelled) {
+            console.log(`[queue-consumer] observed cancellation in Neon for run ${runId}`);
+            if (!run.runtime.controller.signal.aborted) {
+              run.runtime.controller.abort();
+            }
+            await cancelRemoteBoxExecution(run.userId);
+            cleanupWatchdog();
+            return;
+          }
+
+          // Heartbeat lease and renew workspace lock
+          await heartbeatRun(db, {
+            runId,
+            leaseId,
+            leaseTtlMs: LEASE_TTL_MS,
+            fencingToken: run.fencingToken,
+          }).catch(() => undefined);
+          await renewWorkspaceLock(db, {
+            workspaceId,
+            leaseId,
+            ttlMs: LOCK_TTL_MS,
+          }).catch(() => undefined);
+        } catch (watchdogErr) {
+          console.warn(`[queue-consumer] watchdog error for run ${runId}:`, watchdogErr);
+        }
+      })();
+    }, 1_000);
+
+    try {
+      console.log(`[queue-consumer][${correlationId}] starting run execution for ${runId}`);
+      await startRunFn(run);
+      console.log(`[queue-consumer][${correlationId}] finished run execution for ${runId}`);
+    } finally {
+      cleanupWatchdog();
+    }
 
     // If cancellation was requested during execution
     if (run.runtime.controller.signal.aborted) {

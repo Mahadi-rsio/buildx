@@ -7,6 +7,7 @@ import {
   desc,
   eq,
   gt,
+  notInArray,
   appendGuardedEvent,
   finalizeRun,
   getDb,
@@ -16,6 +17,7 @@ import {
   runs as runsTable,
 } from "@buildx/db";
 import { workspaceDirFor } from "./paths";
+import { cancelRemoteBoxExecution } from "./sandbox";
 import type {
   RunDetail,
   RunStats,
@@ -503,6 +505,12 @@ async function doAppendEvent(
   if (isTerminalStatus(run.status)) {
     throw new StaleRunError(run.id, "appendEvent after terminal status");
   }
+  if (
+    input.type !== "status" &&
+    (run.runtime.controller.signal.aborted || run.status === "cancelled")
+  ) {
+    throw new StaleRunError(run.id, "appendEvent after run cancellation");
+  }
   if (run.leaseExpiresAt && Date.now() >= run.leaseExpiresAt) {
     run.runtime.lostOwnership = true;
     run.runtime.controller.abort();
@@ -632,10 +640,31 @@ export async function cancelRun(
   run: StoredRun,
   reason?: string,
 ): Promise<boolean> {
-  const newly = await requestCancellation(getDb(), { runId: run.id, reason });
+  const db = getDb();
+  const newly = await requestCancellation(db, { runId: run.id, reason });
   if (newly && !run.runtime.controller.signal.aborted) {
     run.runtime.controller.abort();
   }
+  // If the run has no active lease or is queued, finalize as cancelled immediately in Neon
+  if (!run.leaseId || run.status === "queued") {
+    await db
+      .update(runsTable)
+      .set({
+        status: "cancelled",
+        endedAt: sql`now()`,
+        error: reason ?? "stopped by the user",
+        updatedAt: sql`now()`,
+      })
+      .where(
+        and(
+          eq(runsTable.id, run.id),
+          notInArray(runsTable.status, ["completed", "failed", "cancelled"]),
+        ),
+      )
+      .catch(() => undefined);
+    run.status = "cancelled";
+  }
+  void cancelRemoteBoxExecution(run.userId).catch(() => undefined);
   return newly;
 }
 

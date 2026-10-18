@@ -71,6 +71,8 @@ export class LocalSandbox implements Sandbox {
       cwd,
       env: { ...process.env, ...opts.env },
       detached: true,
+      // Closed stdin: interactive CLIs (npm create vue, etc.) must not wait forever.
+      stdio: ["ignore", "pipe", "pipe"],
     });
     const killTree = (): void => {
       if (child.pid === undefined) {

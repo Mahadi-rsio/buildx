@@ -14,6 +14,11 @@ import { abortError, ChunkBuffer, exitMarker } from "./buffer";
 
 const WORKSPACE = "/workspace/home";
 
+/** POSIX single-quote a value so it's safe to embed in shell commands. */
+function shellQuoteSingle(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
 export interface BoxSandboxOptions {
   name: string;
   apiKey: string;
@@ -136,6 +141,11 @@ export class BoxSandbox implements Sandbox {
     // relative path given by tools is resolved inside the box's workspace.
     const cwd = opts?.cwd ? this.resolvePath(opts.cwd) : WORKSPACE;
 
+    // Check abort before starting so we never touch the network when already
+    // cancelled.
+    const error = abortError("command aborted");
+    if (opts?.signal?.aborted) throw error;
+
     // Bounded head+tail collector: a runaway command can never exhaust memory.
     const buffer = new ChunkBuffer();
     let done = false;
@@ -144,41 +154,64 @@ export class BoxSandbox implements Sandbox {
     let notify: (() => void) | undefined;
     const wake = (): void => notify?.();
 
-    const session = await this.box.exec.session({
-      cmd,
-      cwd,
-      env,
-      onStdout: (data: Uint8Array) => {
-        buffer.push({ stream: "stdout", data: Buffer.from(data).toString("utf8") });
-        wake();
-      },
-      onStderr: (data: Uint8Array) => {
-        buffer.push({ stream: "stderr", data: Buffer.from(data).toString("utf8") });
-        wake();
-      },
-    });
+    // Build the full shell command string.
+    // exec.stream() takes a single `command` string and runs it with `sh -c`
+    // on the box. We prepend `cd <cwd>` if needed, and inline env vars via the
+    // POSIX `env NAME=value ...` prefix. This avoids the WebSocket-based
+    // exec.session() API (which imports the `ws` npm package) — fetch-based SSE
+    // works correctly in Cloudflare Workers and all other runtimes.
+    const parts: string[] = [];
+    if (env && env.length > 0) {
+      parts.push(`env ${env.map((kv) => shellQuoteSingle(kv)).join(" ")}`);
+    }
+    if (cwd !== WORKSPACE) {
+      parts.push(`cd ${shellQuoteSingle(cwd)}`);
+    }
+    parts.push(cmd);
+    const fullCmd = parts.join(" && ");
 
-    const error = abortError("command aborted");
+    // exec.stream() returns a StreamRun whose async iterator yields
+    // { type:"output"; data:string } | { type:"exit"; exitCode:number } chunks.
+    // All output is combined (no stdout/stderr separation at this API level).
+    const streamRun = await this.box.exec.stream(fullCmd);
 
-    const exitPromise = session.wait().then((code) => {
-      exitCode = code;
-      done = true;
-      wake();
-    });
+    // Drain the SSE stream in the background, filling the buffer.
+    const drainPromise = (async () => {
+      try {
+        for await (const chunk of streamRun) {
+          // Stop draining as soon as the caller aborts or we timeout.
+          if (failure) break;
+          if (chunk.type === "output") {
+            buffer.push({ stream: "stdout", data: chunk.data });
+            wake();
+          } else if (chunk.type === "exit") {
+            exitCode = chunk.exitCode;
+            break;
+          }
+        }
+      } catch (err) {
+        if (!failure) {
+          failure = err instanceof Error ? err : new Error(String(err));
+        }
+      } finally {
+        done = true;
+        wake();
+      }
+    })();
 
     const timeoutMs = opts?.timeoutMs;
     const timer =
       timeoutMs && timeoutMs > 0
         ? setTimeout(() => {
-            failure = new Error(`command timed out after ${timeoutMs}ms`);
-            session.terminate(1000);
+            if (!failure) failure = new Error(`command timed out after ${timeoutMs}ms`);
+            void (streamRun as unknown as { cancel?: () => Promise<void> }).cancel?.();
             wake();
           }, timeoutMs)
         : undefined;
 
     const abort = (): void => {
       if (!failure) failure = error;
-      session.terminate(500);
+      void (streamRun as unknown as { cancel?: () => Promise<void> }).cancel?.();
       wake();
     };
     if (opts?.signal?.aborted) {
@@ -201,7 +234,7 @@ export class BoxSandbox implements Sandbox {
           notify = undefined;
         });
       }
-      if (!failure) await exitPromise;
+      if (!failure) await drainPromise;
       if (!buffer.empty) yield* buffer.drain();
       if (failure) throw failure;
       const marker = exitMarker(exitCode);
@@ -209,7 +242,7 @@ export class BoxSandbox implements Sandbox {
     } finally {
       if (timer) clearTimeout(timer);
       opts?.signal?.removeEventListener("abort", abort);
-      session.close();
+      void (streamRun as unknown as { cancel?: () => Promise<void> }).cancel?.();
     }
   }
 

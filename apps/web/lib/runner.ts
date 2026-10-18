@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { runTask } from "@buildx/agent";
 import type { Sandbox } from "@buildx/sandbox";
 import { envStatus, isTerminalStatus } from "@buildx/shared";
+import { getDb, isRunCancelled, readRunControl } from "@buildx/db";
 import {
   appendEvent,
   finishRun,
@@ -12,11 +13,11 @@ import {
   type TerminalRunStatus,
 } from "./store";
 import { captureWorkspaceSnapshot } from "./workspace-fs";
-import { createSandbox, sandboxSettings } from "./sandbox";
+import { cancelRemoteBoxExecution, createSandbox, sandboxSettings } from "./sandbox";
 import { sourceForRun } from "./workspace-source";
 
 function guardSandbox(sandbox: Sandbox, run: StoredRun): Sandbox {
-  const checkOwnership = (): void => {
+  const checkOwnership = async (): Promise<void> => {
     if (run.runtime.lostOwnership) {
       throw new Error(`Worker lost ownership of run ${run.id}; workspace mutation rejected`);
     }
@@ -28,6 +29,25 @@ function guardSandbox(sandbox: Sandbox, run: StoredRun): Sandbox {
       run.runtime.controller.abort();
       throw new Error(`Worker lease expired for run ${run.id}; workspace mutation rejected`);
     }
+    // Check Neon DB for durable cross-isolate cancellation
+    if (run.leaseId) {
+      const ctrl = await readRunControl(getDb(), {
+        runId: run.id,
+        leaseId: run.leaseId,
+        fencingToken: run.fencingToken,
+      }).catch(() => null);
+      if (ctrl) {
+        if (!ctrl.ownsLease) {
+          run.runtime.lostOwnership = true;
+          run.runtime.controller.abort();
+          throw new Error(`Worker lost lease of run ${run.id}`);
+        }
+        if (ctrl.cancelled) {
+          run.runtime.controller.abort();
+          throw new Error(`Run ${run.id} has been cancelled by user`);
+        }
+      }
+    }
   };
 
   return {
@@ -36,7 +56,7 @@ function guardSandbox(sandbox: Sandbox, run: StoredRun): Sandbox {
       return sandbox.id;
     },
     async start() {
-      checkOwnership();
+      await checkOwnership();
       return sandbox.start();
     },
     async suspend() {
@@ -46,37 +66,38 @@ function guardSandbox(sandbox: Sandbox, run: StoredRun): Sandbox {
       return sandbox.destroy();
     },
     async writeFile(path: string, content: string) {
-      checkOwnership();
+      await checkOwnership();
       await sandbox.writeFile(path, content);
-      checkOwnership();
+      await checkOwnership();
     },
     async *exec(cmd: string, opts) {
-      checkOwnership();
+      await checkOwnership();
       for await (const chunk of sandbox.exec(cmd, opts)) {
-        checkOwnership();
+        await checkOwnership();
         yield chunk;
       }
-      checkOwnership();
+      await checkOwnership();
     },
     async readFile(path: string, range) {
+      await checkOwnership();
       return sandbox.readFile(path, range);
     },
     async startBackground(cmd: string) {
-      checkOwnership();
+      await checkOwnership();
       const res = await sandbox.startBackground(cmd);
-      checkOwnership();
+      await checkOwnership();
       return res;
     },
     async checkpoint(label: string) {
-      checkOwnership();
+      await checkOwnership();
       const res = await sandbox.checkpoint(label);
-      checkOwnership();
+      await checkOwnership();
       return res;
     },
     async restore(id: string) {
-      checkOwnership();
+      await checkOwnership();
       await sandbox.restore(id);
-      checkOwnership();
+      await checkOwnership();
     },
     async previewUrl(port: number) {
       return sandbox.previewUrl(port);
@@ -134,6 +155,14 @@ async function closeRun(
   ) {
     run.runtime.lostOwnership = true;
     return;
+  }
+  // If the run was cancelled in Neon DB, ensure the terminal status reflects it
+  if (status !== "cancelled" && run.id) {
+    const ctrl = await isRunCancelled(getDb(), run.id).catch(() => null);
+    if (ctrl?.cancelled) {
+      status = "cancelled";
+      message = ctrl.reason ?? "stopped by the user";
+    }
   }
   const last = [...run.events].reverse().find((event) => event.type === "status");
   if (!last || !isTerminalStatus(last.data.status)) {
@@ -219,10 +248,18 @@ export async function startRun(run: StoredRun): Promise<void> {
     }
     run.stats = { steps: result.steps, usage: result.usage };
     await persistStats(run);
+    const finalStatus =
+      run.runtime.controller.signal.aborted || result.status === "cancelled"
+        ? "cancelled"
+        : (result.status as TerminalRunStatus);
     await closeRun(
       run,
-      result.status as TerminalRunStatus,
-      result.status === "failed" ? "the agent run failed" : undefined,
+      finalStatus,
+      finalStatus === "failed"
+        ? "the agent run failed"
+        : finalStatus === "cancelled"
+          ? "stopped by the user"
+          : undefined,
     );
   } catch (error) {
     // A fenced run is owned by the reclaiming worker now — nothing to write.
@@ -235,18 +272,27 @@ export async function startRun(run: StoredRun): Promise<void> {
       return;
     }
     const message = error instanceof Error ? error.message : String(error);
-    if (/monthly CPU budget exhausted/i.test(message)) {
-      run.runtime.workspace.message = "Your work is saved.";
+    const isCancelled =
+      run.runtime.controller.signal.aborted ||
+      /cancelled|aborted/i.test(message);
+
+    if (isCancelled) {
+      void cancelRemoteBoxExecution(run.userId).catch(() => undefined);
+    } else {
+      if (/monthly CPU budget exhausted/i.test(message)) {
+        run.runtime.workspace.message = "Your work is saved.";
+      }
+      await appendEvent(run, {
+        type: "error",
+        data: { message },
+        ts: Date.now(),
+      });
     }
-    await appendEvent(run, {
-      type: "error",
-      data: { message },
-      ts: Date.now(),
-    });
+
     await closeRun(
       run,
-      run.runtime.controller.signal.aborted ? "cancelled" : "failed",
-      message,
+      isCancelled ? "cancelled" : "failed",
+      isCancelled ? "stopped by the user" : message,
     );
   } finally {
     await rawSandbox.destroy().catch(() => undefined);

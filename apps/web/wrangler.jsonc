@@ -44,7 +44,7 @@
   ],
   "vars": {
     "BUILDX_SANDBOX_KIND": "box",
-    "AGENT_MODEL": "gpt-4o",
+    "AGENT_MODEL": "cdx",
     "AGENT_MAX_STEPS": "40",
     "OPENNEXT_CLOUDFLARE": "true",
     "BUILDX_DB_DRIVER": "neon-http"

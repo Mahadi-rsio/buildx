@@ -1,4 +1,5 @@
 import { and, eq, isNull, notInArray, sql } from "drizzle-orm";
+export { and, eq, isNull, inArray, notInArray, sql } from "drizzle-orm";
 import type { Db } from "./client";
 import { runs, workspaceLocks, type RunStatus } from "./schema";
 

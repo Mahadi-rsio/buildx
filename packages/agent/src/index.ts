@@ -94,13 +94,19 @@ export async function runTask(options: RunTaskOptions): Promise<RunTaskResult> {
     });
 
     for await (const part of result.fullStream) {
+      if (options.abortSignal?.aborted) {
+        status = "cancelled";
+        break;
+      }
       switch (part.type) {
         case "text-delta":
+          if (options.abortSignal?.aborted) break;
           if (part.text.length > 0) {
             await emit({ type: "text", data: { text: part.text }, ts: ts() });
           }
           break;
         case "tool-call":
+          if (options.abortSignal?.aborted) break;
           await emit({
             type: "tool_call",
             data: {
@@ -112,6 +118,7 @@ export async function runTask(options: RunTaskOptions): Promise<RunTaskResult> {
           });
           break;
         case "tool-result":
+          if (options.abortSignal?.aborted) break;
           await emit({
             type: "tool_result",
             data: {
@@ -123,6 +130,7 @@ export async function runTask(options: RunTaskOptions): Promise<RunTaskResult> {
           });
           break;
         case "tool-error":
+          if (options.abortSignal?.aborted) break;
           await emit({
             type: "tool_result",
             data: {
@@ -135,12 +143,14 @@ export async function runTask(options: RunTaskOptions): Promise<RunTaskResult> {
           });
           break;
         case "error":
-          status = "failed";
-          await emit({
-            type: "error",
-            data: { message: toText(part.error) },
-            ts: ts(),
-          });
+          if (!options.abortSignal?.aborted) {
+            status = "failed";
+            await emit({
+              type: "error",
+              data: { message: toText(part.error) },
+              ts: ts(),
+            });
+          }
           break;
         case "abort":
           status = "cancelled";
@@ -162,7 +172,7 @@ export async function runTask(options: RunTaskOptions): Promise<RunTaskResult> {
       type: "status",
       data: {
         status,
-        message: status === "completed" ? "run completed" : undefined,
+        message: status === "completed" ? "run completed" : status === "cancelled" ? "run cancelled" : undefined,
       },
       ts: ts(),
     });
@@ -180,7 +190,15 @@ export async function runTask(options: RunTaskOptions): Promise<RunTaskResult> {
         : undefined,
     };
   } catch (error) {
-    status = options.abortSignal?.aborted ? "cancelled" : "failed";
+    if (options.abortSignal?.aborted) {
+      await emit({
+        type: "status",
+        data: { status: "cancelled", message: "run cancelled" },
+        ts: ts(),
+      });
+      return { status: "cancelled", text: "", steps: 0 };
+    }
+    status = "failed";
     await emit({ type: "error", data: { message: toText(error) }, ts: ts() });
     await emit({ type: "status", data: { status }, ts: ts() });
     return { status, text: "", steps: 0 };

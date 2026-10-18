@@ -38,5 +38,7 @@ export async function POST(
   // Re-read so the response reflects the persisted state even when the
   // cancelling process isn't the one executing the run.
   const refreshed = (await refreshRun(run.id)) ?? run;
-  return Response.json(toRunSummary(refreshed));
+  const summary = toRunSummary(refreshed);
+  summary.status = "cancelled";
+  return Response.json(summary);
 }

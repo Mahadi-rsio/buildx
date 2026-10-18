@@ -175,6 +175,22 @@ export async function tryGetWorkspaceBox(
   return undefined;
 }
 
+/**
+ * Cancel and suspend remote Box execution for a user.
+ */
+export async function cancelRemoteBoxExecution(userId: string): Promise<void> {
+  try {
+    const box = await tryGetWorkspaceBox(userId);
+    if (box) {
+      await box.suspend().catch((err) => {
+        console.warn(`[sandbox] failed to suspend box for user ${userId}`, err);
+      });
+    }
+  } catch (error) {
+    console.warn(`[sandbox] error cancelling remote box for user ${userId}`, error);
+  }
+}
+
 /** Build the sandbox that backs a run's workspace. */
 export function createSandbox(ctx: SandboxRunContext): Sandbox {
   const settings = sandboxSettings();

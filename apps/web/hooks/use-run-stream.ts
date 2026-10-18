@@ -200,9 +200,32 @@ export function useRunStream(runId: string) {
   }, [runId]);
 
   const stop = useCallback(async () => {
-    await fetch(`/api/runs/${runId}/stop`, { method: "POST" }).catch(
-      () => undefined,
-    );
+    try {
+      const res = await fetch(`/api/runs/${runId}/stop`, { method: "POST" });
+      if (res.ok) {
+        const summary = (await res.json()) as { status: RunStatus };
+        setRun((previous) =>
+          previous
+            ? {
+                ...previous,
+                status: summary.status ?? "cancelled",
+                updatedAt: Date.now(),
+              }
+            : previous,
+        );
+      }
+    } catch {
+      // Update UI state optimistically if request was dispatched
+      setRun((previous) =>
+        previous
+          ? {
+              ...previous,
+              status: "cancelled",
+              updatedAt: Date.now(),
+            }
+          : previous,
+      );
+    }
   }, [runId]);
 
   return {

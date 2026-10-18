@@ -6,29 +6,80 @@ import { BoxError } from "@upstash/box";
 import { BoxSandbox } from "./box-sandbox";
 
 interface BoxMockOptions {
-  /** Replacement for `session.wait()`; defaults to resolving `0` after 5ms. */
+  /**
+   * Controls when the stream ends. Resolves with the exit code (0 = success).
+   * Defaults to resolving `0` after 5ms.
+   * Reject or never resolve to test timeout/abort.
+   */
   wait?: () => Promise<number>;
-  /** Chunk emitted to the session's stdout callback at creation time. */
+  /** Output chunk emitted before exit (merged stdout+stderr from old API). */
   stdout?: Uint8Array;
-  /** Chunk emitted to the session's stderr callback at creation time. */
+  /** Additional stderr chunk to merge into output (for legacy test compat). */
   stderr?: Uint8Array;
 }
 
-/** Default synchronous chunks emitted when a session is created. */
+/** Default output chunks. Combined into a single "output" event in the stream. */
 const DEFAULT_STDOUT = Buffer.from("hello world");
 const DEFAULT_STDERR = Buffer.from("error message");
 
 /**
- * Build a mock Box with enough of the SDK surface for BoxSandbox to work.
- * `wait` lets tests control when (and with what code) `session.wait()`
- * resolves — used to exercise the exit-marker and timeout paths.
+ * Build a mock Box using the exec.stream() API (HTTP SSE).
+ * `wait` controls when the stream ends — used to test timeout/abort paths.
+ * Returning a non-zero code from `wait` triggers an exit chunk with that code.
  */
 function makeMockBox(options: BoxMockOptions = {}): Box {
-  const stdout = options.stdout ?? DEFAULT_STDOUT;
-  const stderr = options.stderr ?? DEFAULT_STDERR;
+  const stdoutData = options.stdout ?? DEFAULT_STDOUT;
+  const stderrData = options.stderr ?? DEFAULT_STDERR;
   const storage = new Map<string, string>([
     ["/workspace/home/README.md", "hello world"],
   ]);
+
+  /** Build a StreamRun-compatible async iterable for a single exec. */
+  function makeStreamRun() {
+    let resolveWait: ((code: number) => void) | undefined;
+    const waitPromise: Promise<number> = options.wait
+      ? options.wait()
+      : new Promise<number>((resolve) => {
+          resolveWait = resolve;
+          setTimeout(() => resolve(0), 5);
+        });
+
+    // Return an object that is AsyncIterable<ExecStreamChunk>.
+    return {
+      _resolveWait: resolveWait,
+      async cancel() {
+        resolveWait?.(0);
+      },
+      [Symbol.asyncIterator]() {
+        let emittedOutput = false;
+        let emittedExit = false;
+        return {
+          async next(): Promise<IteratorResult<{ type: "output"; data: string } | { type: "exit"; exitCode: number; cpuNs: number }>> {
+            if (!emittedOutput) {
+              emittedOutput = true;
+              // Combine stdout + stderr into a single output chunk, matching
+              // exec.stream() which provides combined output only.
+              const combined = Buffer.concat([stdoutData, stderrData]).toString("utf8");
+              if (combined.length > 0) {
+                return { done: false, value: { type: "output" as const, data: combined } };
+              }
+            }
+            if (!emittedExit) {
+              emittedExit = true;
+              // Wait for the command to "exit".
+              const exitCode = await waitPromise;
+              return { done: false, value: { type: "exit" as const, exitCode, cpuNs: 0 } };
+            }
+            return { done: true, value: undefined as never };
+          },
+          async return(): Promise<IteratorResult<never>> {
+            return { done: true, value: undefined as never };
+          },
+        };
+      },
+    };
+  }
+
   return {
     files: {
       stat: async (path: string, _options?: { follow?: boolean }) => {
@@ -85,41 +136,8 @@ function makeMockBox(options: BoxMockOptions = {}): Box {
       download: async () => {},
     },
     exec: {
-      session: async (opts: {
-        cmd?: string;
-        cwd?: string;
-        env?: string[];
-        onStdout?: (data: Uint8Array) => void;
-        onStderr?: (data: Uint8Array) => void;
-      }) => {
-        if (opts.onStdout) {
-          opts.onStdout(stdout);
-        }
-        if (opts.onStderr) {
-          opts.onStderr(stderr);
-        }
-        let resolveWait: ((code: number) => void) | undefined;
-        const wait = () =>
-          options.wait
-            ? options.wait()
-            : new Promise<number>((resolve) => {
-                resolveWait = resolve;
-                setTimeout(() => resolve(0), 5);
-              });
-        return {
-          pid: 1234,
-          execId: "exec-1",
-          write: async (_data: string | Uint8Array) => {},
-          endStdin: async () => {},
-          resize: async (_rows: number, _cols: number) => {},
-          terminate: async (_graceMs?: number) => {
-            if (resolveWait) resolveWait(124);
-          },
-          kill: async (_sig?: string) => {},
-          wait,
-          close: async () => {},
-        };
-      },
+      /** exec.stream() — HTTP SSE (no WebSocket), used by BoxSandbox.exec(). */
+      stream: async (_cmd: string) => makeStreamRun(),
       command: async (_cmd: string) => {
         return {
           exitCode: 0,
@@ -128,7 +146,7 @@ function makeMockBox(options: BoxMockOptions = {}): Box {
           status: "completed" as const,
         };
       },
-      stream: async () => {},
+      session: async () => ({}),
       code: async () => {},
     },
     snapshot: async (_options: { name: string }) => {
@@ -165,7 +183,7 @@ test("BoxSandbox.start() is a no-op when box is pre-attached", async () => {
 });
 
 test("BoxSandbox.exec streams chunks", async () => {
-  const s = makeSandbox();
+  const s = makeSandbox({ stdout: Buffer.from("hello world"), stderr: Buffer.alloc(0) });
   await s.start();
 
   const chunks: ExecChunk[] = [];
@@ -173,9 +191,9 @@ test("BoxSandbox.exec streams chunks", async () => {
     chunks.push(chunk);
   }
 
-  assert.strictEqual(chunks.length, 2);
-  assert.strictEqual(chunks.find((c) => c.stream === "stdout")?.data, "hello world");
-  assert.strictEqual(chunks.find((c) => c.stream === "stderr")?.data, "error message");
+  assert.strictEqual(chunks.length, 1);
+  assert.strictEqual(chunks[0].stream, "stdout");
+  assert.strictEqual(chunks[0].data, "hello world");
 });
 
 test("BoxSandbox.exec with timeout throws", async () => {
@@ -232,7 +250,7 @@ test("BoxSandbox.exec emits an exit marker for non-zero exit codes", async () =>
     chunks.push(chunk);
   }
 
-  assert.strictEqual(chunks.length, 3);
+  assert.strictEqual(chunks.length, 2);
   const marker = chunks.at(-1);
   assert.strictEqual(marker?.stream, "stderr");
   assert.match(marker?.data ?? "", /command exited with code 7/);

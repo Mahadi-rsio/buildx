@@ -4,6 +4,8 @@ import { z } from "zod";
 
 const DEFAULT_READ_LIMIT = 400;
 const MAX_OUTPUT_CHARS = 20_000;
+/** Applied when the model omits timeoutMs, so an interactive CLI cannot hang the run. */
+const DEFAULT_TIMEOUT_MS = 180_000;
 const IGNORED_DIRS = [
   "node_modules",
   ".git",
@@ -46,7 +48,9 @@ export function buildTools(sandbox: Sandbox) {
   const bash = tool({
     description:
       "Run a shell command in the workspace and return combined stdout/stderr. " +
-      "Long output is truncated. Pass a timeout for commands that may hang.",
+      "Long output is truncated. Commands are non-interactive (stdin is closed) and " +
+      "are killed after 3 minutes unless timeoutMs is set. Scaffolding tools such as " +
+      "`npm create vue` must be given non-interactive flags (`--yes`, `--default`).",
     inputSchema: z.object({
       command: z.string().describe("The shell command to run"),
       cwd: z
@@ -62,10 +66,13 @@ export function buildTools(sandbox: Sandbox) {
         .describe("Kill the command after this many milliseconds"),
     }),
     execute: async ({ command, cwd, timeoutMs }, options) => {
+      if (options?.abortSignal?.aborted) {
+        throw new Error("Tool execution aborted: run cancelled");
+      }
       let output = "";
       for await (const chunk of sandbox.exec(command, {
         cwd,
-        timeoutMs,
+        timeoutMs: timeoutMs ?? DEFAULT_TIMEOUT_MS,
         signal: options?.abortSignal,
       })) {
         output += chunk.data;
@@ -88,7 +95,10 @@ export function buildTools(sandbox: Sandbox) {
         .optional()
         .describe("Number of lines to read"),
     }),
-    execute: async ({ path, offset, limit }) => {
+    execute: async ({ path, offset, limit }, options) => {
+      if (options?.abortSignal?.aborted) {
+        throw new Error("Tool execution aborted: run cancelled");
+      }
       const startLine = offset ?? 0;
       const content = await sandbox.readFile(path, {
         offset: startLine,
@@ -108,7 +118,10 @@ export function buildTools(sandbox: Sandbox) {
       path: z.string().describe("File path relative to the workspace root"),
       content: z.string().describe("Full file content"),
     }),
-    execute: async ({ path, content }) => {
+    execute: async ({ path, content }, options) => {
+      if (options?.abortSignal?.aborted) {
+        throw new Error("Tool execution aborted: run cancelled");
+      }
       await sandbox.writeFile(path, content);
       return { path, bytes: Buffer.byteLength(content, "utf8") };
     },
@@ -127,7 +140,10 @@ export function buildTools(sandbox: Sandbox) {
         .optional()
         .describe("Replace every occurrence instead of requiring a unique match"),
     }),
-    execute: async ({ path, old_str, new_str, replace_all }) => {
+    execute: async ({ path, old_str, new_str, replace_all }, options) => {
+      if (options?.abortSignal?.aborted) {
+        throw new Error("Tool execution aborted: run cancelled");
+      }
       const content = await sandbox.readFile(path);
       const count = content.split(old_str).length - 1;
       if (old_str.length === 0) {
@@ -166,6 +182,9 @@ export function buildTools(sandbox: Sandbox) {
         .describe("Maximum directory depth; defaults to 2"),
     }),
     execute: async ({ path, depth }, options) => {
+      if (options?.abortSignal?.aborted) {
+        throw new Error("Tool execution aborted: run cancelled");
+      }
       const dir = path && path.length > 0 ? path : ".";
       const maxDepth = depth ?? 2;
       const prune = IGNORED_DIRS.map((name) => `-name ${shellQuote(name)}`).join(
