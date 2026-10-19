@@ -30,9 +30,9 @@ function EnvRow({
       {ok === null ? (
         <Loader2 className="size-4 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none" />
       ) : ok ? (
-        <CheckCircle2 className="size-4 shrink-0 text-emerald-400" />
+        <CheckCircle2 className="size-4 shrink-0 text-[var(--text-muted)]" />
       ) : (
-        <AlertTriangle className="size-4 shrink-0 text-amber-300" />
+        <AlertTriangle className="size-4 shrink-0 text-[var(--text-muted)]" />
       )}
     </div>
   );
@@ -60,7 +60,7 @@ export function SettingsDialog() {
               Agent environment
             </h3>
             {error ? (
-              <p className="text-xs text-red-400">{error}</p>
+              <p className="text-xs text-[var(--text)]">{error}</p>
             ) : loading || !config ? (
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 <Loader2 className="size-3.5 animate-spin motion-reduce:animate-none" />
@@ -133,7 +133,7 @@ export function SettingsDialog() {
               href="https://github.com/anomalyco/opencode/issues"
               target="_blank"
               rel="noreferrer"
-              className="inline-flex items-center gap-1 text-xs text-sky-300 hover:underline"
+              className="inline-flex items-center gap-1 text-xs text-[var(--text-muted)] hover:underline"
             >
               Report an issue
               <ExternalLink className="size-3" />

@@ -31,15 +31,15 @@ export function GlyphMatrix({
   interval = 90,
   className,
   fadeBottom = 0.6,
-  color = "#6B7280",
+  color = "rgb(107, 107, 107)",
   style,
   ...props
 }: GlyphMatrixProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   // Current glyph color as RGBA (a in 0-1). Kept in a ref so a color change
   // (e.g. theme toggle) recolors the next frame without restarting the
-  // animation. Defaults to #6B7280.
-  const rgbaRef = useRef({ r: 107, g: 114, b: 128, a: 1 })
+  // animation. Defaults to the --text-faint token.
+  const rgbaRef = useRef({ r: 107, g: 107, b: 107, a: 1 })
 
   // Resolve the CSS color string to RGBA (handles hex, rgb, hsl, oklch, ...).
   useEffect(() => {
@@ -51,7 +51,7 @@ export function GlyphMatrix({
     // Seed with the default so an invalid color falls back to it: the 2d
     // context keeps the previous fillStyle when assigned an invalid value
     // instead of silently turning black.
-    probeCtx.fillStyle = "#6B7280"
+    probeCtx.fillStyle = "rgb(107, 107, 107)"
     probeCtx.fillStyle = color
     probeCtx.fillRect(0, 0, 1, 1)
     const [r, g, b, a] = probeCtx.getImageData(0, 0, 1, 1).data

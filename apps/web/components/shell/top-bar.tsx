@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
 import {
   BarChart3,
   PanelLeft,
@@ -14,15 +13,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { useShell } from "@/components/shell/shell-context";
 import { cn } from "@/lib/utils";
 
-function formatCountdown(ms: number): string {
-  const seconds = Math.max(0, Math.floor(ms / 1000));
-  const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
-  return `${m}:${String(s).padStart(2, "0")}`;
-}
-
 export function TopBar() {
-  const [now, setNow] = useState(() => Date.now());
   const isMobile = useIsMobile();
   const {
     meta,
@@ -38,33 +29,7 @@ export function TopBar() {
   } = useShell();
 
   const status = meta.status;
-  const live = status === "running" || status === "queued";
-  const waiting = status === "waiting_input";
-  const failed = status === "failed";
-  const cancelled = status === "cancelled";
-
-  const label = live
-    ? "Working…"
-    : waiting
-      ? "Awaiting input"
-      : failed
-        ? "Failed"
-        : cancelled
-          ? "Stopped"
-          : null;
-  const labelClass = live || waiting ? "text-warning" : failed ? "text-danger" : "text-muted-foreground";
-  const workspace = meta.workspace;
-  useEffect(() => {
-    if (workspace?.status !== "workspace.ready" || !workspace.idleDeadlineAt) return;
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [workspace?.status, workspace?.idleDeadlineAt]);
-
-  const workspaceLabel = workspace?.status?.replace("workspace.", "");
-  const countdown =
-    workspace?.status === "workspace.ready" && workspace.idleDeadlineAt
-      ? formatCountdown(workspace.idleDeadlineAt - now)
-      : null;
+  const active = status === "running" || status === "queued" || status === "waiting_input";
 
   return (
     <header className="flex h-12 shrink-0 items-center gap-1.5 border-b border-border bg-background/80 px-2 backdrop-blur sm:gap-2 sm:px-3">
@@ -109,45 +74,27 @@ export function TopBar() {
         </Link>
       </div>
 
-      {/* Center: truncated run title + slim live status, no pill. */}
+      {/* Center: connection dot + truncated run title. */}
       <div className="flex min-w-0 flex-1 items-center justify-center gap-2 overflow-hidden px-1">
+        <span
+          aria-hidden
+          title={active ? `Connected · ${status.replace("_", " ")}` : "Idle"}
+          className={cn(
+            "size-1.5 shrink-0 rounded-full",
+            active
+              ? "bg-[var(--text)] animate-pulse motion-reduce:animate-none"
+              : "bg-[var(--text-faint)]",
+          )}
+        />
         {meta.task ? (
           <span
             title={meta.task}
-            className="min-w-0 truncate text-sm font-medium text-foreground"
+            className="min-w-0 truncate text-[13px] font-medium text-[var(--text)]"
           >
             {meta.task}
           </span>
         ) : null}
-        {label ? (
-          <span
-            className={cn(
-              "flex shrink-0 items-center gap-1.5 text-2xs font-medium",
-              labelClass,
-            )}
-          >
-            <span
-              className={cn(
-                "size-1.5 rounded-full bg-current",
-                (live || waiting) && "animate-pulse motion-reduce:animate-none",
-              )}
-            />
-            {label}
-          </span>
-        ) : null}
-        {status === "completed" ? (
-          <span className="sr-only">Run completed</span>
-        ) : null}
-        {workspaceLabel ? (
-          <span className="shrink-0 rounded border border-border bg-muted/30 px-1.5 py-0.5 text-2xs uppercase tracking-wide text-muted-foreground">
-            ws {workspaceLabel}
-          </span>
-        ) : null}
-        {countdown ? (
-          <span className="shrink-0 font-mono text-2xs text-muted-foreground">
-            auto-pause {countdown}
-          </span>
-        ) : null}
+        <span className="sr-only">{status.replace("_", " ")}</span>
       </div>
 
       <div className="flex shrink-0 items-center gap-0.5 sm:gap-1">
@@ -178,11 +125,12 @@ export function TopBar() {
         </Button>
         <Button
           type="button"
-          variant={panelOpen ? "secondary" : "ghost"}
+          variant="ghost"
           size="icon-touch"
           aria-label={panelOpen ? "Hide workspace panel" : "Show workspace panel"}
           aria-pressed={panelOpen}
           onClick={togglePanel}
+          className={panelOpen ? "bg-[var(--surface-hover)]" : undefined}
         >
           <PanelRight className="size-4" />
         </Button>

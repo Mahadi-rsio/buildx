@@ -77,7 +77,7 @@ export function WorkspaceBrowser({
       </div>
 
       {error ? (
-        <p className="px-3 py-3 text-xs text-red-400">{error}</p>
+        <p className="px-3 py-3 text-xs text-[var(--text-muted)]">{error}</p>
       ) : file ? (
         <ScrollArea className="min-h-0 flex-1">
           <div className="p-3">
@@ -110,7 +110,7 @@ export function WorkspaceBrowser({
                     className={cn(
                       "flex w-full items-center gap-2 px-3 py-1.5 text-left font-mono text-xs transition hover:bg-muted/60",
                       entry.type === "dir"
-                        ? "text-amber-300/90"
+                        ? "text-[var(--text-muted)]"
                         : "text-foreground/85",
                     )}
                   >

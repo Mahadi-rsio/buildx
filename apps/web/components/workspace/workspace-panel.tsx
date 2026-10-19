@@ -142,7 +142,7 @@ function FileTreeView({
                 key={el.id}
                 value={el.id}
                 fileIcon={
-                  <span className="text-amber-300/90">
+                  <span className="text-[var(--text-muted)]">
                     <FolderTree className="size-4" />
                   </span>
                 }
@@ -234,7 +234,7 @@ export function WorkspacePanel({
               <FolderOpen className="size-3.5" />
               Changes
               {diffFiles.length > 0 ? (
-                <span className="rounded-full bg-success/15 px-1.5 py-px font-mono text-[10px] tabular-nums text-success">
+                <span className="rounded-full bg-[var(--surface-hover)] px-1.5 py-px font-mono text-[10px] tabular-nums text-[var(--text)]">
                   {diffFiles.length}
                 </span>
               ) : null}
@@ -279,7 +279,7 @@ export function WorkspacePanel({
 
             <div className="min-h-0 flex-1">
               {filesError ? (
-                <p className="px-3 py-3 text-xs text-red-400">{filesError}</p>
+                <p className="px-3 py-3 text-xs text-[var(--text-muted)]">{filesError}</p>
               ) : file ? (
                 <CodeViewer
                   path={file.path}
@@ -301,7 +301,7 @@ export function WorkspacePanel({
             </div>
 
             <p className="flex items-center gap-1.5 border-t border-border px-3 py-1.5 font-mono text-[10px] text-muted-foreground">
-              <FolderTree className="size-3 shrink-0 text-amber-300/80" />
+              <FolderTree className="size-3 shrink-0 text-[var(--text-faint)]" />
               <span className="truncate">
                 workspace/{workspaceId.slice(0, 12)}
               </span>

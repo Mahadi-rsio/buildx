@@ -132,11 +132,11 @@ export default function RunPage() {
               </Alert>
             ) : null}
             {streamError ? (
-              <Alert className="border-amber-500/30 bg-amber-500/10">
-                <AlertTitle className="text-amber-100">
+              <Alert className="border-[var(--border)] bg-[var(--surface)]">
+                <AlertTitle className="text-[var(--text)]">
                   Stream interrupted
                 </AlertTitle>
-                <AlertDescription className="text-amber-100/80">
+                <AlertDescription className="text-[var(--text-muted)]">
                   {streamError}
                 </AlertDescription>
               </Alert>

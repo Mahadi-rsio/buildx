@@ -43,8 +43,8 @@ function CodeBlock({
   }, [key, code, language]);
 
   return (
-    <div className="group relative my-3 overflow-hidden rounded-lg border border-border bg-surface/40">
-      <div className="flex items-center justify-between border-b border-border/70 px-3 py-1.5">
+    <div className="group relative my-3 overflow-hidden rounded-md bg-[var(--surface)]">
+      <div className="flex items-center justify-between px-3 py-1.5">
         <span className="font-mono text-2xs uppercase tracking-wide text-muted-foreground">
           {language}
         </span>
@@ -87,7 +87,7 @@ export function ChatMarkdown({
   return (
     <div
       className={cn(
-        "prose-buildx max-w-[65ch] [overflow-wrap:anywhere] text-base leading-[1.65] text-foreground/90",
+        "prose-buildx max-w-[68ch] [overflow-wrap:anywhere] text-[15px] leading-[1.6] text-[var(--text)] md:text-[16px] md:leading-[1.65]",
         className,
       )}
     >
@@ -109,7 +109,7 @@ export function ChatMarkdown({
               href={href}
               target="_blank"
               rel="noreferrer"
-              className="text-info underline-offset-2 hover:underline"
+              className="text-[var(--text)] underline underline-offset-2 decoration-[var(--text-faint)] hover:decoration-[var(--text)]"
             >
               {children}
             </a>
@@ -130,24 +130,24 @@ export function ChatMarkdown({
             </h3>
           ),
           blockquote: ({ children }) => (
-            <blockquote className="my-3 border-l-2 border-border pl-3 text-muted-foreground">
+            <blockquote className="my-3 pl-3 text-[var(--text-muted)]">
               {children}
             </blockquote>
           ),
           table: ({ children }) => (
-            <div className="my-3 overflow-x-auto rounded-lg border border-border">
+            <div className="my-3 overflow-x-auto rounded-md bg-[var(--surface)]">
               <table className="w-full border-collapse text-left text-sm">
                 {children}
               </table>
             </div>
           ),
           th: ({ children }) => (
-            <th className="border-b border-border bg-muted/40 px-3 py-2 font-medium">
+            <th className="px-3 py-2 font-medium text-[var(--text)]">
               {children}
             </th>
           ),
           td: ({ children }) => (
-            <td className="border-b border-border/60 px-3 py-2 align-top">
+            <td className="px-3 py-2 align-top text-[var(--text-muted)]">
               {children}
             </td>
           ),
@@ -158,7 +158,7 @@ export function ChatMarkdown({
             }
             return (
               <code
-                className="rounded bg-muted px-1 py-0.5 font-mono text-sm"
+                className="rounded-[4px] bg-[var(--surface)] px-1.5 py-0.5 font-mono text-[13px] text-[var(--text)]"
                 {...props}
               >
                 {children}

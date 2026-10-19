@@ -1,13 +1,14 @@
 import Anser from "anser";
 
 /**
- * Render terminal text with ANSI escapes as escaped HTML using anser's named
- * classes (`.ansi-*-fg` etc — see globals.css). Text is escaped so raw markup
- * is never injected; inject the result with `dangerouslySetInnerHTML`.
+ * Render terminal text with ANSI escapes as HTML using anser's named classes
+ * (`.ansi-*-fg` etc — see globals.css). Escape the text *before* converting so
+ * user/agent output can never inject markup, while anser's own `<span>` tags
+ * survive. Inject the result with `dangerouslySetInnerHTML`.
  */
 export function ansiToHtml(text: string): string {
   if (!text) return "";
-  return Anser.escapeForHtml(Anser.ansiToHtml(text, { use_classes: true }));
+  return Anser.ansiToHtml(Anser.escapeForHtml(text), { use_classes: true });
 }
 
 /** Strip ANSI escapes and return plain text (for copy). */

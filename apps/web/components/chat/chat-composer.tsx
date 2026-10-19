@@ -79,8 +79,8 @@ export function ChatComposer({
     >
       <div
         className={cn(
-          "rounded-2xl border border-border bg-card/70 shadow-sm transition focus-within:border-ring/50 focus-within:ring-2 focus-within:ring-ring/20",
-          error && "border-danger/40",
+          "rounded-xl border border-[var(--border)] bg-[var(--surface)] transition focus-within:border-[var(--text-faint)]",
+          error && "border-[var(--text-faint)]",
         )}
       >
         <textarea
@@ -92,9 +92,11 @@ export function ChatComposer({
           placeholder={placeholder}
           disabled={blocked}
           aria-label="Message"
-          className="max-h-[200px] min-h-12 w-full resize-none bg-transparent px-4 pt-3 pb-2 text-sm leading-relaxed text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-60"
+          className="max-h-[200px] min-h-12 w-full resize-none bg-transparent px-4 pt-3 pb-2 text-[15px] leading-[1.6] text-[var(--text)] outline-none placeholder:text-[var(--text-faint)] disabled:opacity-60"
         />
+
         <div className="flex flex-wrap items-center gap-2 px-2 pb-2">
+          {/* Attach menu */}
           <DropdownMenu>
             <DropdownMenuTrigger
               render={
@@ -109,52 +111,50 @@ export function ChatComposer({
             >
               <Plus className="size-4" />
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" sideOffset={6} className="w-56 rounded-xl bg-popover/95 backdrop-blur-md">
+            <DropdownMenuContent align="start" sideOffset={6} className="w-56">
               <DropdownMenuLabel>Attach to message</DropdownMenuLabel>
-              <DropdownMenuSeparator className="bg-border/60" />
+              <DropdownMenuSeparator />
               <DropdownMenuItem disabled className="cursor-default">
                 <Paperclip className="size-3.5" />
                 <span>Attach file</span>
-                <span className="ml-auto text-2xs text-muted-foreground/70">
-                  soon
-                </span>
+                <span className="ml-auto text-2xs text-[var(--text-faint)]">soon</span>
               </DropdownMenuItem>
               <DropdownMenuItem disabled className="cursor-default">
                 <ImagePlus className="size-3.5" />
                 <span>Attach image</span>
-                <span className="ml-auto text-2xs text-muted-foreground/70">
-                  soon
-                </span>
+                <span className="ml-auto text-2xs text-[var(--text-faint)]">soon</span>
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
 
+          {/* Model picker */}
           <ModelPicker
             value={model}
             onChange={onModelChange}
             disabled={blocked}
           />
 
+          {/* Send / Stop button */}
           <div className="ml-auto flex items-center gap-1.5">
             {streaming ? (
               <Button
                 type="button"
-                size="sm"
-                variant="destructive"
+                size="icon"
+                variant="ghost"
                 onClick={() => onStop?.()}
                 aria-label="Stop generation"
+                className="size-8 rounded-full border-0 bg-[var(--text)] text-[var(--bg)] hover:bg-[var(--text)]/90"
               >
-                <Square className="size-3.5" />
-                Stop
+                <Square className="size-3 fill-current" strokeWidth={0} />
               </Button>
             ) : (
               <Button
                 type="submit"
-                size="icon-touch"
-                variant={hasText ? "default" : "ghost"}
+                size="icon"
+                variant="ghost"
                 disabled={blocked || !hasText}
                 aria-label="Send message"
-                className={cn(!hasText && "text-muted-foreground")}
+                className="size-8 rounded-full border-0 bg-[var(--text)] text-[var(--bg)] hover:bg-[var(--text)]/90 disabled:opacity-30"
               >
                 {submitting ? (
                   <Loader2 className="size-4 animate-spin motion-reduce:animate-none" />
@@ -166,12 +166,14 @@ export function ChatComposer({
           </div>
         </div>
       </div>
+
+      {/* Error message or keyboard hint */}
       {error ? (
-        <p className="mt-2 px-1 text-xs text-danger" role="alert">
+        <p className="mt-2 px-1 text-xs text-[var(--text)]" role="alert">
           {error}
         </p>
       ) : (
-        <p className="mt-2 hidden px-1 text-2xs text-muted-foreground sm:block">
+        <p className="mt-2 hidden px-1 text-2xs text-[var(--text-faint)] sm:block">
           {hint ? <span className="mr-1">{hint} ·</span> : null}
           Enter to send · Shift+Enter for newline
         </p>

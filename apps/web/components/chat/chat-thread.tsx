@@ -37,13 +37,13 @@ function FilesChangedCard({ changes }: { changes: FileChange[] }) {
 
   return (
     <div className="mx-auto w-full max-w-3xl px-3 sm:px-6">
-      <div className="overflow-hidden rounded-lg border border-border bg-surface/30">
+      <div className="overflow-hidden rounded-md bg-[var(--surface)]">
         <div className="flex items-center gap-2 px-3 py-2">
-          <Files className="size-3.5 shrink-0 text-muted-foreground" />
-          <span className="text-sm font-medium text-foreground/90">
+          <Files className="size-3.5 shrink-0 text-[var(--text-faint)]" />
+          <span className="text-[13px] font-medium text-[var(--text)]">
             Files changed
           </span>
-          <span className="font-mono text-2xs text-muted-foreground">
+          <span className="font-mono text-2xs text-[var(--text-faint)]">
             {changes.length}
           </span>
           <div className="ml-auto flex items-center gap-0.5">
@@ -59,7 +59,11 @@ function FilesChangedCard({ changes }: { changes: FileChange[] }) {
                 }, () => undefined);
               }}
             >
-              {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
+              {copied ? (
+                <Check className="size-3" />
+              ) : (
+                <Copy className="size-3" />
+              )}
             </Button>
             <Button
               type="button"
@@ -72,21 +76,21 @@ function FilesChangedCard({ changes }: { changes: FileChange[] }) {
             </Button>
           </div>
         </div>
-        <ul className="border-t border-border/60 px-1.5 py-1.5">
+        <ul className="px-1.5 py-1.5">
           {changes.map((change) => (
             <li
               key={change.path}
-              className="flex items-center gap-2 rounded-md px-1.5 py-1 hover:bg-muted/30"
+              className="flex items-center gap-2 rounded-md px-1.5 py-1 hover:bg-[var(--surface-hover)]"
             >
               {change.change === "create" ? (
-                <FilePlus2 className="size-3.5 shrink-0 text-success" />
+                <FilePlus2 className="size-3.5 shrink-0 text-[var(--text-muted)]" />
               ) : (
-                <FilePen className="size-3.5 shrink-0 text-info" />
+                <FilePen className="size-3.5 shrink-0 text-[var(--text-muted)]" />
               )}
-              <span className="min-w-0 flex-1 truncate font-mono text-xs text-foreground/85">
+              <span className="min-w-0 flex-1 truncate font-mono text-xs text-[var(--text)]">
                 {change.path}
               </span>
-              <span className="shrink-0 text-2xs capitalize text-muted-foreground">
+              <span className="shrink-0 text-2xs capitalize text-[var(--text-faint)]">
                 {change.change}
               </span>
             </li>
@@ -170,9 +174,9 @@ export function ChatThread({
   if (loading) {
     return (
       <div className="mx-auto w-full max-w-3xl space-y-4 px-4 py-8">
-        <Skeleton className="ml-auto h-20 w-3/4 rounded-2xl" />
-        <Skeleton className="h-28 w-4/5 rounded-2xl" />
-        <Skeleton className="h-16 w-2/3 rounded-2xl" />
+        <Skeleton className="ml-auto h-20 w-3/4 rounded-lg" />
+        <Skeleton className="h-28 w-4/5 rounded-lg" />
+        <Skeleton className="h-16 w-2/3 rounded-lg" />
       </div>
     );
   }

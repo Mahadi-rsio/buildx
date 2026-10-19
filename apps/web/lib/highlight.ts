@@ -1,4 +1,5 @@
 import {
+  createCssVariablesTheme,
   createHighlighter,
   type BundledLanguage,
   type BundledTheme,
@@ -10,11 +11,22 @@ type LazyHighlighter = HighlighterGeneric<BundledLanguage, BundledTheme>;
 let highlighterPromise: Promise<LazyHighlighter> | null = null;
 const loadedLangs = new Set<BundledLanguage>();
 
-/** Lazily boot one highlighter (github-dark-default) and reuse it across calls. */
+/**
+ * Grayscale theme backed by the design-system CSS variables. Shiki writes
+ * `color: var(--shiki-token-*)` inline and globals.css maps those variables to
+ * `--text` / `--text-muted` / `--text-faint`, so highlighting stays monochrome
+ * in both themes.
+ */
+const MONO_THEME = createCssVariablesTheme({
+  name: "buildx-mono",
+  variablePrefix: "--shiki-",
+});
+
+/** Lazily boot one highlighter and reuse it across calls. */
 function getHighlighter(): Promise<LazyHighlighter> {
   if (!highlighterPromise) {
     highlighterPromise = createHighlighter({
-      themes: ["github-dark-default"],
+      themes: [MONO_THEME],
       langs: [],
     });
   }
@@ -61,13 +73,9 @@ export async function highlightCode(
     }
     return highlighter.codeToHtml(code, {
       lang: bundled,
-      theme: "github-dark-default",
+      theme: "buildx-mono",
     });
   } catch {
     return plainCodeHtml(code);
   }
 }
-
-const THEME: BundledTheme = "github-dark-default";
-
-export { THEME as HIGHLIGHT_THEME };

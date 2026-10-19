@@ -9,50 +9,122 @@
   --radius: 0.625rem;
 }
 
+/* ==========================================================================
+   BUILDX MONOCHROME DESIGN SYSTEM
+   Single source of truth for all UI colors. Strictly monochrome.
+   ========================================================================== */
+
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  /* Semantic surfaces: background < surface < surface-elevated < card. */
-  --surface: oklch(0.165 0 0);
-  --surface-elevated: oklch(0.205 0 0);
-  /* Status hues used by the agent activity stream. */
-  --info: oklch(0.72 0.13 235);
-  --info-foreground: oklch(0.15 0 0);
-  --warning: oklch(0.78 0.15 85);
-  --warning-foreground: oklch(0.15 0 0);
-  --success: oklch(0.72 0.19 150);
-  --success-foreground: oklch(0.15 0 0);
-  --danger: oklch(0.68 0.2 25);
-  --danger-foreground: oklch(0.985 0 0);
-  --card: oklch(0.185 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.185 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.245 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.245 0 0);
-  --muted-foreground: oklch(0.68 0 0);
-  --accent: oklch(0.245 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 14%);
-  --ring: oklch(0.556 0 0);
+  color-scheme: dark;
+
+  /* Background - deepest layer */
+  --bg: #0A0A0A;
+
+  /* Surface - elevated layers (composer, popovers, code blocks) */
+  --surface: #111111;
+  --surface-hover: #161616;
+  --surface-elevated: #1A1A1A;
+
+  /* Borders - hairline, used sparingly */
+  --border: #1F1F1F;
+
+  /* Text hierarchy */
+  --text: #EDEDED;          /* Primary text */
+  --text-muted: #A1A1A1;    /* Secondary text (labels, metadata) */
+  --text-faint: #6B6B6B;    /* Tertiary text (paths, timestamps) */
+
+  /* Accent - primary action / active indicator (white-on-black) */
+  --accent: #FFFFFF;
+  --accent-foreground: #0A0A0A;
+
+  /* Status - monochrome only (no red/green/yellow/blue) */
+  /* Running: spinner/shimmer */
+  /* Failed: X icon + full text opacity */
+  /* Done: no icon, or minimal check in --text-faint */
+
+  /* Semantic mappings for compatibility */
+  --background: var(--bg);
+  --foreground: var(--text);
+  --muted: #1A1A1A;
+  --muted-foreground: var(--text-muted);
+  /* Do not alias --border to itself: a self-reference is invalid at
+     computed-value time and makes every `border` fall back to currentColor
+     (the bright "white border" bug). */
+  --input: var(--border);
+  --ring: var(--text-faint);
+  --card: var(--surface);
+  --card-foreground: var(--text);
+  --popover: var(--surface);
+  --popover-foreground: var(--text);
+  --primary: var(--accent);
+  --primary-foreground: var(--accent-foreground);
+  --secondary: var(--surface-hover);
+  --secondary-foreground: var(--text);
+  --accent: var(--surface-hover);
+  --accent-foreground: var(--text);
+  --destructive: var(--text);
+  --destructive-foreground: var(--bg);
+
+  /* Chart colors (grayscale only) */
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.165 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.922 0 0);
-  --sidebar-primary-foreground: oklch(0.205 0 0);
-  --sidebar-accent: oklch(0.245 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+
+  /* Sidebar */
+  --sidebar: var(--surface);
+  --sidebar-foreground: var(--text);
+  --sidebar-primary: var(--accent);
+  --sidebar-primary-foreground: var(--accent-foreground);
+  --sidebar-accent: var(--surface-hover);
+  --sidebar-accent-foreground: var(--text);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--text-faint);
+}
+
+/* Light theme - invert the scale */
+:root:not(.dark) {
+  color-scheme: light;
+  --bg: #FAFAFA;
+  --surface: #FFFFFF;
+  --surface-hover: #F5F5F5;
+  --surface-elevated: #FFFFFF;
+  --border: #E5E5E5;
+  --text: #171717;
+  --text-muted: #737373;
+  --text-faint: #A3A3A3;
+  --accent: #171717;
+  --accent-foreground: #FAFAFA;
+
+  --background: var(--bg);
+  --foreground: var(--text);
+  --muted: #F5F5F5;
+  --muted-foreground: var(--text-muted);
+  /* See the dark theme: never alias a custom property to itself. */
+  --input: var(--border);
+  --ring: var(--text-faint);
+  --card: var(--surface);
+  --card-foreground: var(--text);
+  --popover: var(--surface);
+  --popover-foreground: var(--text);
+  --primary: var(--accent);
+  --primary-foreground: var(--accent-foreground);
+  --secondary: var(--surface-hover);
+  --secondary-foreground: var(--text);
+  --accent: var(--surface-hover);
+  --accent-foreground: var(--text);
+  --destructive: var(--text);
+  --destructive-foreground: var(--bg);
+
+  --sidebar: var(--surface);
+  --sidebar-foreground: var(--text);
+  --sidebar-primary: var(--accent);
+  --sidebar-primary-foreground: var(--accent-foreground);
+  --sidebar-accent: var(--surface-hover);
+  --sidebar-accent-foreground: var(--text);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--text-faint);
 }
 
 @theme inline {
@@ -72,15 +144,8 @@
   --color-chart-2: var(--chart-2);
   --color-chart-1: var(--chart-1);
   --color-surface: var(--surface);
+  --color-surface-hover: var(--surface-hover);
   --color-surface-elevated: var(--surface-elevated);
-  --color-info: var(--info);
-  --color-info-foreground: var(--info-foreground);
-  --color-warning: var(--warning);
-  --color-warning-foreground: var(--warning-foreground);
-  --color-success: var(--success);
-  --color-success-foreground: var(--success-foreground);
-  --color-danger: var(--danger);
-  --color-danger-foreground: var(--danger-foreground);
   --color-ring: var(--ring);
   --color-input: var(--input);
   --color-border: var(--border);
@@ -99,6 +164,10 @@
   --color-card: var(--card);
   --color-foreground: var(--foreground);
   --color-background: var(--background);
+  --color-bg: var(--bg);
+  --color-text: var(--text);
+  --color-text-muted: var(--text-muted);
+  --color-text-faint: var(--text-faint);
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -108,8 +177,8 @@
   --radius-4xl: calc(var(--radius) * 2.6);
   --text-2xs: 0.625rem;
   --text-2xs--line-height: 0.875rem;
-  /* App typography scale (arcetecture §6.1 tokens). UI body is 15px; */
-  /* secondary text 13px; tiny caps 11px; filenames 14px medium. */
+
+  /* Typography scale */
   --text-ui: 0.9375rem;
   --text-ui--line-height: 1.55;
   --text-secondary: 0.8125rem;
@@ -119,7 +188,6 @@
   --text-tiny--letter-spacing: 0.04em;
   --text-filename: 0.875rem;
   --text-filename--line-height: 1.25;
-  /* Code: 12.5px mobile, 13px ≥ 48rem; 1.6 leading. */
   --text-code: 0.78125rem;
   --text-code--line-height: 1.6;
 }
@@ -130,24 +198,20 @@
   }
   html {
     @apply font-sans antialiased;
-    /* Never scroll the page horizontally; let contained areas scroll instead. */
     overflow-x: clip;
   }
   body {
     @apply min-h-dvh bg-background text-foreground;
     overflow-x: clip;
   }
-  /* Avoid scroll chaining / bounce between the app shell and nested scrollers. */
   html,
   body {
     overscroll-behavior: none;
   }
-  /* Consistent hairline icon weight across lucide and inline SVG marks. */
+  /* Consistent hairline icon weight */
   svg {
-    stroke-width: 1.75;
+    stroke-width: 1.5;
   }
-  /* Code never gets contextual ligatures and keeps tabular numerals so line
-     numbers, sizes and diff counts align column-straight. */
   code,
   pre,
   kbd,
@@ -159,8 +223,11 @@
   }
 }
 
-/* Horizontal-ruler code block with CSS-counter line numbers. Apply
-   `.code-lines` to the scroll container around a shiki <pre>. */
+/* ==========================================================================
+   UTILITIES
+   ========================================================================== */
+
+/* Code block with CSS-counter line numbers */
 .code-lines {
   counter-reset: buildx-code-line;
 }
@@ -182,75 +249,25 @@
   margin-right: 0.875rem;
   padding-right: 0.625rem;
   text-align: right;
-  color: oklch(1 0 0 / 25%);
+  color: var(--text-faint);
   font-variant-numeric: tabular-nums;
   user-select: none;
 }
 
-/* Vertical connector between consecutive tool steps in an activity group. */
-.timeline-rail > * {
-  position: relative;
-  padding-left: 1.35rem;
-}
-.timeline-rail > *::before {
-  content: "";
-  position: absolute;
-  left: 0.33rem;
-  top: 0.6rem;
-  bottom: 0;
-  width: 1px;
-  background: oklch(1 0 0 / 10%);
-}
-.timeline-rail > *:last-child::before {
-  bottom: 60%;
-}
-.timeline-rail > *::after {
-  content: "";
-  position: absolute;
-  left: calc(0.33rem - 3px);
-  top: 0.78rem;
-  width: 7px;
-  height: 7px;
-  border-radius: 9999px;
-  background: oklch(1 0 0 / 30%);
-  border: 1px solid oklch(0 0 0 / 50%);
-}
-.timeline-rail > *[data-status="running"]::after {
-  background: var(--warning);
-  box-shadow: 0 0 0 3px oklch(0.78 0.15 85 / 22%);
-  animation: buildx-pulse 1.6s ease-in-out infinite;
-}
-.timeline-rail > *[data-status="failed"]::after {
-  background: var(--danger);
-}
-.timeline-rail > *[data-status="done"]::after {
-  background: var(--success);
-}
-
-@keyframes buildx-pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.45;
-  }
-}
-
+/* Scrollbar - thin and unobtrusive */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
-
 ::-webkit-scrollbar-thumb {
-  background: oklch(1 0 0 / 12%);
+  background: var(--border);
   border-radius: 999px;
 }
-
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 
+/* Shimmer sweep for running indicators */
 @keyframes buildx-sweep {
   0% {
     background-position: 160% 0;
@@ -259,29 +276,24 @@
     background-position: -60% 0;
   }
 }
-
-/* Light that sweeps across an activity label while a step is in flight. */
 .shimmer-sweep {
   background-image: linear-gradient(
-    100deg,
+    90deg,
     transparent 34%,
-    oklch(1 0 0 / 45%) 50%,
+    var(--text-faint) 50%,
     transparent 66%
   );
   background-size: 200% 100%;
   background-repeat: no-repeat;
   animation: buildx-sweep 1.5s ease-in-out infinite;
 }
-
 @media (prefers-reduced-motion: reduce) {
   .shimmer-sweep {
     display: none;
   }
 }
 
-/* The "thinking trace": a row of short vertical strokes that light up in
-   sequence left-to-right to suggest a stream of computation. Each bar is
-   sized/delayed via CSS custom properties set inline by the component. */
+/* Thinking trace animation */
 .bx-trace-bar {
   display: inline-block;
   width: 2px;
@@ -292,8 +304,7 @@
   animation: buildx-trace-bar 1.6s ease-in-out var(--bx-delay, 0s) infinite;
 }
 @keyframes buildx-trace-bar {
-  0%,
-  100% {
+  0%, 100% {
     opacity: 0.14;
     transform: scaleY(0.55);
   }
@@ -312,7 +323,7 @@
   }
 }
 
-/* Respect iOS notch / home indicator (paired with viewport-fit=cover). */
+/* Safe area utilities */
 @utility pb-safe {
   padding-bottom: env(safe-area-inset-bottom);
 }
@@ -322,17 +333,16 @@
 @utility pr-safe {
   padding-right: env(safe-area-inset-right);
 }
-/* Safe-area bottom padding that still leaves breathing room on desktop. */
 @utility pb-safe-min {
   padding-bottom: max(env(safe-area-inset-bottom), 0.75rem);
 }
 
-/* Blinking block cursor for an in-flight terminal command. */
+/* Terminal cursor */
 @utility term-cursor {
   &::after {
     content: "▋";
     margin-left: 0.25rem;
-    color: var(--success);
+    color: var(--text-muted);
     animation: buildx-blink 1s steps(2, start) infinite;
   }
 }
@@ -347,91 +357,46 @@
   }
 }
 
-/* ANSI 16-color palette for terminal output (dark theme). anser emits these
-   class names with `use_classes: true`. Intentionally low-saturation on the
-   dark `--surface` so every ink passes 3:1 contrast. */
-.ansi-black-fg {
-  color: oklch(0.72 0 0);
+/* ==========================================================================
+   SHIKI MONOCHROME MAPPING
+   Syntax highlighting is grayscale only. The highlighter emits CSS variables
+   (see lib/highlight.ts), mapped here to the shared text tokens.
+   ========================================================================== */
+.shiki {
+  --shiki-foreground: var(--text);
+  --shiki-background: transparent;
+  --shiki-token-comment: var(--text-faint);
+  --shiki-token-constant: var(--text-muted);
+  --shiki-token-string: var(--text-muted);
+  --shiki-token-string-expression: var(--text-muted);
+  --shiki-token-keyword: var(--text);
+  --shiki-token-parameter: var(--text);
+  --shiki-token-function: var(--text);
+  --shiki-token-punctuation: var(--text-muted);
+  --shiki-token-link: var(--text-muted);
 }
-.ansi-red-fg {
-  color: oklch(0.7 0.21 25);
+
+/* ==========================================================================
+   ANSI ESCAPE MONOCHROME MAPPING
+   All terminal output uses grayscale only.
+   ========================================================================== */
+/* Anser emits `ansi-<color>-fg` / `-bg` classes for every palette color. Map
+   them all to the monochrome scale so terminal output never breaks the theme.
+   These come first so the specific rules below win when both apply. */
+:where([class*="ansi-"][class*="-fg"]) {
+  color: var(--text-muted);
 }
-.ansi-green-fg {
-  color: oklch(0.74 0.18 145);
-}
-.ansi-yellow-fg {
-  color: oklch(0.82 0.17 90);
-}
-.ansi-blue-fg {
-  color: oklch(0.7 0.15 225);
-}
-.ansi-magenta-fg {
-  color: oklch(0.72 0.2 310);
-}
-.ansi-cyan-fg {
-  color: oklch(0.74 0.13 190);
-}
-.ansi-white-fg {
-  color: oklch(0.92 0 0);
-}
-.ansi-bright-black-fg {
-  color: oklch(0.72 0 0);
-}
-.ansi-bright-red-fg {
-  color: oklch(0.7 0.21 25);
-}
-.ansi-bright-green-fg {
-  color: oklch(0.74 0.18 145);
-}
-.ansi-bright-yellow-fg {
-  color: oklch(0.82 0.17 90);
-}
-.ansi-bright-blue-fg {
-  color: oklch(0.7 0.15 225);
-}
-.ansi-bright-magenta-fg {
-  color: oklch(0.72 0.2 310);
-}
-.ansi-bright-cyan-fg {
-  color: oklch(0.74 0.13 190);
-}
-.ansi-bright-white-fg {
-  color: oklch(0.92 0 0);
-}
-/* 256-color escapes fall back to a readable gray-blue. */
-.ansi-palette-fg {
-  color: oklch(0.78 0.05 245);
-}
-.ansi-black-bg {
-  background: oklch(0.26 0 0);
-}
-.ansi-red-bg {
-  background: oklch(0.4 0.14 25);
-}
-.ansi-green-bg {
-  background: oklch(0.42 0.13 145);
-}
-.ansi-yellow-bg {
-  background: oklch(0.47 0.12 90);
-}
-.ansi-blue-bg {
-  background: oklch(0.4 0.12 225);
-}
-.ansi-magenta-bg {
-  background: oklch(0.42 0.14 310);
-}
-.ansi-cyan-bg {
-  background: oklch(0.42 0.1 190);
-}
-/* White on black resets back to muted gray instead of blinding white. */
-.ansi-white-bg {
-  background: oklch(0.3 0 0);
-}
-.ansi-bright-black-bg {
-  background: oklch(0.3 0 0);
+:where([class*="ansi-"][class*="-bg"]) {
+  background-color: var(--surface-hover);
 }
 .ansi-bold {
   font-weight: 600;
+  color: var(--text);
+}
+.ansi-dim,
+.ansi-faint {
+  opacity: 0.6;
+  color: var(--text-faint);
 }
 .ansi-italic {
   font-style: italic;
@@ -439,10 +404,185 @@
 .ansi-underline {
   text-decoration: underline;
 }
+.ansi-strikethrough {
+  text-decoration: line-through;
+}
 .ansi-hidden {
   visibility: hidden;
 }
-.ansi-dim {
-  opacity: 0.6;
+
+/* Success markers (✓, ✔, etc.) */
+.ansi-success {
+  color: var(--text-muted);
 }
 
+/* Error markers (✗, ✘, ✖, etc.) */
+.ansi-error {
+  color: var(--text);
+  font-weight: 500;
+}
+
+/* Links in output */
+.ansi-link {
+  color: var(--text-muted);
+  text-decoration: underline;
+  text-decoration-color: var(--text-faint);
+}
+
+/* File paths and URLs in output */
+.ansi-path,
+.ansi-url {
+  color: var(--text-faint);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+/* Line numbers in diffs */
+.ansi-diff-line {
+  color: var(--text-faint);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+/* ==========================================================================
+   TOOL ROW VARIANTS
+   ========================================================================== */
+
+/* Base tool row - shared styles */
+.tool-row {
+  @apply flex items-center gap-2 min-w-0 text-sm leading-normal;
+  height: 32px;
+  padding: 0 8px;
+}
+.tool-row:hover {
+  background: var(--surface-hover);
+  border-radius: 6px;
+}
+
+/* Verb label styles */
+.tool-row-verb {
+  @apply shrink-0 text-xs font-medium;
+  color: var(--text-muted);
+  width: 64px;
+  text-align: right;
+}
+.tool-row-verb--running {
+  animation: buildx-sweep 1.5s ease-in-out infinite;
+}
+
+/* Target/path styles */
+.tool-row-target {
+  @apply min-w-0 flex-1 truncate font-mono text-xs;
+  color: var(--text);
+}
+
+/* Duration/status styles */
+.tool-row-status {
+  @apply shrink-0 font-mono text-xs;
+  color: var(--text-faint);
+}
+
+/* Expand indicator */
+.tool-row-expand {
+  @apply size-3.5 shrink-0 text-text-faint;
+  transition: transform 120ms ease-out;
+}
+.tool-row-expand--open {
+  transform: rotate(90deg);
+}
+
+/* Running state */
+.tool-row--running {
+  cursor: default;
+}
+.tool-row--running .tool-row-verb {
+  background: linear-gradient(
+    90deg,
+    transparent 34%,
+    var(--text-faint) 50%,
+    transparent 66%
+  );
+  background-size: 200% 100%;
+  animation: buildx-sweep 1.5s ease-in-out infinite;
+}
+
+/* Failed state */
+.tool-row--failed .tool-row-target {
+  color: var(--text);
+}
+.tool-row--failed::after {
+  content: "Failed";
+  @apply shrink-0 font-mono text-xs ml-1;
+  color: var(--text);
+}
+
+/* ==========================================================================
+   CODE BLOCK VARIANTS
+   ========================================================================== */
+
+.code-block {
+  @apply overflow-hidden rounded-md;
+  background: var(--surface);
+}
+.code-block--bordered {
+  border: 1px solid var(--border);
+}
+
+/* Code block header */
+.code-block-header {
+  @apply flex items-center gap-2 px-3 py-1.5 border-b;
+  border-color: var(--border);
+  background: var(--surface-elevated);
+}
+
+/* Diff additions (monochrome only) */
+.diff-add {
+  @apply relative pl-2;
+}
+.diff-add::before {
+  content: "";
+  @apply absolute left-0 top-0 bottom-0 w-0.5;
+  background: var(--text-faint);
+}
+.diff-add-background {
+  background: var(--surface-hover);
+}
+
+/* Diff deletions */
+.diff-del {
+  @apply text-text-faint line-through;
+}
+
+/* Show more button */
+.code-show-more {
+  @apply w-full text-xs text-text-muted no-underline border-t;
+  border-color: var(--border);
+  background: transparent;
+  padding: 8px;
+}
+.code-show-more:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+/* ==========================================================================
+   TERMINAL OUTPUT
+   ========================================================================== */
+
+.terminal-output {
+  @apply font-mono text-xs leading-relaxed overflow-auto;
+  background: var(--surface);
+  max-height: 240px;
+  line-height: 1.5;
+}
+
+/* ==========================================================================
+   ACCESSIBILITY FOCUS RINGS
+   ========================================================================== */
+
+.focus-ring {
+  outline: none;
+}
+.focus-ring:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 2px;
+  opacity: 0.4;
+}

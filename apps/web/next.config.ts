@@ -22,6 +22,8 @@ for (const key of [
 }
 
 const nextConfig: NextConfig = {
+  // Keep the dev overlay out of screenshots (and out of the chat surface).
+  devIndicators: false,
   // Workspace packages export TypeScript source (`./src/index.ts`), so Next must
   // transpile them before bundling.
   transpilePackages: [

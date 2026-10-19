@@ -44,12 +44,12 @@ import { useShell } from "@/components/shell/shell-context";
 function StatusDot({ status }: { status: RunListItem["status"] }) {
   const tone =
     status === "completed"
-      ? "bg-emerald-400"
+      ? "bg-[var(--text-faint)]"
       : status === "failed" || status === "cancelled"
-        ? "bg-red-400"
+        ? "bg-[var(--text)]"
         : status === "running" || status === "queued" || status === "waiting_input"
-          ? "bg-amber-400 animate-pulse motion-reduce:animate-none"
-          : "bg-muted-foreground/50";
+          ? "bg-[var(--text-muted)] animate-pulse motion-reduce:animate-none"
+          : "bg-[var(--text-faint)]";
   return <span className={cn("size-1.5 shrink-0 rounded-full", tone)} />;
 }
 
@@ -258,7 +258,7 @@ function SidebarBody({
             ))}
           </div>
         ) : error ? (
-          <p className="px-2 py-3 text-xs text-red-400">{error}</p>
+          <p className="px-2 py-3 text-xs text-[var(--text-muted)]">{error}</p>
         ) : empty ? (
           <div className="px-2 py-6 text-center">
             <p className="text-xs leading-relaxed text-muted-foreground">

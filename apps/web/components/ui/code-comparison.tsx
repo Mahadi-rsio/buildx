@@ -27,7 +27,7 @@ export function CodeComparison({
   filename,
   lightTheme,
   darkTheme,
-  highlightColor = "#ff3333",
+  highlightColor = "rgb(237, 237, 237)",
 }: CodeComparisonProps) {
   const { theme, systemTheme } = useTheme()
   const [highlightedBefore, setHighlightedBefore] = useState("")

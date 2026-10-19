@@ -37,7 +37,7 @@ export function ModelPicker({
   const selected = value.trim();
   const effective = selected || defaultModel;
   const currentOption = models.find((m) => m.id === effective);
-  const displayName = currentOption?.name || effective || "Select model";
+  const displayName = selected ? currentOption?.name || selected : "Auto";
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -81,21 +81,22 @@ export function ModelPicker({
         render={
           <Button
             type="button"
-            variant="outline"
+            variant="ghost"
             size="sm"
             disabled={disabled}
+            title={effective || undefined}
             className={cn(
-              "h-8 min-w-0 gap-1.5 rounded-full border-border/80 bg-background/60 px-2.5 font-mono text-xs shadow-xs backdrop-blur-sm transition-all hover:border-foreground/30 hover:bg-muted/50",
+              "h-8 min-w-0 gap-1.5 rounded-full border-0 px-2 text-xs text-[var(--text-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]",
               className,
             )}
           />
         }
       >
-        <Sparkles className="size-3.5 shrink-0 text-primary/80" />
+        <Sparkles className="size-3.5 shrink-0 text-[var(--text-faint)]" />
         <span className="min-w-0 truncate font-sans text-xs font-medium">
           {displayName}
         </span>
-        <ChevronDown className="size-3 shrink-0 text-muted-foreground opacity-70" />
+        <ChevronDown className="size-3 shrink-0 text-[var(--text-faint)]" />
       </DropdownMenuTrigger>
 
       <DropdownMenuContent

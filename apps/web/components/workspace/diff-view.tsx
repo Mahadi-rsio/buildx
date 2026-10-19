@@ -18,18 +18,18 @@ const STATUS_LABEL: Record<DiffFile["status"], string> = {
 };
 
 const STATUS_TONE: Record<DiffFile["status"], string> = {
-  A: "bg-emerald-500/15 text-emerald-300",
-  M: "bg-amber-500/15 text-amber-300",
-  D: "bg-red-500/15 text-red-300",
+  A: "bg-[var(--surface-hover)] text-[var(--text)]",
+  M: "bg-[var(--surface)] text-[var(--text-muted)]",
+  D: "bg-[var(--surface)] text-[var(--text-faint)]",
 };
 
 function HunkLine({ line }: { line: DiffLine }) {
   const classes =
     line.type === "add"
-      ? "bg-success/12 text-success"
+      ? "bg-[var(--surface-hover)] text-[var(--text)]"
       : line.type === "del"
-        ? "bg-danger/12 text-danger"
-        : "text-muted-foreground/80";
+        ? "text-[var(--text-faint)] line-through"
+        : "text-[var(--text-muted)]";
   const sign = line.type === "add" ? "+" : line.type === "del" ? "-" : " ";
   return (
     <div className={cn("flex w-full min-w-0 leading-[1.6]", classes)}>
@@ -74,7 +74,7 @@ function DiffHunkView({ hunk }: { hunk: DiffHunk }) {
         <button
           type="button"
           onClick={() => setExpanded(true)}
-          className="flex w-full items-center gap-1.5 px-2 py-1 font-mono text-[10px] text-info transition hover:bg-muted/40"
+          className="flex w-full items-center gap-1.5 px-2 py-1 font-mono text-[10px] text-[var(--text-muted)] transition hover:bg-muted/40"
           aria-expanded={false}
         >
           <ChevronRight className="size-3" />
@@ -137,10 +137,10 @@ function DiffFileCard({
         >
           {STATUS_LABEL[file.status][0]}
         </span>
-        <span className="shrink-0 font-mono text-[10px] text-danger/80">
+        <span className="shrink-0 font-mono text-[10px] text-[var(--text-faint)]">
           {file.deletions > 0 ? `−${file.deletions}` : ""}
         </span>
-        <span className="shrink-0 font-mono text-[10px] text-success/80">
+        <span className="shrink-0 font-mono text-[10px] text-[var(--text-muted)]">
           {file.additions > 0 ? `+${file.additions}` : ""}
         </span>
       </button>
@@ -217,8 +217,8 @@ export function DiffView({
       <div className="flex shrink-0 items-center gap-2 border-b border-border bg-sidebar/60 px-2 py-1.5">
         <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground">
           {files.length} file{files.length === 1 ? "" : "s"} changed
-          <span className="ml-1.5 text-success">{`+${totals.additions}`}</span>
-          <span className="ml-1 text-danger">{`−${totals.deletions}`}</span>
+          <span className="ml-1.5 text-[var(--text)]">{`+${totals.additions}`}</span>
+          <span className="ml-1 text-[var(--text-faint)]">{`−${totals.deletions}`}</span>
           {unchanged > 0 ? (
             <span className="ml-1.5 text-muted-foreground/60">
               · {unchanged} unchanged
