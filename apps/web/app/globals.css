@@ -358,22 +358,22 @@
 }
 
 /* ==========================================================================
-   SHIKI MONOCHROME MAPPING
-   Syntax highlighting is grayscale only. The highlighter emits CSS variables
-   (see lib/highlight.ts), mapped here to the shared text tokens.
+   SHIKI SYNTAX THEME SWITCHING
+   lib/highlight.ts renders every token with both `--shiki-light` and
+   `--shiki-dark` values (github-light-default / github-dark-default). The
+   active theme picks one; backgrounds stay transparent so the code block keeps
+   the app surface instead of the theme's own background.
    ========================================================================== */
 .shiki {
-  --shiki-foreground: var(--text);
-  --shiki-background: transparent;
-  --shiki-token-comment: var(--text-faint);
-  --shiki-token-constant: var(--text-muted);
-  --shiki-token-string: var(--text-muted);
-  --shiki-token-string-expression: var(--text-muted);
-  --shiki-token-keyword: var(--text);
-  --shiki-token-parameter: var(--text);
-  --shiki-token-function: var(--text);
-  --shiki-token-punctuation: var(--text-muted);
-  --shiki-token-link: var(--text-muted);
+  background-color: transparent !important;
+}
+.shiki,
+.shiki span {
+  color: var(--shiki-light, currentColor);
+}
+.dark .shiki,
+.dark .shiki span {
+  color: var(--shiki-dark, currentColor);
 }
 
 /* ==========================================================================

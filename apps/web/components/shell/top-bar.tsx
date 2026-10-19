@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ModelPicker } from "@/components/model-picker";
+import { ThemeToggle } from "@/components/shell/theme-toggle";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useShell } from "@/components/shell/shell-context";
 import { cn } from "@/lib/utils";
@@ -105,6 +106,7 @@ export function TopBar() {
           className="hidden min-[420px]:flex sm:max-w-52"
           onOpenSettings={() => setSettingsOpen(true)}
         />
+        <ThemeToggle />
         <Button
           type="button"
           variant="ghost"

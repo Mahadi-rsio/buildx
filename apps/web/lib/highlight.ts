@@ -1,5 +1,4 @@
 import {
-  createCssVariablesTheme,
   createHighlighter,
   type BundledLanguage,
   type BundledTheme,
@@ -11,22 +10,14 @@ type LazyHighlighter = HighlighterGeneric<BundledLanguage, BundledTheme>;
 let highlighterPromise: Promise<LazyHighlighter> | null = null;
 const loadedLangs = new Set<BundledLanguage>();
 
-/**
- * Grayscale theme backed by the design-system CSS variables. Shiki writes
- * `color: var(--shiki-token-*)` inline and globals.css maps those variables to
- * `--text` / `--text-muted` / `--text-faint`, so highlighting stays monochrome
- * in both themes.
- */
-const MONO_THEME = createCssVariablesTheme({
-  name: "buildx-mono",
-  variablePrefix: "--shiki-",
-});
+const LIGHT_THEME = "github-light-default" as const;
+const DARK_THEME = "github-dark-default" as const;
 
 /** Lazily boot one highlighter and reuse it across calls. */
 function getHighlighter(): Promise<LazyHighlighter> {
   if (!highlighterPromise) {
     highlighterPromise = createHighlighter({
-      themes: [MONO_THEME],
+      themes: [LIGHT_THEME, DARK_THEME],
       langs: [],
     });
   }
@@ -50,9 +41,12 @@ export function plainCodeHtml(code: string): string {
 }
 
 /**
- * Highlight `code` with `lang`. Falls back to an escaped plain block when the
- * language is unknown or shiki cannot load. Returns shiki HTML (a
- * `<pre class="shiki">`) — render with `dangerouslySetInnerHTML`.
+ * Highlight `code` with `lang` using shiki's dual-theme output: every token
+ * carries both `--shiki-light` and `--shiki-dark` values and globals.css picks
+ * the active one from the `.dark` class, so the block re-colors with the theme
+ * without re-running the highlighter. Falls back to an escaped plain block when
+ * the language is unknown or shiki cannot load. Render with
+ * `dangerouslySetInnerHTML`.
  */
 export async function highlightCode(
   code: string,
@@ -73,7 +67,8 @@ export async function highlightCode(
     }
     return highlighter.codeToHtml(code, {
       lang: bundled,
-      theme: "buildx-mono",
+      themes: { light: LIGHT_THEME, dark: DARK_THEME },
+      defaultColor: false,
     });
   } catch {
     return plainCodeHtml(code);
