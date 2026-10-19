@@ -55,9 +55,7 @@ function boxNameFor(ctx: SandboxRunContext): string {
 export function sandboxSettings(): SandboxSettings {
   const boxApiKey = (process.env.UPSTASH_BOX_API_KEY ?? "").trim();
   const explicit = (process.env.BUILDX_SANDBOX_KIND ?? "").trim().toLowerCase();
-  const isProduction =
-    process.env.NODE_ENV === "production" ||
-    process.env.OPENNEXT_CLOUDFLARE === "true";
+  const isProduction = process.env.NODE_ENV === "production";
 
   if (isProduction && explicit === "local") {
     throw new Error(
@@ -205,9 +203,7 @@ export function createSandbox(ctx: SandboxRunContext): Sandbox {
       },
     });
   }
-  const isProduction =
-    process.env.NODE_ENV === "production" ||
-    process.env.OPENNEXT_CLOUDFLARE === "true";
+  const isProduction = process.env.NODE_ENV === "production";
   if (isProduction) {
     throw new Error(
       "Local sandbox execution is strictly forbidden in production. Configure UPSTASH_BOX_API_KEY.",

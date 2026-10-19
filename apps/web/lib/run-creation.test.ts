@@ -14,7 +14,7 @@ import {
   user,
 } from "@buildx/db";
 import { loadRootEnv } from "@buildx/shared/node";
-import { enqueueRunForUser } from "./run-creation";
+import { createRunForUser } from "./run-creation";
 
 loadRootEnv();
 
@@ -107,18 +107,18 @@ test("idempotency replay returns the original run and consumes quota once", { sk
   const uid = await newUser();
   const day = dhakaDay();
 
-  const first = await enqueueRunForUser(inputFor(uid, "post-a"));
+  const first = await createRunForUser(inputFor(uid, "post-a"));
   assert.equal(first.kind, "created");
   if (first.kind !== "created") return;
 
-  const second = await enqueueRunForUser(inputFor(uid, "post-a"));
+  const second = await createRunForUser(inputFor(uid, "post-a"));
   assert.equal(second.kind, "replayed");
   assert.equal(second.kind === "replayed" && second.run.id, first.run.id);
 
   assert.equal(await countRuns(uid), 1, "one retried POST queues one run");
   assert.equal(await dailyRequestCount(db!, uid, day), 1, "a replay does not double-charge");
 
-  const third = await enqueueRunForUser(inputFor(uid));
+  const third = await createRunForUser(inputFor(uid));
   assert.equal(third.kind, "created");
   const dayCountAfter = await dailyRequestCount(db!, uid, day);
   assert.equal(dayCountAfter, 2, "a genuinely new run consumes a new slot");
@@ -130,7 +130,7 @@ test("a day already at the limit is rejected before anything is queued", { skip:
 
   await db!.insert(dailyRequests).values({ userId: uid, day, count: DAILY_REQUEST_LIMIT });
 
-  const result = await enqueueRunForUser(inputFor(uid, "post-full"));
+  const result = await createRunForUser(inputFor(uid, "post-full"));
   assert.equal(result.kind, "quota_exhausted");
   assert.equal(await countRuns(uid), 0, "no run row is created over the limit");
 });
@@ -140,7 +140,7 @@ test("concurrent submissions with the same key produce exactly one run and one c
   const day = dhakaDay();
 
   const results = await Promise.all(
-    Array.from({ length: 5 }, () => enqueueRunForUser(inputFor(uid, "post-race"))),
+    Array.from({ length: 5 }, () => createRunForUser(inputFor(uid, "post-race"))),
   );
 
   const created = results.filter((r) => r.kind === "created");
@@ -159,7 +159,7 @@ test("a failed creation does not consume a quota slot", { skip: skipReason }, as
   const day = dhakaDay();
 
   await assert.rejects(
-    enqueueRunForUser({
+    createRunForUser({
       ...inputFor(uid),
       db: failingInsertOnce(db!),
     }),
@@ -184,7 +184,7 @@ test("concurrent run creation at the quota limit allows exactly one winner", { s
   // 5 distinct requests race for that single slot
   const results = await Promise.all(
     Array.from({ length: 5 }, (_, i) =>
-      enqueueRunForUser(inputFor(uid, `race-limit-${i}`)),
+      createRunForUser(inputFor(uid, `race-limit-${i}`)),
     ),
   );
 

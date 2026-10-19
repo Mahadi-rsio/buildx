@@ -1,7 +1,11 @@
 /**
- * Lazy, restart-safe worker startup. A single loop per process (`workerPromise`
- * is the guard); if it exits (or crashes) it is scheduled to start again, and a
- * dev hot-reload can restart cleanly because the flag is reset on exit.
+ * In-process run worker startup.
+ *
+ * The worker claims queued runs from PostgreSQL and executes them against
+ * Upstash Box. It runs in the same Node.js process as the web server and
+ * persists all state to the database, so the HTTP request that created the
+ * run returns immediately. The worker loop runs on every Node.js server
+ * instance; lease-based claiming and fencing tokens prevent double execution.
  */
 let workerPromise: Promise<void> | undefined;
 
@@ -13,14 +17,10 @@ function startWorker(): void {
   workerPromise = (async () => {
     while (true) {
       // Imported lazily so `instrumentation.ts` stays side-effect free during
-      // static analysis and the Next build; the worker only boots on a real
-      // run.
+      // static analysis and the Next build; the worker only boots at runtime.
       const worker = await import("./lib/job-worker");
       if (worker.isWorkerStopped()) break;
       try {
-        // Fire-and-forget on purpose: the worker must never block request
-        // handling or the build. It recovers/claims/executes detached (§9) and
-        // retries transient database outages internally.
         await worker.runWorker();
       } catch (error) {
         console.error("[buildx-worker] crashed; restarting", error);
@@ -30,7 +30,6 @@ function startWorker(): void {
     }
   })();
 
-  // Reset on exit so a dev restart / hot reload can start a fresh loop.
   void workerPromise.finally(() => {
     workerPromise = undefined;
   });
@@ -38,11 +37,9 @@ function startWorker(): void {
 
 const instrumentation = {
   register() {
-    // Persistent polling workers are completely disabled in production and Cloudflare Workers.
-    // Cloudflare Queues handle asynchronous dispatch in production.
+    // Run the worker in Node.js (dev and production). The worker claims runs
+    // from the database and executes them with proper lease management.
     if (
-      process.env.NODE_ENV !== "production" &&
-      process.env.OPENNEXT_CLOUDFLARE !== "true" &&
       process.env.NEXT_RUNTIME === "nodejs" &&
       !process.env.BUILDX_DISABLE_LOCAL_WORKER
     ) {

@@ -1,13 +1,13 @@
 import { getCurrentUser, unauthorized } from "@/lib/auth/server";
 import { findOwnedRun } from "@/lib/authz";
-import { getCloudflareBindings } from "@/lib/cloudflare/context";
 import { createStorage } from "@buildx/storage";
 
 export const dynamic = "force-dynamic";
 
 /**
  * GET /api/artifacts/...key
- * Serves artifacts, build outputs, and archives stored in Cloudflare R2.
+ * Serves artifacts, build outputs, and archives stored in R2.
+ * Uses the S3-compatible SDK via @buildx/storage.
  * Strictly enforces user ownership and authorization.
  */
 export async function GET(
@@ -56,44 +56,7 @@ export async function GET(
     );
   }
 
-  const bindings = getCloudflareBindings();
-
-  // Primary: Native Cloudflare R2 binding
-  if (bindings.BUILDX_R2) {
-    try {
-      const object = await bindings.BUILDX_R2.get(key);
-      if (!object) {
-        return new Response(JSON.stringify({ error: "Artifact not found" }), {
-          status: 404,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-
-      const headers = new Headers();
-      headers.set(
-        "Content-Type",
-        object.httpMetadata?.contentType ?? "application/octet-stream",
-      );
-      if (object.httpMetadata?.contentDisposition) {
-        headers.set("Content-Disposition", object.httpMetadata.contentDisposition);
-      }
-      if (object.size !== undefined) {
-        headers.set("Content-Length", String(object.size));
-      }
-      headers.set("ETag", object.httpEtag ?? `"${object.version}"`);
-      headers.set("Cache-Control", "private, max-age=3600");
-
-      return new Response(object.body, { headers });
-    } catch (error) {
-      console.error(`[artifacts] error retrieving ${key} from R2 binding`, error);
-      return new Response(JSON.stringify({ error: "Internal server error" }), {
-        status: 500,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-  }
-
-  // Fallback: S3/R2 client via @buildx/storage
+  // Serve via S3-compatible storage client (R2)
   try {
     const storage = createStorage();
     const info = await storage.head(key);

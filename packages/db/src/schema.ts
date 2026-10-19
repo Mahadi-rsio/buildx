@@ -496,36 +496,6 @@ export const dailyRequests = pgTable(
   (table) => [primaryKey({ columns: [table.userId, table.day] })],
 );
 
-export type OutboxStatus = "pending" | "published" | "failed";
-
-/**
- * Transactional outbox for Cloudflare Queue dispatch.
- * Inserted atomically with run creation and quota reservation.
- * Ensures zero lost jobs even if network or worker fails before Queue publication.
- */
-export const outbox = pgTable(
-  "outbox",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    runId: uuid("run_id")
-      .notNull()
-      .references(() => runs.id, { onDelete: "cascade" }),
-    eventType: text("event_type").notNull().default("run_dispatched"),
-    payload: jsonb("payload").notNull(),
-    status: text("status").$type<OutboxStatus>().notNull().default("pending"),
-    retryCount: integer("retry_count").notNull().default(0),
-    lastError: text("last_error"),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-    publishedAt: timestamp("published_at", { withTimezone: true }),
-  },
-  (table) => [
-    index("outbox_status_createdAt_idx").on(table.status, table.createdAt),
-    index("outbox_runId_idx").on(table.runId),
-  ],
-);
-
 export const workspaceRelations = relations(workspaces, ({ one, many }) => ({
   user: one(user, { fields: [workspaces.userId], references: [user.id] }),
   usageSessions: many(usageSessions),
@@ -537,11 +507,6 @@ export const runRelations = relations(runs, ({ one, many }) => ({
   task: one(tasks, { fields: [runs.taskId], references: [tasks.id] }),
   messages: many(messages),
   events: many(events),
-  outbox: many(outbox),
-}));
-
-export const outboxRelations = relations(outbox, ({ one }) => ({
-  run: one(runs, { fields: [outbox.runId], references: [runs.id] }),
 }));
 
 export const taskRelations = relations(tasks, ({ one, many }) => ({

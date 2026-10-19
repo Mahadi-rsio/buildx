@@ -30,10 +30,7 @@ export class LocalSandbox implements Sandbox {
   private readonly procs = new Map<ProcId, ChildProcess>();
 
   constructor(options: LocalSandboxOptions) {
-    if (
-      process.env.NODE_ENV === "production" ||
-      process.env.OPENNEXT_CLOUDFLARE === "true"
-    ) {
+    if (process.env.NODE_ENV === "production") {
       throw new Error(
         "LocalSandbox is strictly forbidden in production. Production runs must use Upstash Box.",
       );

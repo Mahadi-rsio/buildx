@@ -19,11 +19,21 @@ if (!secret) {
 
 const baseURL = process.env.BETTER_AUTH_URL?.trim() || "http://localhost:3000";
 
+// trustedOrigins must include all origins that will make requests to the auth API
+// - baseURL: the primary app URL
+// - 10.0.0.129: local network IP (for Cloudflare Tunnel / dev environments)
+// - workers.dev: Cloudflare Workers production URL
 export const auth = betterAuth({
   secret,
   baseURL,
   database: drizzleAdapter(getDb(), { provider: "pg", schema }),
-  trustedOrigins: [baseURL, "https://buildx.rsioex.workers.dev", "https://buildx.rsioex.workers.dev/api/auth"],
+  trustedOrigins: [
+    baseURL,
+    "http://localhost:3000",
+    "http://10.0.0.129:3000",
+    "https://buildx.rsioex.workers.dev",
+    "https://buildx.rsioex.workers.dev/api/auth",
+  ],
 
   emailAndPassword: {
     enabled: true,

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { createRunSchema, envStatus } from "@buildx/shared";
 import { getCurrentUser, unauthorized } from "@/lib/auth/server";
 import { listRunsForUser, toRunSummary } from "@/lib/store";
-import { enqueueRunForUser } from "@/lib/run-creation";
+import { createRunForUser } from "@/lib/run-creation";
 
 export const dynamic = "force-dynamic";
 
@@ -25,12 +25,12 @@ export async function GET(request?: Request): Promise<Response> {
 }
 
 /**
- * `POST /api/runs` — enqueue a run as a `queued` row (arcetecture.md §5.2,
- * §9). Execution is driven by the durable job worker once it claims the run's
- * lease; the request returns as soon as the row is persisted. A repeat call
- * with the same `idempotencyKey` returns the original run instead of queuing a
- * second one and does not consume a quota slot. A day at its hard limit is
- * rejected with `429` before anything is queued.
+ * `POST /api/runs` — create a run as a `queued` row (arcetecture.md §5.2).
+ * Execution is driven by the in-process worker once it claims the run's lease;
+ * the request returns as soon as the row is persisted. A repeat call with the
+ * same `idempotencyKey` returns the original run instead of creating a second
+ * one and does not consume a quota slot. A day at its hard limit is rejected
+ * with `429` before anything is queued.
  */
 export async function POST(request: Request): Promise<Response> {
   const correlationId = request.headers.get("x-correlation-id") || randomUUID();
@@ -65,8 +65,8 @@ export async function POST(request: Request): Promise<Response> {
     }
 
     const selectedModel = parsed.data.model?.trim() || config.model;
-    console.log(`[POST /api/runs][${correlationId}] enqueuing run for user=${user.id} model=${selectedModel}`);
-    const result = await enqueueRunForUser({
+    console.log(`[POST /api/runs][${correlationId}] creating run for user=${user.id} model=${selectedModel}`);
+    const result = await createRunForUser({
       user: {
         id: user.id,
         name: user.name,

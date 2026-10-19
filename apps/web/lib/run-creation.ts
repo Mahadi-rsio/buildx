@@ -11,40 +11,32 @@ import {
   monthlyCpuSecondsUsed,
   nextDhakaReset,
   runs as runsTable,
-  insertOutboxMessage,
   type Db,
 } from "@buildx/db";
-import type { QueueBinding } from "./cloudflare/context";
 import type { WorkspaceUsage } from "./types";
 import {
   getRunForIdempotencyKey,
   hydrateRun,
   type StoredRun,
 } from "./store";
-import { dispatchRunToQueue } from "./queue/producer";
 
 /**
- * Enqueue a run for a user with idempotent + quota-safe atomic semantics:
+ * Create a run for a user with idempotent + quota-safe atomic semantics:
  *
  * 1. A repeat submit with the same `idempotencyKey` replays the original run
- *    and never consumes another quota slot (a client retry after a dropped
- *    response isn't double-charged or duplicated).
+ *    and never consumes another quota slot.
  * 2. A day that is already at its hard limit is rejected *before* any row is
  *    created.
- * 3. Quota reservation, idempotency handling, and run creation are executed
- *    atomically inside a single database transaction. A run row is never
- *    committed or visible to queue scanners until its quota reservation has
- *    succeeded.
- * 4. If run creation fails, the transaction aborts and PostgreSQL rolls back the
- *    quota consumption automatically, preventing orphaned quota usage or double-refunds.
- * 5. Racing requests for the final quota slot cannot overshoot the daily quota.
+ * 3. Quota reservation and run creation are executed atomically inside a single
+ *    database transaction.
+ * 4. The run is created as `queued`; the in-process worker claims and executes it.
  */
-export type EnqueueRunResult =
+export type CreateRunResult =
   | { kind: "created"; run: StoredRun }
   | { kind: "replayed"; run: StoredRun }
   | { kind: "quota_exhausted" };
 
-export interface EnqueueRunInput {
+export interface CreateRunInput {
   user: { id: string; name?: string | null; email: string };
   task: string;
   model: string;
@@ -53,8 +45,6 @@ export interface EnqueueRunInput {
   correlationId?: string;
   /** Injectable for tests; defaults to the app's database. */
   db?: Db;
-  /** Injectable queue binding for tests. */
-  queue?: QueueBinding;
 }
 
 async function usageFor(db: Db, userId: string): Promise<WorkspaceUsage> {
@@ -71,11 +61,18 @@ async function usageFor(db: Db, userId: string): Promise<WorkspaceUsage> {
   };
 }
 
-export async function enqueueRunForUser(
-  input: EnqueueRunInput,
-): Promise<EnqueueRunResult> {
+/**
+ * Create (or replay) a run for a user.
+ *
+ * The run is created in `queued` status and will be claimed and executed by the
+ * in-process worker loop (instrumentation.ts).
+ */
+export async function createRunForUser(
+  input: CreateRunInput,
+): Promise<CreateRunResult> {
   const db = input.db ?? getDb();
   const day = dhakaDay();
+  const correlationId = input.correlationId ?? randomUUID();
 
   // Fast-path replay check outside transaction
   if (input.idempotencyKey) {
@@ -166,71 +163,15 @@ export async function enqueueRunForUser(
         })
         .returning();
 
-      // Record dispatch intent in the transactional outbox atomically
-      const outboxRow = await insertOutboxMessage(tx, {
-        runId: id,
-        payload: {
-          runId: id,
-          userId: input.user.id,
-          task: input.task,
-          model: input.model,
-          maxSteps: input.maxSteps,
-          idempotencyKey: input.idempotencyKey ?? null,
-          step: 0,
-        },
-      });
-
-      return { kind: "created" as const, row: rows[0], outboxId: outboxRow.id };
+      return { kind: "created" as const, row: rows[0] };
     });
 
     if (result.kind === "quota_exhausted") {
       return { kind: "quota_exhausted" };
     }
 
-    if (result.kind === "created" && result.outboxId) {
-      const correlationId = input.correlationId || result.row.id;
-      console.log(`[run-creation][${correlationId}] awaiting queue dispatch for run=${result.row.id} outbox=${result.outboxId}`);
-      let dispatched = false;
-      try {
-        dispatched = await dispatchRunToQueue(
-          {
-            runId: result.row.id,
-            idempotencyKey: input.idempotencyKey,
-            outboxId: result.outboxId,
-            step: 0,
-            correlationId,
-          },
-          { db, queue: input.queue },
-        );
-      } catch (err) {
-        console.error(`[run-creation][${correlationId}] queue dispatch threw error for run=${result.row.id}:`, err);
-        dispatched = false;
-      }
-
-      if (!dispatched) {
-        console.error(`[run-creation][${correlationId}] queue dispatch failed for run=${result.row.id}; updating status to failed`);
-        const now = new Date();
-        const safeError = "Failed to dispatch run to execution queue";
-        await db
-          .update(runsTable)
-          .set({
-            status: "failed",
-            endedAt: now,
-            error: safeError,
-            updatedAt: now,
-          })
-          .where(eq(runsTable.id, result.row.id))
-          .catch((err) => {
-            console.error(`[run-creation][${correlationId}] failed to update run to failed:`, err);
-          });
-
-        result.row.status = "failed";
-        result.row.error = safeError;
-        result.row.endedAt = now;
-        result.row.updatedAt = now;
-      } else {
-        console.log(`[run-creation][${correlationId}] queue dispatch succeeded for run=${result.row.id}`);
-      }
+    if (result.kind === "created") {
+      console.log(`[run-creation][${correlationId}] run queued: ${result.row.id}`);
     }
 
     const run = await hydrateRun(result.row);
