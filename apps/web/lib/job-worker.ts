@@ -23,7 +23,6 @@ import {
   type StoredRun,
   type TerminalRunStatus,
 } from "./store";
-import { sandboxSettings } from "./sandbox";
 
 const LEASE_TTL_MS = 60_000;
 const LOCK_TTL_MS = 60_000;
@@ -74,21 +73,14 @@ const workerState = globalThis as unknown as {
 
 /**
  * Identity of the workspace a run mutates, used as the workspace-lock key.
- * Box mode gives every run of a user the same persistent workspace (one box
- * per user), so the user's runs contend on a single lock — that is what keeps
- * two instances from mutating the same persistent VM at once. Local mode gives
- * each run its own scratch directory, so locks are per-run.
+ * Every run of a user shares the same persistent Box workspace, so the user's
+ * runs contend on a single lock — that is what keeps two instances from
+ * mutating the same VM at once.
  */
 export function workspaceIdentityFor(
   run: Pick<StoredRun, "id" | "userId">,
 ): string {
-  try {
-    if (sandboxSettings().kind === "box") return `user:${run.userId}`;
-  } catch {
-    // Sandbox not configured (read-only tooling): fall back to the per-run key
-    // rather than failing the lock acquisition.
-  }
-  return `run:${run.id}`;
+  return `user:${run.userId}`;
 }
 
 /**

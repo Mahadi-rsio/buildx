@@ -178,6 +178,7 @@ export function WorkspacePanel({
   path,
   listing,
   file,
+  filesLoading,
   filesError,
   diffFiles,
   diffUnchanged,
@@ -195,6 +196,7 @@ export function WorkspacePanel({
   path: string;
   listing: FilesResponse | null;
   file: FileContentResponse | null;
+  filesLoading: boolean;
   filesError: string | null;
   diffFiles: DiffFile[];
   diffUnchanged: number;
@@ -285,12 +287,17 @@ export function WorkspacePanel({
                   path={file.path}
                   content={file.binary ? "" : file.content}
                 />
-              ) : listing ? (
+              ) : listing && listing.entries.length > 0 ? (
                 <FileTreeView
                   listing={listing}
                   path={path}
                   onNavigate={onNavigate}
                   onOpenFile={onOpenFile}
+                />
+              ) : filesLoading ? (
+                <Unavailable
+                  title="Loading workspace"
+                  detail="Connecting to your Upstash Box…"
                 />
               ) : (
                 <Unavailable

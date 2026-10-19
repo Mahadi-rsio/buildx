@@ -17,8 +17,7 @@ function message(error: unknown): string {
  * `GET /api/workspaces/:id/diff` — unified diff between the run-start baseline
  * snapshot and the workspace's current contents (arcetecture.md §6). The
  * baseline is captured lazily for older runs that predate snapshotting. Reads
- * through the run's `WorkspaceSource` so it works for local and box
- * sandboxes alike.
+ * through the user's persistent Box workspace.
  */
 export async function GET(
   _request: Request,

@@ -13,7 +13,10 @@ export function useWorkspaceFiles(
   const [listing, setListing] = useState<FilesResponse | null>(null);
   const [file, setFile] = useState<FileContentResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loadedKey, setLoadedKey] = useState<string | null>(null);
   const [refreshNonce, setRefreshNonce] = useState(0);
+
+  const requestKey = `${workspaceId}\u0000${path}`;
 
   const fetchPath = useCallback(
     async (
@@ -101,11 +104,12 @@ export function useWorkspaceFiles(
       const result = await fetchPath(path);
       if (!alive) return;
       apply(result);
+      setLoadedKey(requestKey);
     })();
     return () => {
       alive = false;
     };
-  }, [workspaceId, path, active, refreshNonce, fetchPath, apply]);
+  }, [workspaceId, path, active, refreshNonce, fetchPath, apply, requestKey]);
 
   // Gentle polling so the open panel tracks the agent writing files.
   useEffect(() => {
@@ -118,10 +122,14 @@ export function useWorkspaceFiles(
     };
   }, [active, pollMs]);
 
+  const loading =
+    active && workspaceId.length > 0 && loadedKey !== requestKey;
+
   return {
     path,
     listing,
     file,
+    loading,
     error,
     navigate,
     openFile,

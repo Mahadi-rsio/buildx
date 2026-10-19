@@ -23,7 +23,6 @@ function fakeRun(overrides: Partial<StoredRun> = {}): StoredRun {
     status: "running",
     model: "gpt-4o-mini",
     maxSteps: 5,
-    workspaceDir: "/tmp/run-1",
     createdAt: 0,
     updatedAt: 0,
     events: [],

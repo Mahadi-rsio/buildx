@@ -173,31 +173,10 @@ export function collectFileChanges(
 
 export function collectTerminalOutput(events: RunEvent[]): string {
   return toStreamItems(events)
-    .filter(
-      (item): item is Extract<StreamItem, { kind: "terminal" }> =>
-        item.kind === "terminal",
-    )
-    .map((item) => item.chunk)
+    .map((item) => {
+      if (item.kind === "terminal") return item.chunk;
+      if (item.kind === "tool") return item.terminal ?? "";
+      return "";
+    })
     .join("");
-}
-
-export function guessLanguage(path: string): string {
-  const ext = path.split(".").pop()?.toLowerCase() ?? "";
-  const map: Record<string, string> = {
-    ts: "typescript",
-    tsx: "tsx",
-    js: "javascript",
-    jsx: "jsx",
-    json: "json",
-    md: "markdown",
-    css: "css",
-    html: "html",
-    py: "python",
-    go: "go",
-    rs: "rust",
-    sh: "bash",
-    yml: "yaml",
-    yaml: "yaml",
-  };
-  return map[ext] ?? "text";
 }

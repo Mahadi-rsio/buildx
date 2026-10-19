@@ -42,6 +42,24 @@
   /* Failed: X icon + full text opacity */
   /* Done: no icon, or minimal check in --text-faint */
 
+  /* ANSI terminal palette - scoped to command output, not the app chrome. */
+  --ansi-black: #484f58;
+  --ansi-red: #ff7b72;
+  --ansi-green: #3fb950;
+  --ansi-yellow: #d29922;
+  --ansi-blue: #79c0ff;
+  --ansi-magenta: #d2a8ff;
+  --ansi-cyan: #56d4dd;
+  --ansi-white: #b1bac4;
+  --ansi-bright-black: #6e7681;
+  --ansi-bright-red: #ffa198;
+  --ansi-bright-green: #56d364;
+  --ansi-bright-yellow: #e3b341;
+  --ansi-bright-blue: #a5d6ff;
+  --ansi-bright-magenta: #e2c5ff;
+  --ansi-bright-cyan: #76e3ea;
+  --ansi-bright-white: #f0f6fc;
+
   /* Semantic mappings for compatibility */
   --background: var(--bg);
   --foreground: var(--text);
@@ -96,6 +114,24 @@
   --text-faint: #A3A3A3;
   --accent: #171717;
   --accent-foreground: #FAFAFA;
+
+  /* ANSI terminal palette - scoped to command output, not the app chrome. */
+  --ansi-black: #24292f;
+  --ansi-red: #cf222e;
+  --ansi-green: #116329;
+  --ansi-yellow: #7d4e00;
+  --ansi-blue: #0969da;
+  --ansi-magenta: #8250df;
+  --ansi-cyan: #1b7c83;
+  --ansi-white: #6e7781;
+  --ansi-bright-black: #57606a;
+  --ansi-bright-red: #a40e26;
+  --ansi-bright-green: #1a7f37;
+  --ansi-bright-yellow: #9a6700;
+  --ansi-bright-blue: #218bff;
+  --ansi-bright-magenta: #a475f9;
+  --ansi-bright-cyan: #3192aa;
+  --ansi-bright-white: #8c959f;
 
   --background: var(--bg);
   --foreground: var(--text);
@@ -377,26 +413,52 @@
 }
 
 /* ==========================================================================
-   ANSI ESCAPE MONOCHROME MAPPING
-   All terminal output uses grayscale only.
+   ANSI ESCAPE PALETTE
+   Terminal output keeps its ANSI colors; app chrome stays monochrome.
    ========================================================================== */
-/* Anser emits `ansi-<color>-fg` / `-bg` classes for every palette color. Map
-   them all to the monochrome scale so terminal output never breaks the theme.
-   These come first so the specific rules below win when both apply. */
-:where([class*="ansi-"][class*="-fg"]) {
-  color: var(--text-muted);
-}
-:where([class*="ansi-"][class*="-bg"]) {
-  background-color: var(--surface-hover);
-}
+/* Anser emits `ansi-<color>-fg` / `-bg` classes for every palette color.
+   These resolve against the ANSI palette, so terminal output keeps its
+   meaning without tinting the rest of the monochrome UI. */
+.ansi-black-fg { color: var(--ansi-black); }
+.ansi-red-fg { color: var(--ansi-red); }
+.ansi-green-fg { color: var(--ansi-green); }
+.ansi-yellow-fg { color: var(--ansi-yellow); }
+.ansi-blue-fg { color: var(--ansi-blue); }
+.ansi-magenta-fg { color: var(--ansi-magenta); }
+.ansi-cyan-fg { color: var(--ansi-cyan); }
+.ansi-white-fg { color: var(--ansi-white); }
+.ansi-bright-black-fg { color: var(--ansi-bright-black); }
+.ansi-bright-red-fg { color: var(--ansi-bright-red); }
+.ansi-bright-green-fg { color: var(--ansi-bright-green); }
+.ansi-bright-yellow-fg { color: var(--ansi-bright-yellow); }
+.ansi-bright-blue-fg { color: var(--ansi-bright-blue); }
+.ansi-bright-magenta-fg { color: var(--ansi-bright-magenta); }
+.ansi-bright-cyan-fg { color: var(--ansi-bright-cyan); }
+.ansi-bright-white-fg { color: var(--ansi-bright-white); }
+
+.ansi-black-bg { background-color: color-mix(in srgb, var(--ansi-black) 24%, transparent); }
+.ansi-red-bg { background-color: color-mix(in srgb, var(--ansi-red) 24%, transparent); }
+.ansi-green-bg { background-color: color-mix(in srgb, var(--ansi-green) 24%, transparent); }
+.ansi-yellow-bg { background-color: color-mix(in srgb, var(--ansi-yellow) 24%, transparent); }
+.ansi-blue-bg { background-color: color-mix(in srgb, var(--ansi-blue) 24%, transparent); }
+.ansi-magenta-bg { background-color: color-mix(in srgb, var(--ansi-magenta) 24%, transparent); }
+.ansi-cyan-bg { background-color: color-mix(in srgb, var(--ansi-cyan) 24%, transparent); }
+.ansi-white-bg { background-color: color-mix(in srgb, var(--ansi-white) 24%, transparent); }
+.ansi-bright-black-bg { background-color: color-mix(in srgb, var(--ansi-bright-black) 24%, transparent); }
+.ansi-bright-red-bg { background-color: color-mix(in srgb, var(--ansi-bright-red) 24%, transparent); }
+.ansi-bright-green-bg { background-color: color-mix(in srgb, var(--ansi-bright-green) 24%, transparent); }
+.ansi-bright-yellow-bg { background-color: color-mix(in srgb, var(--ansi-bright-yellow) 24%, transparent); }
+.ansi-bright-blue-bg { background-color: color-mix(in srgb, var(--ansi-bright-blue) 24%, transparent); }
+.ansi-bright-magenta-bg { background-color: color-mix(in srgb, var(--ansi-bright-magenta) 24%, transparent); }
+.ansi-bright-cyan-bg { background-color: color-mix(in srgb, var(--ansi-bright-cyan) 24%, transparent); }
+.ansi-bright-white-bg { background-color: color-mix(in srgb, var(--ansi-bright-white) 24%, transparent); }
+
 .ansi-bold {
   font-weight: 600;
-  color: var(--text);
 }
 .ansi-dim,
 .ansi-faint {
   opacity: 0.6;
-  color: var(--text-faint);
 }
 .ansi-italic {
   font-style: italic;
@@ -413,26 +475,26 @@
 
 /* Success markers (✓, ✔, etc.) */
 .ansi-success {
-  color: var(--text-muted);
+  color: var(--ansi-green);
 }
 
 /* Error markers (✗, ✘, ✖, etc.) */
 .ansi-error {
-  color: var(--text);
+  color: var(--ansi-red);
   font-weight: 500;
 }
 
 /* Links in output */
 .ansi-link {
-  color: var(--text-muted);
+  color: var(--ansi-blue);
   text-decoration: underline;
-  text-decoration-color: var(--text-faint);
+  text-decoration-color: color-mix(in srgb, var(--ansi-blue) 45%, transparent);
 }
 
 /* File paths and URLs in output */
 .ansi-path,
 .ansi-url {
-  color: var(--text-faint);
+  color: var(--ansi-cyan);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 

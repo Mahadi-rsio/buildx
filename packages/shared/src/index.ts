@@ -57,6 +57,8 @@ export interface ToolResultPayload {
 export interface TerminalPayload {
   stream: "stdout" | "stderr";
   chunk: string;
+  /** The bash tool call that produced this chunk, when known. */
+  toolCallId?: string;
 }
 
 export interface FileChangePayload {

@@ -327,6 +327,62 @@ test("BoxSandbox.start creates the box when getByName returns 404", async () => 
   }
 });
 
+test("BoxSandbox.connect attaches to an existing box without creating one", async () => {
+  const existing = makeMockBox();
+  const originalGet = Box.getByName;
+  const originalCreate = Box.create;
+  let created = false;
+  Box.getByName = async () => existing;
+  Box.create = async () => {
+    created = true;
+    return existing;
+  };
+  try {
+    const s = new BoxSandbox({ name: "existing-box", apiKey: "k" });
+    assert.equal(await s.connect(), true);
+    assert.strictEqual(s["box"], existing);
+    assert.equal(created, false);
+  } finally {
+    Box.getByName = originalGet;
+    Box.create = originalCreate;
+  }
+});
+
+test("BoxSandbox.connect returns false and does not create when the box is missing", async () => {
+  const originalGet = Box.getByName;
+  const originalCreate = Box.create;
+  let created = false;
+  Box.getByName = async () => {
+    throw new BoxError("box not found", 404);
+  };
+  Box.create = async () => {
+    created = true;
+    return makeMockBox();
+  };
+  try {
+    const s = new BoxSandbox({ name: "missing-box", apiKey: "k" });
+    assert.equal(await s.connect(), false);
+    assert.equal(s["box"], null);
+    assert.equal(created, false);
+  } finally {
+    Box.getByName = originalGet;
+    Box.create = originalCreate;
+  }
+});
+
+test("BoxSandbox.connect rethrows non-404 errors", async () => {
+  const originalGet = Box.getByName;
+  Box.getByName = async () => {
+    throw new BoxError("unauthorized", 401);
+  };
+  try {
+    const s = new BoxSandbox({ name: "forbidden-box", apiKey: "k" });
+    await assert.rejects(() => s.connect(), /unauthorized/);
+  } finally {
+    Box.getByName = originalGet;
+  }
+});
+
 test("BoxSandbox.start rethrows non-404 errors from getByName", async () => {
   const originalGet = Box.getByName;
   Box.getByName = async () => {

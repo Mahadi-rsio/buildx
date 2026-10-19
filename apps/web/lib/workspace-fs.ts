@@ -14,8 +14,8 @@ export const DIFF_CONTEXT = 3;
 export type Baseline = Map<string, string>;
 
 /**
- * Capture the current workspace contents as a baseline. Reads through a
- * `WorkspaceSource` so local and box runs behave the same.
+ * Capture the current workspace contents as a baseline. Reads through the
+ * run's `WorkspaceSource` (the user's persistent Box workspace).
  */
 export async function captureWorkspaceSnapshot(
   source: WorkspaceSource,

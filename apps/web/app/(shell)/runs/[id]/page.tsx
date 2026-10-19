@@ -97,6 +97,7 @@ export default function RunPage() {
         path: files.path,
         listing: files.listing,
         file: files.file,
+        filesLoading: files.loading,
         filesError: files.error,
         onNavigate: files.navigate,
         onOpenFile: (target) => void files.openFile(target),

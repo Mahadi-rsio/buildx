@@ -1,6 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
 import { runTask } from "@buildx/agent";
 import type { Sandbox } from "@buildx/sandbox";
 import {
@@ -18,9 +16,7 @@ import {
   type StoredRun,
   type TerminalRunStatus,
 } from "./store";
-import { captureWorkspaceSnapshot } from "./workspace-fs";
-import { cancelRemoteBoxExecution, createSandbox, sandboxSettings } from "./sandbox";
-import { sourceForRun } from "./workspace-source";
+import { cancelRemoteBoxExecution, createSandbox } from "./sandbox";
 import { getQuotaService } from "./quota";
 
 function guardSandbox(sandbox: Sandbox, run: StoredRun): Sandbox {
@@ -112,38 +108,6 @@ function guardSandbox(sandbox: Sandbox, run: StoredRun): Sandbox {
   };
 }
 
-/** Seed the workspace so `list_dir` / `read_file` have something real to read. */
-async function seedWorkspace(run: StoredRun): Promise<void> {
-  if (
-    run.runtime.lostOwnership ||
-    run.runtime.controller.signal.aborted ||
-    (run.leaseExpiresAt && run.leaseExpiresAt <= Date.now())
-  ) {
-    run.runtime.lostOwnership = true;
-    throw new Error(`Cannot seed workspace: run ${run.id} lost ownership or expired`);
-  }
-  const readme = [
-    "# buildx workspace",
-    "",
-    `Run: \`${run.id}\``,
-    `Model: \`${run.model}\` (max ${run.maxSteps} steps)`,
-    "",
-    "## Task",
-    "",
-    run.task,
-    "",
-    "Every file the agent creates or edits lands in this directory.",
-    "",
-  ].join("\n");
-  // Local mode only: box workspaces are never seeded eagerly, so a plain chat
-  // message doesn't spin a box up. The box is created lazily on the agent's
-  // first sandbox tool call instead.
-  if (sandboxSettings().kind === "local") {
-    await mkdir(run.workspaceDir, { recursive: true });
-    await writeFile(join(run.workspaceDir, "README.md"), readme, "utf8");
-  }
-}
-
 /**
  * Ensure the run ends with exactly one terminal `status` event so SSE clients
  * always see the stream close, even when the loop dies before emitting its own.
@@ -215,21 +179,10 @@ export async function startRun(run: StoredRun): Promise<void> {
     return;
   }
 
-  const rawSandbox = createSandbox({
-    workspaceDir: run.workspaceDir,
-    userId: run.userId,
-    workspaceName: run.workspaceName,
-  });
+  const rawSandbox = createSandbox({ userId: run.userId });
   const sandbox = guardSandbox(rawSandbox, run);
   try {
     await sandbox.start();
-    await seedWorkspace(run);
-
-    // Local mode snapshots immediately; box mode snapshots lazily once a
-    // workspace has actually been restored.
-    if (sandboxSettings().kind === "local") {
-      run.runtime.baseline = await captureWorkspaceSnapshot(sourceForRun(run));
-    }
 
     const result = await runTask({
       task: run.task,

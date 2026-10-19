@@ -7,9 +7,11 @@ import {
   type ReactNode,
 } from "react";
 import { Check, ChevronRight, Loader2, X } from "lucide-react";
+import { HighlightedCode } from "@/components/ui/highlighted-code";
 import { pretty, type StreamItem } from "@/components/run-events";
 import { ansiToHtml, hasAnsi } from "@/lib/ansi";
 import { computeLineDiff } from "@/lib/diff";
+import { guessLanguage } from "@/lib/language";
 import { cn } from "@/lib/utils";
 
 type ToolItem = Extract<StreamItem, { kind: "tool" }>;
@@ -265,7 +267,7 @@ function FileTarget({ path }: { path: string }) {
 function BashTarget({ command }: { command: string }) {
   return (
     <span className="flex min-w-0 items-baseline" title={command}>
-      <span className="mr-1 shrink-0 text-[var(--text-faint)]">$</span>
+      <span className="mr-1 shrink-0 text-[var(--ansi-green)]">$</span>
       <span className="min-w-0 truncate">{command}</span>
     </span>
   );
@@ -276,14 +278,6 @@ function FullPath({ path }: { path: string }) {
     <span className="mb-1 block truncate font-mono text-[11px] text-[var(--text-faint)]">
       {path}
     </span>
-  );
-}
-
-function FlatCode({ code }: { code: string }) {
-  return (
-    <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-words rounded-md bg-[var(--surface)] p-3 font-mono text-xs leading-5 text-[var(--text-muted)]">
-      {code}
-    </pre>
   );
 }
 
@@ -352,7 +346,13 @@ function WriteTool({ item, status, input }: RendererProps) {
     >
       <FullPath path={path} />
       {content.length > 0 ? (
-        <FlatCode code={content} />
+        <div className="max-h-60 overflow-auto rounded-md bg-[var(--surface)] p-3">
+          <HighlightedCode
+            code={content}
+            lang={guessLanguage(path)}
+            wrap
+          />
+        </div>
       ) : (
         <OutputBlock>{pretty(item.input)}</OutputBlock>
       )}
@@ -400,17 +400,23 @@ function EditTool({ item, status, input }: RendererProps) {
 
 function BashTool({ item, status, input }: RendererProps) {
   const command = stringField(input, "command") ?? pretty(item.input);
-  const raw = bashOutput(item.output);
+  const finalOutput = bashOutput(item.output);
+  const raw = item.isError
+    ? finalOutput
+    : item.terminal?.length
+      ? item.terminal
+      : finalOutput;
   const text = raw.length > 0 ? raw : item.isError ? pretty(item.output) : "";
+  const hasContent = text.length > 0 || status === "error";
   const { open, toggle } = useDisclosure(
-    status === "running" || status === "error",
+    status === "error" || (status === "running" && text.length > 0),
   );
   const contentId = `tool-${item.toolCallId}`;
   return (
     <ToolRow
       status={status}
       target={<BashTarget command={command} />}
-      expandable
+      expandable={hasContent}
       open={open}
       onToggle={toggle}
       contentId={contentId}
@@ -419,9 +425,7 @@ function BashTool({ item, status, input }: RendererProps) {
         {text.length > 0 ? (
           <AnsiOutput text={text} />
         ) : (
-          <span className="text-[var(--text-faint)]">
-            {status === "running" ? "Waiting for output…" : "(no output)"}
-          </span>
+          <span className="text-[var(--text-faint)]">(no output)</span>
         )}
       </OutputBlock>
     </ToolRow>

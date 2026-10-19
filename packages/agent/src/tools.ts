@@ -27,6 +27,12 @@ export interface ToolHooks {
   onTodo?: (todos: TodoItem[]) => void | Promise<void>;
   /** Called after a file is written or edited. */
   onFileChange?: (change: FileChangePayload) => void | Promise<void>;
+  /** Called for every chunk a bash command streams. */
+  onTerminal?: (chunk: {
+    stream: "stdout" | "stderr";
+    chunk: string;
+    toolCallId?: string;
+  }) => void | Promise<void>;
 }
 
 /** Keep the head and tail of long output, eliding the middle. */
@@ -329,6 +335,11 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}) {
         signal: options?.abortSignal,
       })) {
         output += chunk.data;
+        await hooks.onTerminal?.({
+          stream: chunk.stream,
+          chunk: chunk.data,
+          toolCallId: options?.toolCallId,
+        });
       }
       return { output: truncate(output.trimEnd() || "(no output)") };
     },

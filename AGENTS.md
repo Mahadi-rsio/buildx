@@ -5,23 +5,24 @@
 - pnpm monorepo (pnpm 12). `plan.md` / `arcetecture.md` are the source of truth. Note the misspelled filename: `arcetecture.md`, not `architecture.md`.
 - Built so far:
   - `packages/shared` — `RunEvent` model, zod schemas, `loadEnv()` / `envStatus()`.
-  - `packages/sandbox` — `Sandbox` interface + `LocalSandbox` + `BoxSandbox`
-    (Upstash Box, persistent) + `LazyBoxSandbox`, `resolveWorkspacePath`. Box is
-    the primary remote backend (`UPSTASH_BOX_API_KEY`); the old Fly Machines /
-    sandbox-daemon (`FlyClient`, `fly-manager`, `DaemonSandbox`, `LazySandbox`)
-    stack was removed.
+  - `packages/sandbox` — `Sandbox` interface + `BoxSandbox` (Upstash Box,
+    persistent) + `LazyBoxSandbox`, `resolveWorkspacePath`. Box is the only
+    sandbox backend (`UPSTASH_BOX_API_KEY`); there is no host-local execution
+    fallback. The old Fly Machines / sandbox-daemon stack was removed.
   - `packages/storage` — `Storage` interface (presign/head/copy/delete/rotate/list).
   - `packages/db` — Drizzle schema, `transition` (single-from), `claimStatus`
     (multi-from), usage sessions + quotas (`openUsageSession`, `closeUsageSession`,
     `hasCpuBudget`, `closeOpenUsageSessions`), `withAdvisoryLock`.
-  - `packages/agent` — prompt, tools, `runTask` / `createAgent`.
+  - `packages/agent` — prompt, tools, `runTask` / `createAgent`. Bash streams
+    `terminal` events tagged with the tool-call id so the UI can render output
+    inline; tests use the package-private `TestSandbox`.
   - `apps/web` — Next.js 16 dashboard: run form + live event stream, and a REST/SSE API.
     - API: `GET /api/config`, `GET|POST /api/runs`, `GET /api/runs/:id`,
       `GET /api/runs/:id/stream?after=`, `POST /api/runs/:id/stop`,
       `GET /api/workspaces/:id/files?path=`.
     - `lib/store.ts` keeps runs/events in memory on `globalThis` (no DB yet);
-      `lib/runner.ts` runs `runTask` against the sandbox from `createSandbox`
-      (local or Box) and appends every step.
+      `lib/runner.ts` runs `runTask` against the Upstash Box sandbox from
+      `createSandbox` and appends every step.
 - All packages test/typecheck; root `pnpm typecheck` / `test` / `build` are green.
 - `evals` is **not yet wired into prod** — `arcetecture.md` §7 lists it.
 
@@ -44,8 +45,8 @@ test spins up an in-process OpenAI-compatible SSE server, so no API key is neede
   `AGENT_MODEL`, `AGENT_MAX_STEPS` from the environment / `.env.local` (copy
   `.env.example`). LiteLLM exposes only `auto`; the picker lists `auto` plus the
   full Vercel AI Gateway catalog when configured.
-- Each run gets a scratch workspace at `apps/web/.workspaces/<runId>`
-  (gitignored; override with `BUILDX_WORKSPACE_DIR`). The file panel reads it.
+- Every run uses the user's persistent Upstash Box workspace; the file panel
+  reads it through `WorkspaceSource`. There is no local scratch directory.
 - `POST /api/runs` returns `400` when no key is set, so the UI can explain why.
 
 ## Quirks (learned the hard way)

@@ -37,7 +37,6 @@ export interface ReadRange {
 export type ProcId = string;
 export type CheckpointId = string;
 
-export { LocalSandbox, type LocalSandboxOptions } from "./local";
 export { BoxSandbox, type BoxSandboxOptions } from "./box-sandbox";
 export {
   LazyBoxSandbox,

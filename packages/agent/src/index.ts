@@ -31,6 +31,12 @@ export interface CreateAgentOptions {
   onTodo?: (todos: TodoItem[]) => void | Promise<void>;
   /** Called after a file is written or edited. */
   onFileChange?: (change: FileChangePayload) => void | Promise<void>;
+  /** Called for every chunk a bash command streams. */
+  onTerminal?: (chunk: {
+    stream: "stdout" | "stderr";
+    chunk: string;
+    toolCallId?: string;
+  }) => void | Promise<void>;
   /**
    * Called once before every upstream model request, including tool-loop
    * iterations. Throwing aborts the run before the request leaves the app, so
@@ -56,6 +62,7 @@ export function createAgent(options: CreateAgentOptions) {
     tools: buildTools(options.sandbox, {
       onTodo: options.onTodo,
       onFileChange: options.onFileChange,
+      onTerminal: options.onTerminal,
     }),
     stopWhen: stepCountIs(options.maxSteps ?? DEFAULT_MAX_STEPS),
     // One quota reservation per agent step. Provider-level retries stay
@@ -137,6 +144,10 @@ export async function runTask(options: RunTaskOptions): Promise<RunTaskResult> {
     onFileChange: async (change) => {
       await options.onFileChange?.(change);
       await emit({ type: "file_change", data: change, ts: ts() });
+    },
+    onTerminal: async (chunk) => {
+      await options.onTerminal?.(chunk);
+      await emit({ type: "terminal", data: chunk, ts: ts() });
     },
   });
   let status: RunStatus = "completed";

@@ -114,11 +114,9 @@ export function SettingsDialog() {
               Workspace
             </h3>
             <p className="text-xs leading-relaxed text-muted-foreground">
-              Each run gets an isolated scratch workspace at{" "}
-              <code className="font-mono text-foreground/80">
-                apps/web/.workspaces/&lt;runId&gt;
-              </code>
-              . The agent runs outside the sandbox; keys never enter it.
+              Every run executes in a persistent Upstash Box workspace shared by
+              your account. The agent runs outside the sandbox; keys never enter
+              it.
             </p>
           </section>
 

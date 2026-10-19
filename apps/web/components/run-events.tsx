@@ -22,6 +22,8 @@ export type StreamItem =
       output?: unknown;
       isError?: boolean;
       pending: boolean;
+      /** Live stdout/stderr streamed while a bash command runs. */
+      terminal?: string;
     }
   | { key: number; kind: "file_change"; ts: number; path: string; change: string }
   | { key: number; kind: "todo"; ts: number; todos: TodoItem[] }
@@ -57,6 +59,15 @@ export function toStreamItems(events: RunEvent[]): StreamItem[] {
       continue;
     }
     if (event.type === "terminal") {
+      // Bash chunks are attached to their tool row so output appears inline.
+      if (event.data.toolCallId) {
+        const index = toolIndex.get(event.data.toolCallId);
+        const tool = index !== undefined ? items[index] : undefined;
+        if (tool?.kind === "tool") {
+          tool.terminal = (tool.terminal ?? "") + event.data.chunk;
+          continue;
+        }
+      }
       if (last?.kind === "terminal" && last.stream === event.data.stream) {
         last.chunk += event.data.chunk;
       } else {

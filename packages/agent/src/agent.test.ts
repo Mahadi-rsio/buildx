@@ -11,7 +11,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
-import { LocalSandbox } from "@buildx/sandbox";
+import { TestSandbox } from "./test-sandbox";
 import type { RunEvent } from "@buildx/shared";
 import { runTask } from "./index";
 import { buildTools } from "./tools";
@@ -245,7 +245,7 @@ after(async () => {
 
 test("runTask executes a tool call, writes a file, and streams events", async () => {
   const dir = await mkdtemp(join(tmpdir(), "buildx-agent-"));
-  const sandbox = new LocalSandbox({ rootDir: dir });
+  const sandbox = new TestSandbox({ rootDir: dir });
   await sandbox.start();
 
   const events: RunEvent[] = [];
@@ -306,7 +306,7 @@ test("runTask executes a tool call, writes a file, and streams events", async ()
 
 test("onBeforeModelStep fires before every upstream model request", async () => {
   const dir = await mkdtemp(join(tmpdir(), "buildx-agent-quota-"));
-  const sandbox = new LocalSandbox({ rootDir: dir });
+  const sandbox = new TestSandbox({ rootDir: dir });
   await sandbox.start();
   const steps: number[] = [];
 
@@ -334,7 +334,7 @@ test("onBeforeModelStep fires before every upstream model request", async () => 
 
 test("throwing in onBeforeModelStep aborts before the request is sent", async () => {
   const dir = await mkdtemp(join(tmpdir(), "buildx-agent-quota-abort-"));
-  const sandbox = new LocalSandbox({ rootDir: dir });
+  const sandbox = new TestSandbox({ rootDir: dir });
   await sandbox.start();
   modelRequests = 0;
   // The quota error must surface without any model request being issued.
@@ -521,7 +521,16 @@ test("tools regression: filesystem and shell tools (read_file, write_file, edit_
   });
   await sandbox.start();
 
-  const tools = buildTools(sandbox);
+  const terminalChunks: Array<{
+    stream: "stdout" | "stderr";
+    chunk: string;
+    toolCallId?: string;
+  }> = [];
+  const tools = buildTools(sandbox, {
+    onTerminal: (chunk) => {
+      terminalChunks.push(chunk);
+    },
+  });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const dummyOpts: any = { messages: [], toolCallId: "c1" };
 
@@ -546,6 +555,15 @@ test("tools regression: filesystem and shell tools (read_file, write_file, edit_
   // 4. bash
   const bashRes = (await tools.bash.execute({ command: "echo hello" }, dummyOpts)) as { output: string };
   assert.ok(bashRes.output.includes("output of: echo hello"));
+  assert.ok(
+    terminalChunks.some(
+      (chunk) =>
+        chunk.toolCallId === "c1" &&
+        chunk.stream === "stdout" &&
+        chunk.chunk.includes("output of: echo hello"),
+    ),
+    "bash streams stdout chunks tagged with the tool call id",
+  );
 
   // 5. abortSignal check: pre-aborted signal immediately throws
   const abortedController = new AbortController();
@@ -574,9 +592,9 @@ test("tools regression: filesystem and shell tools (read_file, write_file, edit_
   );
 });
 
-test("search, todo, and file-change tools work on LocalSandbox", async () => {
+test("search, todo, and file-change tools work on TestSandbox", async () => {
   const dir = await mkdtemp(join(tmpdir(), "buildx-agent-tools-"));
-  const sandbox = new LocalSandbox({ rootDir: dir });
+  const sandbox = new TestSandbox({ rootDir: dir });
   await sandbox.start();
   try {
     await mkdir(join(dir, "src"), { recursive: true });
@@ -656,7 +674,7 @@ test("search, todo, and file-change tools work on LocalSandbox", async () => {
 
 test("provider tool-name validation errors become actionable messages", async () => {
   const dir = await mkdtemp(join(tmpdir(), "buildx-agent-bad-tool-"));
-  const sandbox = new LocalSandbox({ rootDir: dir });
+  const sandbox = new TestSandbox({ rootDir: dir });
   await sandbox.start();
   try {
     const events: RunEvent[] = [];
@@ -688,7 +706,7 @@ test("provider tool-name validation errors become actionable messages", async ()
 
 test("cancellation regression: Stop during model generation aborts and transitions to cancelled", async () => {
   const dir = await mkdtemp(join(tmpdir(), "buildx-agent-cancel-gen-"));
-  const sandbox = new LocalSandbox({ rootDir: dir });
+  const sandbox = new TestSandbox({ rootDir: dir });
   await sandbox.start();
 
   const controller = new AbortController();
@@ -791,7 +809,7 @@ test("cancellation regression: Stop during long-running tool call aborts cleanly
 
 test("end-to-end regression: runTask executes list_dir (Read) on '.' with depth 2 and completes", async () => {
   const dir = await mkdtemp(join(tmpdir(), "buildx-agent-read-dir-"));
-  const sandbox = new LocalSandbox({ rootDir: dir });
+  const sandbox = new TestSandbox({ rootDir: dir });
   await sandbox.start();
 
   const events: RunEvent[] = [];

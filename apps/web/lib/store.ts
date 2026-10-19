@@ -21,7 +21,6 @@ import {
   events as eventsTable,
   runs as runsTable,
 } from "@buildx/db";
-import { workspaceDirFor } from "./paths";
 import { cancelRemoteBoxExecution } from "./sandbox";
 import type {
   RunDetail,
@@ -76,8 +75,6 @@ export interface StoredRun {
   status: RunStatus;
   model: string;
   maxSteps: number;
-  /** Absolute path of the sandbox workspace root for this run. */
-  workspaceDir: string;
   createdAt: number;
   updatedAt: number;
   error?: string;
@@ -182,7 +179,6 @@ export async function hydrateRun(
     status: row.status,
     model: row.model ?? DEFAULT_MODEL,
     maxSteps: row.maxSteps,
-    workspaceDir: workspaceDirFor(row.id),
     createdAt: row.createdAt.getTime(),
     updatedAt: row.updatedAt.getTime(),
     error: row.error ?? undefined,
@@ -333,7 +329,6 @@ export async function createRun(
     status: "queued",
     model: row.model ?? DEFAULT_MODEL,
     maxSteps: row.maxSteps,
-    workspaceDir: workspaceDirFor(row.id),
     createdAt: row.createdAt.getTime() ?? Date.now(),
     updatedAt: row.updatedAt.getTime() ?? Date.now(),
     fencingToken: row.fencingToken ?? 0,

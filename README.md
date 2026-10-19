@@ -68,7 +68,7 @@ buildx/
 ├── packages/
 │   ├── agent/                   AI agent loop (AI SDK 7, tool harness)
 │   ├── db/                      Drizzle schema, transitions, outbox, leases
-│   ├── sandbox/                 Sandbox interface: BoxSandbox + LocalSandbox
+│   ├── sandbox/                 Sandbox interface + BoxSandbox (Upstash Box)
 │   ├── shared/                  RunEvent model, Zod schemas, loadEnv()
 │   └── storage/                 Storage interface (R2/S3)
 │
@@ -112,7 +112,7 @@ pnpm dev
 # → http://localhost:3000
 ```
 
-> **Local sandbox**: In development, `BUILDX_SANDBOX_KIND=local` enables a local sandbox. In production (Workers), only Upstash Box is allowed — the local sandbox throws an error.
+> **Sandbox**: every run executes in Upstash Box. There is no local execution fallback, in development or production.
 
 ---
 
@@ -123,10 +123,9 @@ See [`.env.example`](.env.example) for the full annotated list.
 | Variable | Required | Description |
 |---|---|---|
 | `DATABASE_URL` | ✅ | Neon PostgreSQL pooled connection string |
-| `UPSTASH_BOX_API_KEY` | ✅ production | Upstash Box API key (sole production sandbox) |
+| `UPSTASH_BOX_API_KEY` | ✅ | Upstash Box API key (the only sandbox backend) |
 | `LITELLM_API_KEY` | ✅ | App-scoped LiteLLM virtual key |
 | `BETTER_AUTH_SECRET` | ✅ | Auth secret — `openssl rand -base64 32` |
-| `BUILDX_SANDBOX_KIND` | | `box` (production) or `local` (dev only) |
 | `LITELLM_BASE_URL` | | LiteLLM proxy base URL, default `http://localhost:4000/v1` |
 | `VERCEL_AI_GATEWAY_API_KEY` | | Enables the full Vercel AI Gateway catalog in the picker |
 | `AGENT_MODEL` | | Model ID, default `auto` (LiteLLM) |

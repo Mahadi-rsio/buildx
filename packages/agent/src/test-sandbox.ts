@@ -1,42 +1,34 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
-import type {
-  CheckpointId,
-  ExecChunk,
-  ExecOptions,
-  ProcId,
-  ReadRange,
-  Sandbox,
-} from "./index";
-import { resolveWorkspacePath } from "./path";
-import { abortError, ChunkBuffer, exitMarker } from "./buffer";
+import { dirname, resolve as resolvePath } from "node:path";
+import {
+  resolveWorkspacePath,
+  type CheckpointId,
+  type ExecChunk,
+  type ExecOptions,
+  type ProcId,
+  type ReadRange,
+  type Sandbox,
+} from "@buildx/sandbox";
 
-export interface LocalSandboxOptions {
-  /** Directory the sandbox is rooted at; created if missing. */
-  rootDir: string;
+function abortError(message = "The operation was aborted"): Error {
+  const error = new Error(message);
+  error.name = "AbortError";
+  return error;
 }
 
 /**
- * A `Sandbox` backed by the local filesystem and shell. Intended for
- * development, tests, and single-machine use — no isolation is provided, so
- * paths are still confined to `rootDir` and every path-traversal attempt is
- * rejected.
+ * Test-only in-process sandbox. It is intentionally not exported from
+ * `@buildx/sandbox`: production code may only execute in Upstash Box.
  */
-export class LocalSandbox implements Sandbox {
-  readonly id: string;
+export class TestSandbox implements Sandbox {
+  readonly id = randomUUID();
   readonly rootDir: string;
   private readonly procs = new Map<ProcId, ChildProcess>();
 
-  constructor(options: LocalSandboxOptions) {
-    if (process.env.NODE_ENV === "production") {
-      throw new Error(
-        "LocalSandbox is strictly forbidden in production. Production runs must use Upstash Box.",
-      );
-    }
-    this.id = randomUUID();
-    this.rootDir = resolve(options.rootDir);
+  constructor(options: { rootDir: string }) {
+    this.rootDir = resolvePath(options.rootDir);
   }
 
   private resolvePath(path: string): string {
@@ -47,30 +39,26 @@ export class LocalSandbox implements Sandbox {
     await mkdir(this.rootDir, { recursive: true });
   }
 
-  async suspend(): Promise<void> {
-    // Nothing to suspend locally.
-  }
+  async suspend(): Promise<void> {}
 
   async destroy(): Promise<void> {
-    for (const proc of this.procs.values()) {
-      proc.kill("SIGKILL");
-    }
+    for (const proc of this.procs.values()) proc.kill("SIGKILL");
     this.procs.clear();
   }
 
-  async *exec(cmd: string, opts: ExecOptions = {}): AsyncIterable<ExecChunk> {
+  async *exec(
+    cmd: string,
+    opts: ExecOptions = {},
+  ): AsyncIterable<ExecChunk> {
     const cwd = opts.cwd ? this.resolvePath(opts.cwd) : this.rootDir;
-    // detached makes the shell a process-group leader so a timeout can kill the
-    // whole tree (e.g. a `sh -c sleep` child); otherwise the orphaned child
-    // keeps stdio open and `close` never fires promptly.
     const child = spawn(cmd, {
       shell: true,
       cwd,
       env: { ...process.env, ...opts.env },
       detached: true,
-      // Closed stdin: interactive CLIs (npm create vue, etc.) must not wait forever.
       stdio: ["ignore", "pipe", "pipe"],
     });
+
     const killTree = (): void => {
       if (child.pid === undefined) {
         child.kill("SIGKILL");
@@ -83,14 +71,14 @@ export class LocalSandbox implements Sandbox {
       }
     };
 
-    const buffer = new ChunkBuffer();
+    const queue: ExecChunk[] = [];
     let closed = false;
     let exitCode: number | null = null;
     let failure: Error | null = null;
     let notify: (() => void) | undefined;
     const wake = (): void => notify?.();
     const push = (chunk: ExecChunk): void => {
-      buffer.push(chunk);
+      queue.push(chunk);
       wake();
     };
 
@@ -129,22 +117,28 @@ export class LocalSandbox implements Sandbox {
 
     try {
       while (true) {
-        if (!buffer.empty) {
-          yield* buffer.drain();
+        if (queue.length > 0) {
+          while (queue.length > 0) {
+            yield queue.shift()!;
+          }
           continue;
         }
         if (closed || failure) break;
         await new Promise<void>((resolve) => {
           notify = resolve;
-          if (closed || failure || !buffer.empty) resolve();
+          if (closed || failure || queue.length > 0) resolve();
         }).finally(() => {
           notify = undefined;
         });
       }
-      if (!buffer.empty) yield* buffer.drain();
+      while (queue.length > 0) yield queue.shift()!;
       if (failure) throw failure;
-      const marker = exitMarker(exitCode ?? 0);
-      if (marker) yield marker;
+      if ((exitCode ?? 0) !== 0) {
+        yield {
+          stream: "stderr",
+          data: `\n[buildx: command exited with code ${exitCode ?? 0}]\n`,
+        };
+      }
     } finally {
       if (timer) clearTimeout(timer);
       opts.signal?.removeEventListener("abort", abort);
@@ -185,12 +179,11 @@ export class LocalSandbox implements Sandbox {
   }
 
   async checkpoint(_label: string): Promise<CheckpointId> {
-    // No-op locally: real adapters snapshot the volume and commit to git.
     return randomUUID();
   }
 
   async restore(_id: CheckpointId): Promise<void> {
-    throw new Error("LocalSandbox.restore is not supported");
+    throw new Error("TestSandbox.restore is not supported");
   }
 
   async previewUrl(port: number): Promise<string> {

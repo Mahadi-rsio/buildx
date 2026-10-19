@@ -8,7 +8,7 @@ import {
   FileArchive,
 } from "lucide-react";
 import type { DiffFile, DiffHunk, DiffLine } from "@/lib/types";
-import { guessLanguage } from "@/lib/chat-messages";
+import { guessLanguage } from "@/lib/language";
 import { cn } from "@/lib/utils";
 
 const STATUS_LABEL: Record<DiffFile["status"], string> = {

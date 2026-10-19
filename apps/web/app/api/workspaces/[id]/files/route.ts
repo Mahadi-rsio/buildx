@@ -14,8 +14,8 @@ function message(error: unknown): string {
 /**
  * `GET /api/workspaces/:id/files?path=` — list a directory inside the run's
  * workspace, or return a single file's contents when `path` names a file
- * (arcetecture.md §6). Reads through the run's `WorkspaceSource` so it works
- * for local and box sandboxes alike. Traversal is rejected.
+ * (arcetecture.md §6). Reads through the user's persistent Box workspace.
+ * Traversal is rejected.
  */
 export async function GET(
   request: Request,

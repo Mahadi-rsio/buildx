@@ -115,6 +115,32 @@ export class BoxSandbox implements Sandbox {
     }
   }
 
+  /**
+   * Attach to an existing box without creating one. Returns `false` when the
+   * box does not exist yet so read-only consumers (file browser, diff) never
+   * provision a box on their own.
+   */
+  async connect(): Promise<boolean> {
+    if (this.box) return true;
+
+    const inFlight = pendingStarts.get(this.name);
+    if (inFlight) {
+      this.box = await inFlight;
+      return true;
+    }
+
+    try {
+      this.box = await Box.getByName(this.name, {
+        apiKey: this.apiKey,
+        baseUrl: this.baseUrl,
+      });
+      return true;
+    } catch (error) {
+      if (isNotFound(error)) return false;
+      throw error;
+    }
+  }
+
   async suspend(): Promise<void> {
     if (!this.box) return;
     try {

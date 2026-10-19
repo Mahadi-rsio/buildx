@@ -22,6 +22,7 @@ export interface WorkspaceData {
   path: string;
   listing: FilesResponse | null;
   file: FileContentResponse | null;
+  filesLoading: boolean;
   filesError: string | null;
   onNavigate: (path: string) => void;
   onOpenFile: (path: string) => void;
@@ -75,6 +76,7 @@ function PanelBody(props: WorkspaceData) {
       path={props.path}
       listing={props.listing}
       file={props.file}
+      filesLoading={props.filesLoading}
       filesError={props.filesError}
       diffFiles={props.diff.files}
       diffUnchanged={props.diff.unchanged}

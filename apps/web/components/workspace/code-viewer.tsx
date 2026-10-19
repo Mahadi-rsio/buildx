@@ -13,7 +13,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { ChatMarkdown } from "@/components/chat/chat-markdown";
 import { FileIcon } from "@/components/workspace/file-icon";
-import { guessLanguage } from "@/lib/chat-messages";
+import { guessLanguage } from "@/lib/language";
 import { formatBytes, formatLines } from "@/lib/format";
 import { highlightCode, plainCodeHtml } from "@/lib/highlight";
 import { cn } from "@/lib/utils";
