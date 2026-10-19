@@ -8,5 +8,13 @@ export async function GET(): Promise<Response> {
     model: config.model,
     maxSteps: config.maxSteps,
     baseURL: config.baseURL ?? null,
+    defaultProvider: "omniroute",
+    providers: config.providers.map((provider) => ({
+      id: provider.id,
+      label: provider.label,
+      baseURL: provider.baseURL ?? null,
+      hasApiKey: provider.hasApiKey,
+      primary: provider.primary,
+    })),
   });
 }

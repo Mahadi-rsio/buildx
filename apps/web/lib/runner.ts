@@ -2,7 +2,12 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { runTask } from "@buildx/agent";
 import type { Sandbox } from "@buildx/sandbox";
-import { envStatus, isTerminalStatus } from "@buildx/shared";
+import {
+  envStatus,
+  isTerminalStatus,
+  providerEndpoint,
+  resolveModelProvider,
+} from "@buildx/shared";
 import { getDb, isRunCancelled, readRunControl } from "@buildx/db";
 import {
   appendEvent,
@@ -196,9 +201,13 @@ export async function startRun(run: StoredRun): Promise<void> {
   }
 
   const config = envStatus();
-  if (!config.hasApiKey) {
+  const provider = resolveModelProvider(run.model, config);
+  const endpoint = providerEndpoint(provider);
+  if (!endpoint.apiKey) {
     const message =
-      "OPENAI_API_KEY is not set. Copy .env.example to .env.local, add your key, and restart the dev server.";
+      provider === "vercel"
+        ? "VERCEL_AI_GATEWAY_API_KEY is not set for the selected model. Add it to .env.local and restart the dev server."
+        : "OPENAI_API_KEY is not set. Copy .env.example to .env.local, add your key, and restart the dev server.";
     await appendEvent(run, { type: "error", data: { message }, ts: Date.now() });
     await closeRun(run, "failed", message);
     return;
@@ -224,6 +233,8 @@ export async function startRun(run: StoredRun): Promise<void> {
       task: run.task,
       sandbox,
       model: run.model,
+      apiKey: endpoint.apiKey,
+      baseURL: endpoint.baseURL,
       maxSteps: run.maxSteps,
       abortSignal: run.runtime.controller.signal,
       onEvent: (event) => {

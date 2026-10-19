@@ -150,8 +150,31 @@ export const envSchema = z.object({
     .positive()
     .max(1000)
     .default(DEFAULT_MAX_STEPS),
+  VERCEL_AI_GATEWAY_API_KEY: z.string().min(1).optional(),
+  VERCEL_AI_GATEWAY_BASE_URL: z.string().min(1).optional(),
 });
 export type Env = z.infer<typeof envSchema>;
+
+/**
+ * The model provider a run routes through. `omniroute` is the primary provider
+ * (`OPENAI_API_KEY` / `OPENAI_BASE_URL` / `AGENT_MODEL`); `vercel` is the
+ * optional Vercel AI Gateway (`VERCEL_AI_GATEWAY_*`) serving the paid catalog.
+ */
+export type ModelProviderId = "omniroute" | "vercel";
+
+export const MODEL_PROVIDER_IDS: readonly ModelProviderId[] = [
+  "omniroute",
+  "vercel",
+];
+
+export interface ModelProvider {
+  id: ModelProviderId;
+  label: string;
+  baseURL: string | undefined;
+  hasApiKey: boolean;
+  /** The primary provider owns the default model (`AGENT_MODEL`). */
+  primary: boolean;
+}
 
 /**
  * Parse and validate agent configuration from the environment. Empty strings
@@ -172,6 +195,8 @@ export interface EnvStatus {
   model: string;
   maxSteps: number;
   baseURL: string | undefined;
+  /** Configured model providers, primary (OmniRoute) first. */
+  providers: ModelProvider[];
 }
 
 /**
@@ -190,10 +215,56 @@ export function envStatus(
     stepsRaw && Number.isFinite(parsed) && parsed > 0
       ? Math.floor(parsed)
       : DEFAULT_MAX_STEPS;
+  const baseURL = (source.OPENAI_BASE_URL ?? "").trim() || undefined;
+  const vercelBaseURL =
+    (source.VERCEL_AI_GATEWAY_BASE_URL ?? "").trim() || undefined;
   return {
     hasApiKey: key.length > 0,
     model,
     maxSteps,
-    baseURL: (source.OPENAI_BASE_URL ?? "").trim() || undefined,
+    baseURL,
+    providers: [
+      { id: "omniroute", label: "OmniRoute", baseURL, hasApiKey: key.length > 0, primary: true },
+      {
+        id: "vercel",
+        label: "Vercel AI Gateway",
+        baseURL: vercelBaseURL,
+        hasApiKey: (source.VERCEL_AI_GATEWAY_API_KEY ?? "").trim().length > 0,
+        primary: false,
+      },
+    ],
   };
+}
+
+/**
+ * Resolve which provider a run's model routes through. The primary (OmniRoute)
+ * provider owns the default model (`AGENT_MODEL` — e.g. `auto`); every other
+ * model id is a paid model served by the Vercel AI Gateway. When the Vercel
+ * gateway is not configured the run falls back to the primary provider, so the
+ * picker never advertises a model the server cannot reach.
+ */
+export function resolveModelProvider(
+  model: string | undefined,
+  env: EnvStatus,
+): ModelProviderId {
+  const target = (model ?? "").trim() || env.model;
+  if (target === env.model) return "omniroute";
+  const vercel = env.providers.find((provider) => provider.id === "vercel");
+  return vercel && vercel.baseURL && vercel.hasApiKey ? "vercel" : "omniroute";
+}
+
+/** Credentials for a provider, read from the same source as {@link envStatus}. */
+export function providerEndpoint(
+  providerId: ModelProviderId,
+  source: Record<string, string | undefined> = process.env,
+): { apiKey: string | undefined; baseURL: string | undefined } {
+  const baseURL =
+    providerId === "vercel"
+      ? (source.VERCEL_AI_GATEWAY_BASE_URL ?? "").trim() || undefined
+      : (source.OPENAI_BASE_URL ?? "").trim() || undefined;
+  const apiKey =
+    providerId === "vercel"
+      ? (source.VERCEL_AI_GATEWAY_API_KEY ?? "").trim() || undefined
+      : (source.OPENAI_API_KEY ?? "").trim() || undefined;
+  return { apiKey, baseURL };
 }

@@ -52,6 +52,20 @@ export function ModelPicker({
 
   const visible = filtered.slice(0, MAX_RESULTS);
 
+  // Group the visible models by provider (OmniRoute / Vercel / ...) so the
+  // dropdown reads as distinct catalogs.
+  const groups = (() => {
+    const map = new Map<string, { id: string; label: string; models: ModelOption[] }>();
+    for (const m of visible) {
+      const id = m.providerId || "other";
+      const label = m.provider || "Other";
+      const group = map.get(id);
+      if (group) group.models.push(m);
+      else map.set(id, { id, label, models: [m] });
+    }
+    return Array.from(map.values());
+  })();
+
   function selectModel(id: string) {
     onChange(id);
     setQuery("");
@@ -115,50 +129,64 @@ export function ModelPicker({
 
         <DropdownMenuSeparator className="my-1 bg-border/60" />
 
-        <div className="max-h-64 space-y-0.5 overflow-y-auto py-0.5">
+        <div className="max-h-64 space-y-2 overflow-y-auto py-0.5">
           {visible.length === 0 ? (
             <p className="px-3 py-6 text-center text-xs text-muted-foreground">
               No models match “{query}”.
             </p>
           ) : (
-            visible.map((m: ModelOption) => {
-              const isSelected = m.id === effective;
-              const isDefault = m.id === defaultModel;
-              return (
-                <DropdownMenuItem
-                  key={m.id}
-                  onClick={() => selectModel(m.id)}
-                  className={cn(
-                    "flex cursor-pointer items-start justify-between gap-2 rounded-lg px-2.5 py-2 text-xs transition-colors",
-                    isSelected
-                      ? "bg-primary/10 font-medium text-primary"
-                      : "text-foreground hover:bg-muted/80",
-                  )}
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-1.5">
-                      <span className="truncate">{m.name}</span>
-                      {isDefault ? (
-                        <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground">
-                          default
-                        </span>
-                      ) : null}
-                    </div>
-                    <p
-                      className={cn(
-                        "mt-0.5 truncate font-mono text-[10px]",
-                        isSelected ? "text-primary/70" : "text-muted-foreground",
-                      )}
-                    >
-                      {m.description || m.id}
-                    </p>
-                  </div>
-                  {isSelected ? (
-                    <Check className="mt-0.5 size-3.5 shrink-0 text-primary" />
-                  ) : null}
-                </DropdownMenuItem>
-              );
-            })
+            groups.map((group) => (
+              <div key={group.id}>
+                <p className="px-3 pb-0.5 pt-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+                  {group.label}
+                </p>
+                <div className="space-y-0.5">
+                  {group.models.map((m: ModelOption) => {
+                    const isSelected = m.id === effective;
+                    const isDefault = m.id === defaultModel;
+                    return (
+                      <DropdownMenuItem
+                        key={m.id}
+                        onClick={() => selectModel(m.id)}
+                        className={cn(
+                          "flex cursor-pointer items-start justify-between gap-2 rounded-lg px-2.5 py-2 text-xs transition-colors",
+                          isSelected
+                            ? "bg-primary/10 font-medium text-primary"
+                            : "text-foreground hover:bg-muted/80",
+                        )}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5">
+                            <span className="truncate">{m.name}</span>
+                            {isDefault ? (
+                              <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground">
+                                default
+                              </span>
+                            ) : null}
+                            {m.provider ? (
+                              <span className="shrink-0 rounded bg-border/60 px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground/80">
+                                {m.provider}
+                              </span>
+                            ) : null}
+                          </div>
+                          <p
+                            className={cn(
+                              "mt-0.5 truncate font-mono text-[10px]",
+                              isSelected ? "text-primary/70" : "text-muted-foreground",
+                            )}
+                          >
+                            {m.description || m.id}
+                          </p>
+                        </div>
+                        {isSelected ? (
+                          <Check className="mt-0.5 size-3.5 shrink-0 text-primary" />
+                        ) : null}
+                      </DropdownMenuItem>
+                    );
+                  })}
+                </div>
+              </div>
+            ))
           )}
           {filtered.length > visible.length ? (
             <p className="px-3 py-2 text-center font-mono text-[10px] text-muted-foreground/70">

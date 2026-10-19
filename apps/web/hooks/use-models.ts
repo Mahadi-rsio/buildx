@@ -7,6 +7,8 @@ export interface ModelOption {
   name: string;
   description?: string;
   provider?: string;
+  /** Provider group id (`omniroute` | `vercel`) for sectioning the picker. */
+  providerId?: string;
 }
 
 /**

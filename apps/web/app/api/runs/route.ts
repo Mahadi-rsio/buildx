@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { createRunSchema, envStatus } from "@buildx/shared";
+import { createRunSchema, envStatus, providerEndpoint, resolveModelProvider } from "@buildx/shared";
 import { getCurrentUser, unauthorized } from "@/lib/auth/server";
 import { listRunsForUser, toRunSummary } from "@/lib/store";
 import { createRunForUser } from "@/lib/run-creation";
@@ -53,19 +53,21 @@ export async function POST(request: Request): Promise<Response> {
     }
 
     const config = envStatus();
-    if (!config.hasApiKey) {
+    const selectedModel = parsed.data.model?.trim() || config.model;
+    const provider = resolveModelProvider(selectedModel, config);
+    const endpoint = providerEndpoint(provider);
+    if (!endpoint.apiKey) {
+      const message =
+        provider === "vercel"
+          ? "The Vercel AI Gateway key is not set. Add VERCEL_AI_GATEWAY_API_KEY to .env.local and restart the dev server."
+          : "OPENAI_API_KEY is not set. Copy .env.example to .env.local, add your key, and restart the dev server.";
       return Response.json(
-        {
-          error: "missing_api_key",
-          message:
-            "OPENAI_API_KEY is not set. Copy .env.example to .env.local, add your key, and restart the dev server.",
-        },
+        { error: "missing_api_key", message },
         { status: 400 },
       );
     }
 
-    const selectedModel = parsed.data.model?.trim() || config.model;
-    console.log(`[POST /api/runs][${correlationId}] creating run for user=${user.id} model=${selectedModel}`);
+    console.log(`[POST /api/runs][${correlationId}] creating run for user=${user.id} model=${selectedModel} provider=${provider}`);
     const result = await createRunForUser({
       user: {
         id: user.id,
