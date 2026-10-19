@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { DEFAULT_MODEL, isTerminalStatus } from "@buildx/shared";
-import type { RunEvent, RunEventInput, RunStatus } from "@buildx/shared";
+import type {
+  ConversationTurn,
+  RunEvent,
+  RunEventInput,
+  RunStatus,
+} from "@buildx/shared";
 import {
   and,
   asc,
@@ -64,6 +69,8 @@ export interface StoredRun {
   userId: string;
   workspaceName: string;
   task: string;
+  /** Earlier turns replayed before `task` to keep follow-up context. */
+  history?: ConversationTurn[];
   status: RunStatus;
   model: string;
   maxSteps: number;
@@ -122,6 +129,7 @@ function syncFromRow(run: StoredRun, row: RunRow): void {
   run.userId = row.userId;
   run.workspaceName = row.workspaceName ?? "workspace";
   run.task = row.task ?? "";
+  run.history = row.history ?? undefined;
   run.status = row.status;
   run.model = row.model ?? DEFAULT_MODEL;
   run.maxSteps = row.maxSteps;
@@ -160,6 +168,7 @@ export async function hydrateRun(row: RunRow): Promise<StoredRun> {
     userId: row.userId,
     workspaceName: row.workspaceName ?? "workspace",
     task: row.task ?? "",
+    history: row.history ?? undefined,
     status: row.status,
     model: row.model ?? DEFAULT_MODEL,
     maxSteps: row.maxSteps,
@@ -212,6 +221,7 @@ export interface CreateRunArgs {
   userId: string;
   workspaceName: string;
   task: string;
+  history?: ConversationTurn[];
   model: string;
   maxSteps: number;
   usage?: WorkspaceUsage;
@@ -266,6 +276,7 @@ export async function createRun(
         model: args.model,
         status: "queued",
         task: args.task,
+        history: args.history?.length ? args.history : null,
         workspaceName: args.workspaceName,
         maxSteps: args.maxSteps,
         idempotencyKey: args.idempotencyKey ?? null,
@@ -305,6 +316,7 @@ export async function createRun(
     userId: row.userId,
     workspaceName: row.workspaceName ?? "workspace",
     task: row.task ?? "",
+    history: row.history ?? undefined,
     status: "queued",
     model: row.model ?? DEFAULT_MODEL,
     maxSteps: row.maxSteps,
@@ -691,7 +703,7 @@ export function toRunSummary(run: StoredRun): RunSummary {
 
 export async function toRunDetail(run: StoredRun): Promise<RunDetail> {
   const events = await loadEvents(run.id);
-  return { ...toRunSummary(run), events };
+  return { ...toRunSummary(run), events, history: run.history };
 }
 
 export interface RunSnapshot {

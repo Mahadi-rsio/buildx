@@ -439,6 +439,96 @@ function ListTool({ status, input }: RendererProps) {
   );
 }
 
+function resultText(output: unknown): string {
+  if (typeof output === "string") return output;
+  if (!output || typeof output !== "object") return pretty(output);
+  const record = output as Record<string, unknown>;
+  if (Array.isArray(record.files)) {
+    return record.files.map((file) => String(file)).join("\n");
+  }
+  if (typeof record.matches === "string") return record.matches;
+  if (Array.isArray(record.results)) {
+    return record.results
+      .map((result) => {
+        const entry = result as Record<string, unknown>;
+        return `${String(entry.path)}:${String(entry.startLine)}-${String(entry.endLine)}\n${String(entry.snippet ?? "")}`;
+      })
+      .join("\n\n");
+  }
+  return pretty(output);
+}
+
+function SearchTool({ item, status, input }: RendererProps) {
+  const target =
+    stringField(input, "pattern") ??
+    stringField(input, "query") ??
+    pretty(item.input);
+  const text = resultText(item.output);
+  const { open, toggle } = useDisclosure(false);
+  const contentId = `tool-${item.toolCallId}`;
+  return (
+    <ToolRow
+      status={status}
+      verb={verbFor(status, "Searching", "Searched")}
+      target={<span className="min-w-0 truncate">{target}</span>}
+      expandable={text.length > 0}
+      open={open}
+      onToggle={toggle}
+      contentId={contentId}
+    >
+      <OutputBlock>{text || "(no matches)"}</OutputBlock>
+    </ToolRow>
+  );
+}
+
+function GlobTool({ item, status, input }: RendererProps) {
+  const pattern = input.pattern;
+  const target = Array.isArray(pattern)
+    ? pattern.map(String).join(", ")
+    : stringField(input, "pattern") ?? pretty(item.input);
+  const text = resultText(item.output);
+  const { open, toggle } = useDisclosure(false);
+  const contentId = `tool-${item.toolCallId}`;
+  return (
+    <ToolRow
+      status={status}
+      verb={verbFor(status, "Finding", "Found")}
+      target={<span className="min-w-0 truncate">{target}</span>}
+      meta={
+        item.output &&
+        typeof item.output === "object" &&
+        "count" in item.output
+          ? String((item.output as Record<string, unknown>).count)
+          : undefined
+      }
+      expandable={text.length > 0}
+      open={open}
+      onToggle={toggle}
+      contentId={contentId}
+    >
+      <OutputBlock>{text || "(no files)"}</OutputBlock>
+    </ToolRow>
+  );
+}
+
+function PlanTool({ status, input }: RendererProps) {
+  const todos = Array.isArray(input.todos) ? input.todos : [];
+  const done = todos.filter(
+    (todo) =>
+      todo &&
+      typeof todo === "object" &&
+      (todo as Record<string, unknown>).status === "done",
+  ).length;
+  return (
+    <ToolRow
+      status={status}
+      verb={verbFor(status, "Updating", "Updated")}
+      target="plan"
+      meta={todos.length > 0 ? `${done}/${todos.length}` : undefined}
+    />
+  );
+}
+
 function GenericTool({ item, status, input }: RendererProps) {
   const target =
     stringField(input, "command") ??
@@ -480,6 +570,10 @@ const TOOL_RENDERERS: Record<
   write_file: WriteTool,
   edit_file: EditTool,
   list_dir: ListTool,
+  grep: SearchTool,
+  glob: GlobTool,
+  semantic_search: SearchTool,
+  todo_write: PlanTool,
   // Explicit aliases so a Read-like name can never fall through to Bash.
   read: ReadTool,
   write: WriteTool,

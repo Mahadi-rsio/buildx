@@ -77,6 +77,7 @@ export async function POST(request: Request): Promise<Response> {
       task: parsed.data.task.trim(),
       model: selectedModel,
       maxSteps: parsed.data.maxSteps ?? config.maxSteps,
+      history: parsed.data.history,
       idempotencyKey: parsed.data.idempotencyKey,
       correlationId,
     });

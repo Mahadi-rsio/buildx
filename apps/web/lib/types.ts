@@ -1,5 +1,5 @@
 import type { RunTaskUsage } from "@buildx/agent";
-import type { RunEvent, RunStatus } from "@buildx/shared";
+import type { ConversationTurn, RunEvent, RunStatus } from "@buildx/shared";
 
 /** Usage/step accounting surfaced on run responses (from `runTask`). */
 export interface RunStats {
@@ -47,6 +47,8 @@ export interface RunSummary {
 
 export interface RunDetail extends RunSummary {
   events: RunEvent[];
+  /** Earlier conversation turns replayed before this run's task. */
+  history?: ConversationTurn[];
 }
 
 /** Entry returned by `GET /api/workspaces/:id/files`. */

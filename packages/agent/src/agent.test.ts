@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
-import { readFile, mkdtemp, rm } from "node:fs/promises";
+import {
+  readFile,
+  mkdir,
+  mkdtemp,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -8,6 +14,7 @@ import { after, before, test } from "node:test";
 import { LocalSandbox } from "@buildx/sandbox";
 import type { RunEvent } from "@buildx/shared";
 import { runTask } from "./index";
+import { buildTools } from "./tools";
 
 type ChatRequest = {
   model?: string;
@@ -40,6 +47,21 @@ before(async () => {
       const model = body.model ?? "gpt-4o-mini";
       const userMsg = messages.find((m) => m.role === "user");
       const userText = typeof userMsg?.content === "string" ? userMsg.content : "";
+
+      if (userText === "bad-tool-name") {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            error: {
+              message:
+                "Tool call validation failed: attempted to call tool 'repo_browser.print_tree' which was not in request.tools",
+              type: "invalid_request_error",
+              code: "bad_request",
+            },
+          }),
+        );
+        return;
+      }
 
       res.writeHead(200, {
         "Content-Type": "text/event-stream",
@@ -252,6 +274,15 @@ test("runTask executes a tool call, writes a file, and streams events", async ()
     }
 
     assert.ok(events.some((event) => event.type === "tool_result"));
+    assert.ok(
+      events.some(
+        (event) =>
+          event.type === "file_change" &&
+          event.data.path === "hello.txt" &&
+          event.data.change === "write",
+      ),
+      "expected a file_change event for the written file",
+    );
 
     const text = events
       .map((event) => (event.type === "text" ? event.data.text : ""))
@@ -483,6 +514,118 @@ test("tools regression: filesystem and shell tools (read_file, write_file, edit_
     async () => { await tools.list_dir.execute({ path: "." }, abortedOpts); },
     /Tool execution aborted: run cancelled/,
   );
+});
+
+test("search, todo, and file-change tools work on LocalSandbox", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "buildx-agent-tools-"));
+  const sandbox = new LocalSandbox({ rootDir: dir });
+  await sandbox.start();
+  try {
+    await mkdir(join(dir, "src"), { recursive: true });
+    await mkdir(join(dir, "node_modules", "pkg"), { recursive: true });
+    await writeFile(
+      join(dir, "src", "auth.ts"),
+      [
+        "export function validateSessionToken(token: string) {",
+        "  if (!token) throw new Error('missing token');",
+        "  return token.length > 10;",
+        "}",
+      ].join("\n"),
+    );
+    await writeFile(
+      join(dir, "src", "render.ts"),
+      "export function renderButton(label: string) { return `<button>${label}</button>`; }\n",
+    );
+    await writeFile(
+      join(dir, "node_modules", "pkg", "index.js"),
+      "needle should be ignored\n",
+    );
+
+    const todos: unknown[] = [];
+    const changes: unknown[] = [];
+    const tools = buildTools(sandbox, {
+      onTodo: (items) => {
+        todos.push(items);
+      },
+      onFileChange: (change) => {
+        changes.push(change);
+      },
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const opts: any = { messages: [], toolCallId: "call-tools" };
+
+    const globbed = (await tools.glob.execute(
+      { pattern: "**/*.ts" },
+      opts,
+    )) as { files: string[]; count: number };
+    assert.deepEqual(globbed.files.sort(), ["src/auth.ts", "src/render.ts"]);
+
+    const grepped = (await tools.grep.execute(
+      { pattern: "validateSession", glob: "*.ts" },
+      opts,
+    )) as { matches: string };
+    assert.match(grepped.matches, /src\/auth\.ts:1/);
+    assert.doesNotMatch(grepped.matches, /node_modules/);
+
+    const semantic = (await tools.semantic_search.execute(
+      { query: "where do we validate a session token" },
+      opts,
+    )) as { results: Array<{ path: string; startLine: number }> };
+    assert.equal(semantic.results[0]?.path, "src/auth.ts");
+
+    const plan = (await tools.todo_write.execute(
+      {
+        todos: [
+          { content: "Inspect auth flow", status: "in_progress" },
+          { content: "Add tests", status: "pending" },
+        ],
+      },
+      opts,
+    )) as { todos: Array<{ content: string; status: string }> };
+    assert.equal(plan.todos.length, 2);
+    assert.equal(todos.length, 1);
+
+    await tools.write_file.execute(
+      { path: "src/new.ts", content: "export const x = 1;\n" },
+      opts,
+    );
+    assert.deepEqual(changes, [{ path: "src/new.ts", change: "write" }]);
+  } finally {
+    await sandbox.destroy();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("provider tool-name validation errors become actionable messages", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "buildx-agent-bad-tool-"));
+  const sandbox = new LocalSandbox({ rootDir: dir });
+  await sandbox.start();
+  try {
+    const events: RunEvent[] = [];
+    const result = await runTask({
+      task: "bad-tool-name",
+      sandbox,
+      model: "auto",
+      apiKey: "test",
+      baseURL,
+      maxSteps: 2,
+      onEvent: (event) => {
+        events.push(event as RunEvent);
+      },
+    });
+
+    assert.equal(result.status, "failed");
+    assert.match(result.error ?? "", /unknown tool "repo_browser\.print_tree"/);
+    assert.match(result.error ?? "", /auto/);
+    const errorEvent = events.find((event) => event.type === "error");
+    assert.match(
+      String((errorEvent?.data as { message?: string }).message),
+      /unknown tool/,
+    );
+  } finally {
+    await sandbox.destroy();
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("cancellation regression: Stop during model generation aborts and transitions to cancelled", async () => {

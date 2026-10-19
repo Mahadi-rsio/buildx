@@ -1,12 +1,19 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import type { RunStatus } from "@buildx/shared";
-import { Check, Copy, Pencil, RefreshCw } from "lucide-react";
+import {
+  Check,
+  CheckCircle2,
+  Circle,
+  Copy,
+  ListChecks,
+  Loader2,
+  Pencil,
+  RefreshCw,
+} from "lucide-react";
 import { ToolCallRow } from "@/components/tool/tool-row";
 import { ChatMarkdown } from "@/components/chat/chat-markdown";
 import { ThinkingStatus } from "@/components/chat/thinking-trace";
-import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import type { ChatBlock, ChatMessage } from "@/lib/chat-messages";
 import { formatTokens, type TokenUsage } from "@/lib/tokens";
@@ -121,14 +128,67 @@ function ErrorBlock({ block }: { block: ChatBlock }) {
   );
 }
 
-function StatusBlock({ block }: { block: ChatBlock }) {
-  if (block.kind !== "status" || block.item?.kind !== "status") return null;
+function TodoPlanBlock({ block }: { block: ChatBlock }) {
+  const todos = block.todos ?? [];
+  if (todos.length === 0) return null;
+  const done = todos.filter((todo) => todo.status === "done").length;
   return (
-    <div className="flex items-center gap-2 text-xs">
-      <StatusBadge status={block.item.status as RunStatus} />
-      {block.text ? (
-        <span className="min-w-0 text-[var(--text-muted)]">{block.text}</span>
-      ) : null}
+    <div className="overflow-hidden rounded-lg border border-border/70 bg-[var(--surface)]/60">
+      <div className="flex items-center gap-2 border-b border-border/60 px-3 py-2">
+        <ListChecks className="size-3.5 shrink-0 text-[var(--text-muted)]" />
+        <span className="text-[13px] font-medium text-[var(--text)]">Plan</span>
+        <span className="font-mono text-2xs tabular-nums text-[var(--text-faint)]">
+          {done}/{todos.length}
+        </span>
+        <div
+          className="ml-auto h-1 w-16 overflow-hidden rounded-full bg-[var(--surface-hover)]"
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={todos.length}
+          aria-valuenow={done}
+        >
+          <div
+            className="h-full rounded-full bg-[var(--text-muted)] transition-[width] duration-300 motion-reduce:transition-none"
+            style={{ width: `${(done / todos.length) * 100}%` }}
+          />
+        </div>
+      </div>
+      <ul className="flex flex-col gap-0.5 px-2 py-1.5">
+        {todos.map((todo, index) => (
+          <li
+            key={`${index}-${todo.content}`}
+            className="flex items-start gap-2 rounded px-1.5 py-1"
+          >
+            {todo.status === "done" ? (
+              <CheckCircle2
+                aria-label="Done"
+                className="mt-0.5 size-3.5 shrink-0 text-[var(--text-faint)]"
+              />
+            ) : todo.status === "in_progress" ? (
+              <Loader2
+                aria-label="In progress"
+                className="mt-0.5 size-3.5 shrink-0 animate-spin text-[var(--text)] motion-reduce:animate-none"
+              />
+            ) : (
+              <Circle
+                aria-label="Pending"
+                className="mt-0.5 size-3.5 shrink-0 text-[var(--text-faint)]/60"
+              />
+            )}
+            <span
+              className={
+                todo.status === "done"
+                  ? "text-[13px] leading-5 text-[var(--text-faint)] line-through"
+                  : todo.status === "in_progress"
+                    ? "text-[13px] leading-5 text-[var(--text)]"
+                    : "text-[13px] leading-5 text-[var(--text-muted)]"
+              }
+            >
+              {todo.content}
+            </span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -148,6 +208,12 @@ function AssistantBlocks({
 
   while (index < blocks.length) {
     const block = blocks[index];
+
+    if (block.kind === "todo") {
+      nodes.push(<TodoPlanBlock key={block.id} block={block} />);
+      index += 1;
+      continue;
+    }
 
     if (block.kind === "activity" && block.item) {
       const rows: ReactNode[] = [];
@@ -179,8 +245,6 @@ function AssistantBlocks({
       nodes.push(<TextBlock key={block.id} block={block} />);
     } else if (block.kind === "error") {
       nodes.push(<ErrorBlock key={block.id} block={block} />);
-    } else if (block.kind === "status") {
-      nodes.push(<StatusBlock key={block.id} block={block} />);
     }
     index += 1;
   }

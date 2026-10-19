@@ -5,6 +5,7 @@ import type {
   EventType,
   RunEvent,
   RunStatus,
+  UsagePayload,
   WorkspacePayload,
 } from "@buildx/shared";
 import { isTerminalStatus } from "@buildx/shared";
@@ -21,6 +22,7 @@ const EVENT_TYPES: EventType[] = [
   "approval",
   "error",
   "workspace",
+  "usage",
 ];
 
 interface Frame {
@@ -113,6 +115,24 @@ export function useRunStream(runId: string) {
                 }
               })();
             }
+          } else if (type === "usage") {
+            const payload = frame.data as UsagePayload;
+            setRun((previous) =>
+              previous
+                ? {
+                    ...previous,
+                    stats: {
+                      steps: payload.steps,
+                      usage: {
+                        inputTokens: payload.inputTokens,
+                        outputTokens: payload.outputTokens,
+                        totalTokens: payload.totalTokens,
+                      },
+                    },
+                    updatedAt: frame.ts,
+                  }
+                : previous,
+            );
           } else if (type === "error") {
             const payload = frame.data as { message?: string };
             setRun((previous) =>

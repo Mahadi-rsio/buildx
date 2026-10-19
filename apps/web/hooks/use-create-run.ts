@@ -2,6 +2,7 @@
 
 import { useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
+import type { ConversationTurn } from "@buildx/shared";
 
 export function useCreateRun() {
   const router = useRouter();
@@ -9,7 +10,11 @@ export function useCreateRun() {
   const [error, setError] = useState<string | null>(null);
 
   const createRun = useCallback(
-    async (args: { task: string; model?: string }) => {
+    async (args: {
+      task: string;
+      model?: string;
+      history?: ConversationTurn[];
+    }) => {
       const trimmed = args.task.trim();
       if (trimmed.length === 0 || submitting) return null;
 
@@ -22,6 +27,7 @@ export function useCreateRun() {
           body: JSON.stringify({
             task: trimmed,
             model: args.model?.trim() || undefined,
+            history: args.history?.length ? args.history : undefined,
           }),
         });
         const contentType = res.headers.get("content-type") ?? "";

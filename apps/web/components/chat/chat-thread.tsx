@@ -200,8 +200,16 @@ export function ChatThread({
                 index === messages.length - 1
               }
               cancelled={cancelled}
-              onRetry={message.role === "assistant" ? onRetry : undefined}
-              onEdit={message.role === "user" ? onEdit : undefined}
+              onRetry={
+                message.role === "assistant" && !message.historical
+                  ? onRetry
+                  : undefined
+              }
+              onEdit={
+                message.role === "user" && !message.historical
+                  ? onEdit
+                  : undefined
+              }
             />
           ))}
           {showSummary ? <FilesChangedCard changes={fileChanges} /> : null}

@@ -74,6 +74,20 @@ export interface ErrorPayload {
   toolName?: string;
 }
 
+/** One prior turn supplied to the agent so follow-ups keep the conversation. */
+export interface ConversationTurn {
+  role: "user" | "assistant";
+  content: string;
+}
+
+/** Live step/token accounting emitted while the agent loop is still running. */
+export interface UsagePayload {
+  steps: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+}
+
 export type WorkspaceEventStatus =
   | "workspace.restoring"
   | "workspace.ready"
@@ -110,6 +124,7 @@ export interface RunEventMap {
   approval: ApprovalPayload;
   error: ErrorPayload;
   workspace: WorkspacePayload;
+  usage: UsagePayload;
 }
 
 export type EventType = keyof RunEventMap;
@@ -132,11 +147,18 @@ type DistributiveOmit<T, K extends PropertyKey> = T extends unknown
 /** An event as produced by the agent loop, before the store assigns id/runId. */
 export type RunEventInput = DistributiveOmit<RunEvent, "id" | "runId">;
 
+export const conversationTurnSchema = z.object({
+  role: z.enum(["user", "assistant"]),
+  content: z.string().min(1).max(100_000),
+});
+
 export const createRunSchema = z.object({
   task: z.string().min(1, "task is required"),
   model: z.string().min(1).optional(),
   maxSteps: z.number().int().positive().max(1000).optional(),
   idempotencyKey: z.string().min(1).max(128).optional(),
+  /** Prior conversation turns; the agent replays them before the new task. */
+  history: z.array(conversationTurnSchema).max(100).optional(),
 });
 export type CreateRunRequest = z.infer<typeof createRunSchema>;
 

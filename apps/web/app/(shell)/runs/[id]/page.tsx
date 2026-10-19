@@ -15,9 +15,27 @@ import { useCreateRun } from "@/hooks/use-create-run";
 import { useRunStream } from "@/hooks/use-run-stream";
 import { useWorkspaceDiff } from "@/hooks/use-workspace-diff";
 import { useWorkspaceFiles } from "@/hooks/use-workspace-files";
-import { buildChatMessages } from "@/lib/chat-messages";
+import { buildChatMessages, type ChatMessage } from "@/lib/chat-messages";
+import type { ConversationTurn } from "@buildx/shared";
 
 const FILE_POLL_MS = 3000;
+
+/** Flatten the visible thread into turns for the follow-up run. */
+function toHistory(messages: ChatMessage[]): ConversationTurn[] {
+  const turns: ConversationTurn[] = [];
+  for (const message of messages) {
+    if (message.role === "system") continue;
+    const content = message.blocks
+      .filter((block) => block.kind === "text")
+      .map((block) => block.text ?? "")
+      .join("\n\n")
+      .trim();
+    if (content.length > 0) {
+      turns.push({ role: message.role, content });
+    }
+  }
+  return turns.slice(-100);
+}
 
 export default function RunPage() {
   const params = useParams<{ id: string }>();
@@ -87,6 +105,7 @@ export default function RunPage() {
             events,
             status: run.status,
             usage: run.stats?.usage,
+            history: run.history,
           })
         : [],
     [runId, run, events],
@@ -98,6 +117,7 @@ export default function RunPage() {
     const created = await createRun({
       task,
       model: modelOverride.trim() || undefined,
+      history: toHistory(messages),
     });
     if (created) setDraft("");
   }
@@ -156,6 +176,7 @@ export default function RunPage() {
                   void createRun({
                     task: run.task,
                     model: modelOverride.trim() || undefined,
+                    history: run.history,
                   });
                 }
               : undefined
@@ -173,7 +194,7 @@ export default function RunPage() {
           submitting={submitting}
           streaming={running}
           error={createError}
-          hint="New messages start a new run with a fresh workspace"
+          hint="Replies continue this conversation; each turn runs in a fresh workspace"
         />
       </div>
     </PanelSplit>

@@ -1,3 +1,4 @@
+import type { ConversationTurn } from "@buildx/shared";
 import { relations, sql } from "drizzle-orm";
 import {
   pgTable,
@@ -241,6 +242,9 @@ export const runs = pgTable(
     /** Prompt given to the agent (mirrors `tasks.prompt` for ad-hoc runs created
      *  through the dashboard, which own no `tasks` row). */
     task: text("task"),
+    /** Earlier conversation turns replayed before `task` so follow-up messages
+     *  keep their context across runs. */
+    history: jsonb("history").$type<ConversationTurn[]>(),
     /** Human label for the sandbox workspace backing this run. */
     workspaceName: text("workspace_name"),
     maxSteps: integer("max_steps").notNull().default(40),

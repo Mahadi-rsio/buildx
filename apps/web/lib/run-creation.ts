@@ -13,6 +13,7 @@ import {
   runs as runsTable,
   type Db,
 } from "@buildx/db";
+import type { ConversationTurn } from "@buildx/shared";
 import type { WorkspaceUsage } from "./types";
 import {
   getRunForIdempotencyKey,
@@ -41,6 +42,7 @@ export interface CreateRunInput {
   task: string;
   model: string;
   maxSteps: number;
+  history?: ConversationTurn[];
   idempotencyKey?: string;
   correlationId?: string;
   /** Injectable for tests; defaults to the app's database. */
@@ -152,6 +154,7 @@ export async function createRunForUser(
           model: input.model,
           status: "queued",
           task: input.task,
+          history: input.history?.length ? input.history : null,
           workspaceName:
             input.user.name?.trim() ||
             input.user.email.split("@")[0] ||

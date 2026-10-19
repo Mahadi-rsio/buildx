@@ -231,6 +231,7 @@ export async function startRun(run: StoredRun): Promise<void> {
 
     const result = await runTask({
       task: run.task,
+      history: run.history,
       sandbox,
       model: run.model,
       apiKey: endpoint.apiKey,
@@ -238,6 +239,24 @@ export async function startRun(run: StoredRun): Promise<void> {
       maxSteps: run.maxSteps,
       abortSignal: run.runtime.controller.signal,
       onEvent: (event) => {
+        // Live usage event: keep the in-memory stats current and persist them so
+        // a refresh mid-run still shows real tokens/steps.
+        if (event.type === "usage") {
+          run.stats = {
+            steps: event.data.steps,
+            usage: {
+              inputTokens: event.data.inputTokens,
+              outputTokens: event.data.outputTokens,
+              totalTokens: event.data.totalTokens,
+            },
+          };
+          void persistStats(run).catch((error) => {
+            console.error(
+              `[buildx-worker] stats persist failed (run ${run.id})`,
+              error,
+            );
+          });
+        }
         // Fire-and-forget: the append chain serializes per-run writes. Errors
         // are surfaced (a failed append must not silently drop the event
         // stream) without letting a transient failure abort execution.
@@ -267,7 +286,7 @@ export async function startRun(run: StoredRun): Promise<void> {
       run,
       finalStatus,
       finalStatus === "failed"
-        ? "the agent run failed"
+        ? result.error ?? "the agent run failed"
         : finalStatus === "cancelled"
           ? "stopped by the user"
           : undefined,
