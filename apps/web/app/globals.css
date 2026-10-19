@@ -279,6 +279,39 @@
   }
 }
 
+/* The "thinking trace": a row of short vertical strokes that light up in
+   sequence left-to-right to suggest a stream of computation. Each bar is
+   sized/delayed via CSS custom properties set inline by the component. */
+.bx-trace-bar {
+  display: inline-block;
+  width: 2px;
+  border-radius: 1px;
+  background: currentColor;
+  opacity: 0.35;
+  transform-origin: bottom;
+  animation: buildx-trace-bar 1.6s ease-in-out var(--bx-delay, 0s) infinite;
+}
+@keyframes buildx-trace-bar {
+  0%,
+  100% {
+    opacity: 0.14;
+    transform: scaleY(0.55);
+  }
+  24% {
+    opacity: 0.95;
+    transform: scaleY(1);
+  }
+  50% {
+    opacity: 0.42;
+    transform: scaleY(0.78);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bx-trace-bar {
+    animation: none;
+  }
+}
+
 /* Respect iOS notch / home indicator (paired with viewport-fit=cover). */
 @utility pb-safe {
   padding-bottom: env(safe-area-inset-bottom);

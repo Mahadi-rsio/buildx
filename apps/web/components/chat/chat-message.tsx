@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import type { RunStatus } from "@buildx/shared";
 import {
   AlertCircle,
@@ -20,6 +20,7 @@ import {
   ToolActivityRow,
 } from "@/components/agent/tool-activity";
 import { ChatMarkdown } from "@/components/chat/chat-markdown";
+import { ThinkingStatus } from "@/components/chat/thinking-trace";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -186,7 +187,7 @@ function ActivityGroup({
             {label}
           </span>
           {running ? (
-            <Loader2 className="size-3.5 shrink-0 animate-spin text-warning motion-reduce:animate-none" />
+            <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground/70 motion-reduce:animate-none" />
           ) : failed ? (
             <AlertCircle className="size-3.5 shrink-0 text-danger" />
           ) : (
@@ -215,56 +216,6 @@ function ActivityGroup({
         </CollapsibleContent>
       </div>
     </Collapsible>
-  );
-}
-
-function useElapsedSeconds(since: number | null): number {
-  const [secs, setSecs] = useState(0);
-  useEffect(() => {
-    if (since === null) { setSecs(0); return; }
-    const tick = () => setSecs(Math.floor((Date.now() - since) / 1000));
-    tick();
-    const id = window.setInterval(tick, 1000);
-    return () => window.clearInterval(id);
-  }, [since]);
-  return secs;
-}
-
-function formatElapsed(secs: number): string {
-  if (secs < 60) return `${secs}s`;
-  const m = Math.floor(secs / 60);
-  const s = secs % 60;
-  return `${m}m ${String(s).padStart(2, "0")}s`;
-}
-
-function ThinkingIndicator({ activeTool }: { activeTool?: { name: string; target: string | null; ts: number } | null }) {
-  const elapsed = useElapsedSeconds(activeTool ? activeTool.ts : null);
-  const { icon: Icon, label } = activeTool
-    ? (() => {
-        const k = classifyTool(activeTool.name);
-        return { icon: k.icon, label: k.verb };
-      })()
-    : { icon: null, label: "Working" };
-
-  return (
-    <div
-      className="inline-flex items-center gap-2 rounded-full border border-border bg-surface/60 px-3 py-1.5 text-xs text-muted-foreground"
-      aria-live="polite"
-    >
-      <span className="size-1.5 animate-pulse rounded-full bg-current motion-reduce:animate-none" />
-      {Icon ? <Icon className="size-3.5 shrink-0" /> : null}
-      <span className="max-w-[18rem] truncate">
-        {label}
-        {activeTool?.target ? (
-          <span className="ml-1 font-mono text-[11px] opacity-70">{activeTool.target.length > 60 ? `${activeTool.target.slice(0, 59)}…` : activeTool.target}</span>
-        ) : (
-          "…"
-        )}
-      </span>
-      {activeTool && elapsed > 0 ? (
-        <span className="shrink-0 font-mono text-[11px] opacity-50">{formatElapsed(elapsed)}</span>
-      ) : null}
-    </div>
   );
 }
 
@@ -349,16 +300,6 @@ function MessageActions({
   );
 }
 
-function toolTarget(input: unknown): string | null {
-  if (!input || typeof input !== "object") return null;
-  const record = input as Record<string, unknown>;
-  for (const key of ["command", "path", "file", "pattern", "query", "cwd", "url"]) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim()) return value.trim();
-  }
-  return null;
-}
-
 export function ChatMessageView({
   message,
   showThinking,
@@ -380,28 +321,10 @@ export function ChatMessageView({
     .join("\n\n");
   const groups = useMemo(() => groupBlocks(message.blocks), [message.blocks]);
 
-  // Find the currently active/pending tool, if any
-  const activeTool = useMemo(() => {
-    if (!showThinking) return null;
-    for (let i = message.blocks.length - 1; i >= 0; i--) {
-      const b = message.blocks[i];
-      if (b.item?.kind === "tool" && b.item.pending) {
-        return {
-          name: b.item.toolName,
-          target: toolTarget(b.item.input),
-          ts: b.item.ts,
-        };
-      }
-    }
-    return null;
-  }, [message.blocks, showThinking]);
-
   const body = isUser ? (
-    <div className="ml-auto max-w-[85%] rounded-2xl bg-secondary px-4 py-2.5 text-secondary-foreground">
-      <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">
-        {text}
-      </p>
-    </div>
+    <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground/90">
+      {text}
+    </p>
   ) : (
     <div className="space-y-3">
       {groups.map((group) => {
@@ -459,29 +382,21 @@ export function ChatMessageView({
         }
         return null;
       })}
-      {showThinking ? <ThinkingIndicator activeTool={activeTool} /> : null}
+      {showThinking ? <ThinkingStatus blocks={message.blocks} /> : null}
     </div>
   );
 
   return (
-    <div
-      className={cn(
-        "group/msg flex gap-3",
-        isUser ? "justify-end" : "justify-start",
-      )}
-    >
-      {!isUser ? (
-        <div className="mt-1 flex size-8 shrink-0 items-center justify-center rounded-lg border border-border bg-surface/60">
+    <div className="group/msg flex items-start gap-3">
+      <div className="mt-1 flex size-8 shrink-0 items-center justify-center rounded-lg border border-border bg-surface/60">
+        {isUser ? (
+          <User className="size-4 text-muted-foreground" />
+        ) : (
           <Bot className="size-4 text-muted-foreground" />
-        </div>
-      ) : null}
-
-      <div
-        className={cn(
-          "min-w-0 flex-1 max-w-[min(100%,46rem)]",
-          isUser && "order-first",
         )}
-      >
+      </div>
+
+      <div className="min-w-0 flex-1 max-w-[min(100%,46rem)]">
         {body}
 
         {!isUser && message.usage ? (
@@ -494,12 +409,6 @@ export function ChatMessageView({
           onEdit={isUser ? onEdit : undefined}
         />
       </div>
-
-      {isUser ? (
-        <div className="mt-1 flex size-8 shrink-0 items-center justify-center rounded-lg border border-border bg-surface/60">
-          <User className="size-4 text-muted-foreground" />
-        </div>
-      ) : null}
     </div>
   );
 }

@@ -2,6 +2,7 @@
 
 import { GlyphMatrix } from "@/components/ui/glyph-matrix";
 import { TypingText } from "@/components/chat/typing-text";
+import { ThinkingTrace } from "@/components/chat/thinking-trace";
 import { useConfig } from "@/hooks/use-config";
 import { Sparkles, Terminal, ShieldCheck, Zap } from "lucide-react";
 
@@ -39,7 +40,7 @@ export function ChatEmptyState({
 
       <div className="relative z-10 mx-auto w-full max-w-xl">
         <div className="inline-flex items-center gap-2 rounded-full border border-border/80 bg-muted/40 px-3 py-1 text-xs text-muted-foreground shadow-xs backdrop-blur-md">
-          <span className="flex size-2 rounded-full bg-emerald-400 animate-pulse" />
+          <ThinkingTrace className="text-muted-foreground/80" />
           <span className="font-mono text-[11px] font-medium tracking-wide uppercase">
             Autonomous Coding Agent
           </span>

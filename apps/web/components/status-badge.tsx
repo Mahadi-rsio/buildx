@@ -5,13 +5,11 @@ import { cn } from "@/lib/utils";
 const STYLES: Record<RunStatus, string> = {
   queued: "border-border bg-secondary text-muted-foreground",
   running:
-    "border-amber-500/30 bg-amber-500/10 text-amber-300 dark:border-amber-500/30",
-  waiting_input:
-    "border-sky-500/30 bg-sky-500/10 text-sky-300 dark:border-sky-500/30",
+    "border-warning/25 bg-warning/10 text-warning dark:border-warning/25",
+  waiting_input: "border-info/25 bg-info/10 text-info dark:border-info/25",
   completed:
-    "border-emerald-500/30 bg-emerald-500/10 text-emerald-300 dark:border-emerald-500/30",
-  failed:
-    "border-red-500/30 bg-red-500/10 text-red-300 dark:border-red-500/30",
+    "border-success/25 bg-success/10 text-success dark:border-success/25",
+  failed: "border-danger/25 bg-danger/10 text-danger dark:border-danger/25",
   cancelled: "border-border bg-secondary text-muted-foreground",
 };
 

@@ -216,7 +216,7 @@ function StatusIcon({
 }) {
   if (running) {
     return (
-      <Loader2 className="size-3.5 shrink-0 animate-spin text-warning motion-reduce:animate-none" />
+      <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground/70 motion-reduce:animate-none" />
     );
   }
   if (status === "cancelled") {
