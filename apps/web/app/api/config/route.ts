@@ -9,7 +9,9 @@ export async function GET(): Promise<Response> {
     maxSteps: config.maxSteps,
     baseURL: config.baseURL ?? null,
     defaultProvider:
-      config.providers.find((provider) => provider.primary)?.id ?? "omniroute",
+      config.providers.find((provider) => provider.primary)?.id ??
+      config.providers.find((provider) => provider.hasApiKey)?.id ??
+      "litellm",
     providers: config.providers.map((provider) => ({
       id: provider.id,
       label: provider.label,

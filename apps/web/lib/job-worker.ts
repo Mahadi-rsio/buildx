@@ -286,6 +286,10 @@ async function acquireSession(
    *  call more than once (only the first fences). */
   const fenceLostOwnership = (reason: string): void => {
     if (fenced) return;
+    // The lease is also released as part of a terminal transition. A watchdog
+    // tick that lands in that window is not a lost lease — the run is already
+    // done, so logging/fencing would be a false alarm.
+    if (isTerminalStatus(run.status)) return;
     fenced = true;
     for (const timer of timers) clearInterval(timer);
     console.warn(`[buildx-worker] fenced run ${run.id}: ${reason}`);

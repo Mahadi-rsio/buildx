@@ -1,19 +1,10 @@
 import { z } from "zod";
 
 /** Default model id when `AGENT_MODEL` is unset. */
-export const DEFAULT_MODEL = "gpt-4o-mini";
+export const DEFAULT_MODEL = "auto";
 
 /** Upstream model aliases exposed by the LiteLLM proxy. */
-export const LITELLM_MODEL_ALIASES = [
-  "default-fast",
-  "google-fast",
-  "mistral-fast",
-  "openrouter-fast",
-  "groq-fast",
-  "vercel-fast",
-  "cloudflare-fast",
-  "premium-coder",
-] as const;
+export const LITELLM_MODEL_ALIASES = ["auto"] as const;
 export type LitellmModelAlias = (typeof LITELLM_MODEL_ALIASES)[number];
 
 export function isLitellmAlias(model: string | undefined): boolean {
@@ -201,8 +192,6 @@ export const conversationSyncSchema = z.object({
 export type ConversationSyncRequest = z.infer<typeof conversationSyncSchema>;
 
 export const envSchema = z.object({
-  OPENAI_API_KEY: z.string().min(1, "OPENAI_API_KEY is required"),
-  OPENAI_BASE_URL: z.string().min(1).optional(),
   AGENT_MODEL: z.string().min(1).default(DEFAULT_MODEL),
   AGENT_MAX_STEPS: z.coerce
     .number()
@@ -218,19 +207,18 @@ export const envSchema = z.object({
 export type Env = z.infer<typeof envSchema>;
 
 /**
- * The model provider a run routes through. `litellm` is the production proxy
- * for multi-provider aliases; `omniroute` is the OpenAI-compatible fallback and
- * `vercel` is the optional Vercel AI Gateway paid catalog.
+ * The model provider a run routes through: the LiteLLM proxy for `auto`, or
+ * the Vercel AI Gateway for concrete gateway model ids.
  */
-export type ModelProviderId = "litellm" | "omniroute" | "vercel";
+export type ModelProviderId = "litellm" | "vercel";
 
 export const MODEL_PROVIDER_IDS: readonly ModelProviderId[] = [
   "litellm",
-  "omniroute",
   "vercel",
 ];
 
 export const DEFAULT_LITELLM_BASE_URL = "http://localhost:4000/v1";
+export const DEFAULT_VERCEL_BASE_URL = "https://ai-gateway.vercel.sh/v1";
 
 export interface ModelProvider {
   id: ModelProviderId;
@@ -260,7 +248,7 @@ export interface EnvStatus {
   model: string;
   maxSteps: number;
   baseURL: string | undefined;
-  /** Configured model providers, primary (OmniRoute) first. */
+  /** Configured model providers, LiteLLM first when configured. */
   providers: ModelProvider[];
 }
 
@@ -272,7 +260,6 @@ export interface EnvStatus {
 export function envStatus(
   source: Record<string, string | undefined> = process.env,
 ): EnvStatus {
-  const key = (source.OPENAI_API_KEY ?? "").trim();
   const model = (source.AGENT_MODEL ?? "").trim() || DEFAULT_MODEL;
   const stepsRaw = (source.AGENT_MAX_STEPS ?? "").trim();
   const parsed = Number(stepsRaw);
@@ -280,17 +267,17 @@ export function envStatus(
     stepsRaw && Number.isFinite(parsed) && parsed > 0
       ? Math.floor(parsed)
       : DEFAULT_MAX_STEPS;
-  const baseURL = (source.OPENAI_BASE_URL ?? "").trim() || undefined;
   const vercelBaseURL =
-    (source.VERCEL_AI_GATEWAY_BASE_URL ?? "").trim() || undefined;
+    (source.VERCEL_AI_GATEWAY_BASE_URL ?? "").trim() || DEFAULT_VERCEL_BASE_URL;
   const litellmBaseURL =
     (source.LITELLM_BASE_URL ?? "").trim() || DEFAULT_LITELLM_BASE_URL;
   const litellmKey = (source.LITELLM_API_KEY ?? "").trim();
+  const vercelKey = (source.VERCEL_AI_GATEWAY_API_KEY ?? "").trim();
   return {
-    hasApiKey: key.length > 0 || litellmKey.length > 0,
+    hasApiKey: litellmKey.length > 0 || (vercelKey.length > 0 && Boolean(vercelBaseURL)),
     model,
     maxSteps,
-    baseURL: litellmKey.length > 0 ? litellmBaseURL : baseURL,
+    baseURL: litellmKey.length > 0 ? litellmBaseURL : vercelBaseURL,
     providers: [
       {
         id: "litellm",
@@ -300,17 +287,10 @@ export function envStatus(
         primary: litellmKey.length > 0,
       },
       {
-        id: "omniroute",
-        label: "OmniRoute",
-        baseURL,
-        hasApiKey: key.length > 0,
-        primary: litellmKey.length === 0,
-      },
-      {
         id: "vercel",
         label: "Vercel AI Gateway",
         baseURL: vercelBaseURL,
-        hasApiKey: (source.VERCEL_AI_GATEWAY_API_KEY ?? "").trim().length > 0,
+        hasApiKey: vercelKey.length > 0,
         primary: false,
       },
     ],
@@ -318,28 +298,17 @@ export function envStatus(
 }
 
 /**
- * Resolve which provider a run's model routes through. The primary (OmniRoute)
- * provider owns the default model (`AGENT_MODEL` — e.g. `auto`); every other
- * model id is a paid model served by the Vercel AI Gateway. When the Vercel
- * gateway is not configured the run falls back to the primary provider, so the
- * picker never advertises a model the server cannot reach.
+ * Resolve which provider a run's model routes through. `auto` (and explicit
+ * `litellm/` ids) go through the LiteLLM proxy; every other id is a concrete
+ * model served by the Vercel AI Gateway.
  */
 export function resolveModelProvider(
   model: string | undefined,
   env: EnvStatus,
 ): ModelProviderId {
   const target = (model ?? "").trim() || env.model;
-  const litellm = env.providers.find((provider) => provider.id === "litellm");
-  // Aliases are only meaningful on the gateway; route them there whenever it is
-  // configured. Unknown ids keep the legacy provider split.
-  if (isLitellmAlias(target) && litellm?.hasApiKey) return "litellm";
-  if (target.startsWith("litellm/") && litellm?.hasApiKey) return "litellm";
-  if (target === env.model) {
-    return litellm?.hasApiKey ? "litellm" : "omniroute";
-  }
-  const vercel = env.providers.find((provider) => provider.id === "vercel");
-  if (isLitellmAlias(target)) return "litellm";
-  return vercel && vercel.baseURL && vercel.hasApiKey ? "vercel" : "omniroute";
+  if (isLitellmAlias(target) || target.startsWith("litellm/")) return "litellm";
+  return "vercel";
 }
 
 /** Credentials for a provider, read from the same source as {@link envStatus}. */
@@ -350,14 +319,11 @@ export function providerEndpoint(
   const baseURL =
     providerId === "litellm"
       ? (source.LITELLM_BASE_URL ?? "").trim() || DEFAULT_LITELLM_BASE_URL
-      : providerId === "vercel"
-        ? (source.VERCEL_AI_GATEWAY_BASE_URL ?? "").trim() || undefined
-        : (source.OPENAI_BASE_URL ?? "").trim() || undefined;
+      : (source.VERCEL_AI_GATEWAY_BASE_URL ?? "").trim() ||
+        DEFAULT_VERCEL_BASE_URL;
   const apiKey =
     providerId === "litellm"
       ? (source.LITELLM_API_KEY ?? "").trim() || undefined
-      : providerId === "vercel"
-        ? (source.VERCEL_AI_GATEWAY_API_KEY ?? "").trim() || undefined
-        : (source.OPENAI_API_KEY ?? "").trim() || undefined;
+      : (source.VERCEL_AI_GATEWAY_API_KEY ?? "").trim() || undefined;
   return { apiKey, baseURL };
 }

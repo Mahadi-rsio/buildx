@@ -157,8 +157,14 @@ function syncFromRow(run: StoredRun, row: RunRow): void {
       : undefined;
 }
 
-/** Hydrate (and remember) a run from its DB row, loading its event log. */
-export async function hydrateRun(row: RunRow): Promise<StoredRun> {
+/**
+ * Hydrate (and remember) a run from its DB row. `loadEvents` can be skipped for
+ * a row that was just inserted and therefore has no event log yet.
+ */
+export async function hydrateRun(
+  row: RunRow,
+  options: { loadEvents?: boolean } = {},
+): Promise<StoredRun> {
   const existing = cachedRuns().get(row.id);
   if (existing) {
     syncFromRow(existing, row);
@@ -201,7 +207,9 @@ export async function hydrateRun(row: RunRow): Promise<StoredRun> {
     stats && (stats.steps > 0 || (stats.usage?.totalTokens ?? 0) > 0)
       ? stats
       : undefined;
-  run.events = await loadEvents(row.id);
+  if (options.loadEvents !== false) {
+    run.events = await loadEvents(row.id);
+  }
   cachedRuns().set(run.id, run);
   return run;
 }

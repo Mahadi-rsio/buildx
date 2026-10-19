@@ -68,20 +68,22 @@ export function SettingsDialog() {
               </div>
             ) : (
               <div className="space-y-2">
-                <EnvRow
-                  label="OPENAI_API_KEY"
-                  ok={config.hasApiKey}
-                  value={
-                    config.hasApiKey
-                      ? "Configured"
-                      : "Missing — copy .env.example to .env.local"
-                  }
-                />
-                <EnvRow
-                  label="OPENAI_BASE_URL"
-                  ok={config.baseURL !== null}
-                  value={config.baseURL ?? "OpenAI default"}
-                />
+                {config.providers.map((provider) => (
+                  <EnvRow
+                    key={provider.id}
+                    label={
+                      provider.id === "litellm"
+                        ? "LITELLM_API_KEY"
+                        : "VERCEL_AI_GATEWAY_API_KEY"
+                    }
+                    ok={provider.hasApiKey}
+                    value={
+                      provider.hasApiKey
+                        ? `Configured · ${provider.baseURL ?? "default endpoint"}`
+                        : "Missing — copy .env.example to .env.local"
+                    }
+                  />
+                ))}
                 <EnvRow
                   label="AGENT_MODEL"
                   ok

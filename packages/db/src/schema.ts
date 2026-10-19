@@ -341,7 +341,7 @@ export const conversationEvents = pgTable(
     role: text("role").$type<"user" | "assistant">().notNull(),
     kind: text("kind").$type<"message">().notNull().default("message"),
     content: text("content").notNull(),
-    seq: integer("seq").notNull(),
+    seq: bigint("seq", { mode: "number" }).notNull(),
     clientCreatedAt: timestamp("client_created_at", {
       withTimezone: true,
     }).notNull(),

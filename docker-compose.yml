@@ -24,6 +24,7 @@ services:
       - "127.0.0.1:5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      - ./infra/init-litellm-db.sql:/docker-entrypoint-initdb.d/10-litellm.sql:ro
     healthcheck:
       test:
         - CMD-SHELL
@@ -68,13 +69,22 @@ services:
     image: ${LITELLM_IMAGE:-ghcr.io/berriai/litellm:main-stable}
     container_name: buildx-litellm
     restart: unless-stopped
-    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    command: ["--config", "/app/config.yaml", "--host", "127.0.0.1", "--port", "4000"]
     env_file:
       - .env
+    environment:
+      # Keep the proxy's virtual-key store out of the app's Neon database.
+      # Local Postgres is used for LiteLLM keys/spend logs.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-buildx}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@127.0.0.1:5432/${LITELLM_DB_NAME:-litellm}
+    # Docker's embedded DNS is unreliable on user-defined networks in this
+    # environment; host networking lets the proxy resolve providers normally.
+    # It still binds to 127.0.0.1 only (see `--host` above).
+    network_mode: host
+    depends_on:
+      postgres:
+        condition: service_healthy
     volumes:
       - ./litellm/config.yaml:/app/config.yaml:ro
-    ports:
-      - "127.0.0.1:4000:4000" # private: the app talks to it over the local host
     healthcheck:
       test:
         - CMD-SHELL

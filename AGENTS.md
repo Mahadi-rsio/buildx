@@ -40,8 +40,10 @@ test spins up an in-process OpenAI-compatible SSE server, so no API key is neede
 
 ## Running the dashboard
 
-- `apps/web` reads `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `AGENT_MODEL`,
-  `AGENT_MAX_STEPS` from the environment / `.env.local` (copy `.env.example`).
+- `apps/web` reads `LITELLM_API_KEY`, `LITELLM_BASE_URL`, `VERCEL_AI_GATEWAY_API_KEY`,
+  `AGENT_MODEL`, `AGENT_MAX_STEPS` from the environment / `.env.local` (copy
+  `.env.example`). LiteLLM exposes only `auto`; the picker lists `auto` plus the
+  full Vercel AI Gateway catalog when configured.
 - Each run gets a scratch workspace at `apps/web/.workspaces/<runId>`
   (gitignored; override with `BUILDX_WORKSPACE_DIR`). The file panel reads it.
 - `POST /api/runs` returns `400` when no key is set, so the UI can explain why.
@@ -51,7 +53,9 @@ test spins up an in-process OpenAI-compatible SSE server, so no API key is neede
 - **pnpm 12 blocks build scripts by default** — `pnpm-workspace.yaml` needs `allowBuilds: { esbuild: true }` (esbuild's postinstall is required by tsx).
 - **Relative imports inside `packages/*` must be extensionless** (`./tools`, not `./tools.js`). `moduleResolution: bundler` allows the `.js` form and tsc is happy, but Next/Turbopack cannot resolve `./x.js` → `./x.ts` and the build fails with "Module not found".
 - **Workspace packages export TypeScript source** (`main`/`exports` → `./src/index.ts`), so Next needs `transpilePackages: ["@buildx/agent", "@buildx/sandbox", "@buildx/shared"]`.
-- **`@ai-sdk/openai` throws at import time on an empty `OPENAI_BASE_URL`** (it builds a default provider top-level). `next.config.ts` deletes empty agent env vars before any route module loads, so a blank `KEY=` in `.env` behaves as unset.
+- **`@ai-sdk/openai` builds a default provider at import time.** `next.config.ts`
+  deletes empty agent env vars (`AGENT_MODEL`, `AGENT_MAX_STEPS`) before any route
+  module loads, so a blank `KEY=` in `.env` behaves as unset.
 - **`react-hooks/set-state-in-effect` is an error** — an effect must not synchronously call a function that `setState`s. Load data inside an async IIFE and only `setState` after an `await`; drive refetches with a `refreshNonce` state or via deps, not a direct call.
 - **Installed AI SDK is `ai@7.0.141`** (docs say "AI SDK 6"). Verified APIs:
   - Stop condition export is `stepCountIs` (not `isStepCount` — that's internal).

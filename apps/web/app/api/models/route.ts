@@ -1,9 +1,4 @@
-import {
-  envStatus,
-  providerEndpoint,
-  LITELLM_MODEL_ALIASES,
-  type ModelProviderId,
-} from "@buildx/shared";
+import { envStatus, providerEndpoint, type ModelProviderId } from "@buildx/shared";
 
 export const dynamic = "force-dynamic";
 
@@ -11,56 +6,24 @@ export interface ModelOption {
   id: string;
   name: string;
   description?: string;
-  /** Human label for the provider (OmniRoute / Vercel / ...). */
+  /** Human label for the provider (LiteLLM / Vercel). */
   provider?: string;
   /** Provider id used by the UI to group models into sections. */
   providerId?: ModelProviderId | string;
 }
 
 /**
- * Fallback catalog for the primary (OmniRoute) provider, used only when its
- * `/models` endpoint cannot be reached. The active default (from `AGENT_MODEL`)
- * is always injected first, so the picker never advertises a model the server
- * would reject.
+ * Fallback catalog for the Vercel AI Gateway when its `/models` endpoint
+ * cannot be reached. The live endpoint normally returns the full catalog.
  */
-const FALLBACK_MODELS: ModelOption[] = [
+const VERCEL_FALLBACK_MODELS: ModelOption[] = [
   {
-    id: "deepseek-chat",
-    name: "DeepSeek Chat (V3)",
-    description: "Fast general intelligence & coding",
-    provider: "OmniRoute",
-    providerId: "omniroute",
+    id: "anthropic/claude-3-7-sonnet-20250219",
+    name: "Claude 3.7 Sonnet",
+    description: "Extended-thinking software engineering model",
+    provider: "Vercel",
+    providerId: "vercel",
   },
-  {
-    id: "deepseek-reasoner",
-    name: "DeepSeek Reasoner (R1)",
-    description: "Deep chain-of-thought reasoning",
-    provider: "OmniRoute",
-    providerId: "omniroute",
-  },
-  {
-    id: "gpt-4o",
-    name: "GPT-4o",
-    description: "High-intelligence flagship multimodal model",
-    provider: "OmniRoute",
-    providerId: "omniroute",
-  },
-  {
-    id: "gpt-4o-mini",
-    name: "GPT-4o Mini",
-    description: "Fast, cost-efficient everyday model",
-    provider: "OmniRoute",
-    providerId: "omniroute",
-  },
-];
-
-/**
- * Paid models served by the Vercel AI Gateway. Used when the gateway is
- * configured but its `/models` endpoint does not list models (gateways often
- * omit it). Ids use the gateway's `provider/model` format. Tweak this list to
- * match the models you enable on your gateway.
- */
-const VERCEL_PAID_MODELS: ModelOption[] = [
   {
     id: "openai/gpt-4o",
     name: "GPT-4o",
@@ -72,41 +35,6 @@ const VERCEL_PAID_MODELS: ModelOption[] = [
     id: "openai/gpt-4o-mini",
     name: "GPT-4o Mini",
     description: "Fast, cost-efficient everyday model",
-    provider: "Vercel",
-    providerId: "vercel",
-  },
-  {
-    id: "openai/gpt-4.1",
-    name: "GPT-4.1",
-    description: "Long-context flagship model",
-    provider: "Vercel",
-    providerId: "vercel",
-  },
-  {
-    id: "openai/o3-mini",
-    name: "O3 Mini",
-    description: "Reasoning model, fast and affordable",
-    provider: "Vercel",
-    providerId: "vercel",
-  },
-  {
-    id: "anthropic/claude-3-5-sonnet-20241022",
-    name: "Claude 3.5 Sonnet",
-    description: "Specialized in software engineering",
-    provider: "Vercel",
-    providerId: "vercel",
-  },
-  {
-    id: "anthropic/claude-3-7-sonnet-20250219",
-    name: "Claude 3.7 Sonnet",
-    description: "Extended-thinking software engineering model",
-    provider: "Vercel",
-    providerId: "vercel",
-  },
-  {
-    id: "anthropic/claude-3-5-haiku-20241022",
-    name: "Claude 3.5 Haiku",
-    description: "Fast, cost-efficient Anthropic model",
     provider: "Vercel",
     providerId: "vercel",
   },
@@ -124,13 +52,6 @@ const VERCEL_PAID_MODELS: ModelOption[] = [
     provider: "Vercel",
     providerId: "vercel",
   },
-  {
-    id: "deepseek/deepseek-reasoner",
-    name: "DeepSeek Reasoner (R1)",
-    description: "Deep chain-of-thought reasoning",
-    provider: "Vercel",
-    providerId: "vercel",
-  },
 ];
 
 /** Turn an id like `deepseek/deepseek-v4-flash-0731` into a readable label. */
@@ -142,54 +63,81 @@ function prettifyId(id: string): string {
     .trim();
 }
 
-/** Human labels for the curated LiteLLM routing aliases. */
-const LITELLM_ALIAS_LABELS: Record<string, string> = {
-  "default-fast": "Default · fast routing",
-  "google-fast": "Google / Gemini fast",
-  "mistral-fast": "Mistral fast",
-  "openrouter-fast": "OpenRouter cheap",
-  "groq-fast": "Groq fast",
-  "vercel-fast": "Vercel AI Gateway",
-  "cloudflare-fast": "Cloudflare AI Gateway",
-  "premium-coder": "Premium coding model",
-};
+const CHAT_UNSUPPORTED = /(embedding|whisper|tts|dall-e|moderation|image-|rerank)/i;
 
-const CHAT_UNSUPPORTED = /(embedding|whisper|tts|dall-e|moderation|image-)/i;
+interface RemoteModel {
+  id: string;
+  name?: string;
+  description?: string;
+  type?: string;
+  tags?: string[];
+}
 
-/** Best-effort `/models` fetch from an OpenAI-compatible endpoint. */
-async function fetchCatalog(
-  baseURL: string | undefined,
-  apiKey: string | undefined,
-): Promise<Array<{ id: string; name?: string }>> {
-  if (!baseURL && !apiKey) return [];
-  const targetUrl = baseURL
-    ? `${baseURL.replace(/\/+$/, "")}/models`
-    : "https://api.openai.com/v1/models";
-  const headers: Record<string, string> = {};
-  if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
-  const res = await fetch(targetUrl, {
-    headers,
-    signal: AbortSignal.timeout(4000),
-  });
-  if (!res.ok) return [];
-  const json = (await res.json()) as {
-    data?: Array<{ id: string; name?: string; owned_by?: string }>;
+const CATALOG_TTL_MS = 5 * 60_000;
+let catalogCache: { expiresAt: number; models: ModelOption[] } | null = null;
+
+/** Best-effort `/models` fetch from the Vercel AI Gateway (cached in-process). */
+async function fetchVercelCatalog(
+  baseURL: string,
+  apiKey: string,
+): Promise<ModelOption[]> {
+  if (catalogCache && catalogCache.expiresAt > Date.now()) {
+    return catalogCache.models;
+  }
+
+  const targetUrl = `${baseURL.replace(/\/+$/, "")}/models`;
+  const cacheFallback = (): ModelOption[] => {
+    catalogCache = {
+      expiresAt: Date.now() + CATALOG_TTL_MS,
+      models: VERCEL_FALLBACK_MODELS,
+    };
+    return VERCEL_FALLBACK_MODELS;
   };
-  if (!Array.isArray(json.data)) return [];
-  return json.data
+
+  let res: Response;
+  try {
+    res = await fetch(targetUrl, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(8000),
+    });
+  } catch {
+    // Cache the failure so an unreachable gateway does not add an 8s timeout
+    // to every picker mount until the next TTL window.
+    return cacheFallback();
+  }
+  if (!res.ok) return cacheFallback();
+
+  const json = (await res.json()) as { data?: RemoteModel[] };
+  if (!Array.isArray(json.data) || json.data.length === 0) {
+    return cacheFallback();
+  }
+
+  const models = json.data
     .filter(
-      (m) =>
-        typeof m.id === "string" &&
-        m.id.trim().length > 0 &&
-        !CHAT_UNSUPPORTED.test(m.id),
+      (model) =>
+        typeof model.id === "string" &&
+        model.id.trim().length > 0 &&
+        !CHAT_UNSUPPORTED.test(model.id) &&
+        (model.type === undefined || model.type === "language"),
     )
-    .map((m) => ({ id: m.id.trim(), name: m.name?.trim() || prettifyId(m.id) }));
+    .map((model) => ({
+      id: model.id.trim(),
+      name: model.name?.trim() || prettifyId(model.id),
+      description:
+        model.description?.trim().slice(0, 160) ||
+        model.tags?.slice(0, 3).join(" · ") ||
+        model.id,
+      provider: "Vercel",
+      providerId: "vercel",
+    }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+
+  catalogCache = { expiresAt: Date.now() + CATALOG_TTL_MS, models };
+  return models;
 }
 
 export async function GET(): Promise<Response> {
   const env = envStatus();
-  const defaultModel = env.model;
-  const omni = providerEndpoint("omniroute");
   const vercel = providerEndpoint("vercel");
   const litellmEnabled = env.providers.some(
     (provider) => provider.id === "litellm" && provider.hasApiKey,
@@ -204,73 +152,32 @@ export async function GET(): Promise<Response> {
     models.push(option);
   };
 
-  // Curated LiteLLM aliases are the production catalog.
-  if (litellmEnabled) {
-    for (const alias of LITELLM_MODEL_ALIASES) {
-      push({
-        id: alias,
-        name: LITELLM_ALIAS_LABELS[alias] ?? prettifyId(alias),
-        description: "Routed by the LiteLLM proxy",
-        provider: "LiteLLM",
-        providerId: "litellm",
-      });
-    }
-  } else {
-    // The active default is always first and always present (OmniRoute).
-    push({
-      id: defaultModel,
-      name: prettifyId(defaultModel),
-      description: "Default · automatic routing via OmniRoute",
-      provider: "OmniRoute",
-      providerId: "omniroute",
-    });
-  }
+  let defaultModel = env.model;
 
-  // The active default is present even when an alias provider is configured.
+  // LiteLLM exposes a single model to the app: `auto`. The proxy fans out to
+  // the configured upstreams; picking a concrete upstream is a Vercel model.
   if (litellmEnabled) {
     push({
-      id: defaultModel,
-      name: prettifyId(defaultModel),
-      description: "Configured default model",
-      provider: env.providers.find((p) => p.primary)?.label ?? "LiteLLM",
+      id: "auto",
+      name: "Auto",
+      description: "Automatic routing via the LiteLLM proxy",
+      provider: "LiteLLM",
       providerId: "litellm",
     });
+    defaultModel = "auto";
   }
 
-  // Primary (OmniRoute) catalog — hidden while the LiteLLM gateway is active.
-  if (!litellmEnabled) {
-    let omniModels: ModelOption[] = [];
-    try {
-      const fetched = await fetchCatalog(omni.baseURL, omni.apiKey);
-      omniModels = fetched.map((m) => ({
-        id: m.id,
-        name: m.name || prettifyId(m.id),
-        provider: "OmniRoute",
-        providerId: "omniroute",
-      }));
-    } catch {
-      // Unreachable or unauthenticated — fall through to the fallback catalog.
-    }
-    if (omniModels.length === 0) omniModels = FALLBACK_MODELS;
-    for (const model of omniModels) push(model);
-  }
-
-  // Vercel AI Gateway (paid) catalog — only when the gateway is configured.
+  // Full Vercel AI Gateway catalog (all chat/language models).
   if (vercel.baseURL && vercel.apiKey) {
     let vercelModels: ModelOption[] = [];
     try {
-      const fetched = await fetchCatalog(vercel.baseURL, vercel.apiKey);
-      vercelModels = fetched.map((m) => ({
-        id: m.id,
-        name: m.name || prettifyId(m.id),
-        provider: "Vercel",
-        providerId: "vercel",
-      }));
+      vercelModels = await fetchVercelCatalog(vercel.baseURL, vercel.apiKey);
     } catch {
-      // Gateway reachable but listing may be unsupported — curated list below.
+      // Unreachable or unauthenticated — fall through to the fallback catalog.
     }
-    if (vercelModels.length === 0) vercelModels = VERCEL_PAID_MODELS;
+    if (vercelModels.length === 0) vercelModels = VERCEL_FALLBACK_MODELS;
     for (const model of vercelModels) push(model);
+    if (!litellmEnabled && vercelModels[0]) defaultModel = vercelModels[0].id;
   }
 
   return Response.json({ default: defaultModel, models });

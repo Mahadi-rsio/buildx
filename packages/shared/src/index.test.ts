@@ -15,24 +15,16 @@ test("createRunSchema rejects an empty task", () => {
 
 test("loadEnv applies defaults and ignores blank values", () => {
   const env = loadEnv({
-    OPENAI_API_KEY: "sk-test",
-    OPENAI_BASE_URL: "",
     AGENT_MODEL: "",
     AGENT_MAX_STEPS: "",
   });
   assert.deepEqual(env, {
-    OPENAI_API_KEY: "sk-test",
-    OPENAI_BASE_URL: undefined,
-    AGENT_MODEL: "gpt-4o-mini",
+    AGENT_MODEL: "auto",
     AGENT_MAX_STEPS: 40,
   });
 });
 
 test("loadEnv coerces AGENT_MAX_STEPS to a number", () => {
-  const env = loadEnv({ OPENAI_API_KEY: "sk-test", AGENT_MAX_STEPS: "12" });
+  const env = loadEnv({ AGENT_MAX_STEPS: "12" });
   assert.equal(env.AGENT_MAX_STEPS, 12);
-});
-
-test("loadEnv requires OPENAI_API_KEY", () => {
-  assert.throws(() => loadEnv({}));
 });

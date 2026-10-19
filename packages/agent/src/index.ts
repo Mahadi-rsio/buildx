@@ -58,9 +58,9 @@ export function createAgent(options: CreateAgentOptions) {
       onFileChange: options.onFileChange,
     }),
     stopWhen: stepCountIs(options.maxSteps ?? DEFAULT_MAX_STEPS),
-    // One model request per agent step: provider-level retries would issue
-    // requests the quota never reserved, so retries stay disabled here and in
-    // the LiteLLM proxy (`num_retries: 0`).
+    // One quota reservation per agent step. Provider-level retries stay
+    // disabled here and in LiteLLM (`num_retries: 0`); LiteLLM may still try
+    // another upstream via `order`, which is a failover, not a retry loop.
     maxRetries: 0,
     prepareStep: async ({ stepNumber }) => {
       await options.onBeforeModelStep?.({ stepNumber });

@@ -209,9 +209,7 @@ export async function startRun(run: StoredRun): Promise<void> {
     const message =
       provider === "litellm"
         ? "LITELLM_API_KEY is not set for the selected model. Add it to .env.local and restart the dev server."
-        : provider === "vercel"
-          ? "VERCEL_AI_GATEWAY_API_KEY is not set for the selected model. Add it to .env.local and restart the dev server."
-          : "OPENAI_API_KEY is not set. Copy .env.example to .env.local, add your key, and restart the dev server.";
+        : "VERCEL_AI_GATEWAY_API_KEY is not set for the selected model. Add it to .env.local and restart the dev server.";
     await appendEvent(run, { type: "error", data: { message }, ts: Date.now() });
     await closeRun(run, "failed", message);
     return;
@@ -242,9 +240,9 @@ export async function startRun(run: StoredRun): Promise<void> {
       baseURL: endpoint.baseURL,
       maxSteps: run.maxSteps,
       abortSignal: run.runtime.controller.signal,
-      // Reserve one unit immediately before every upstream model request. This
-      // includes tool-loop iterations; provider retries are disabled so the
-      // reservation cannot drift from the number of real requests.
+      // Reserve one unit before every agent step, including each tool-loop
+      // iteration. Provider retries are disabled; LiteLLM's `order` failover
+      // may try another upstream after a 429/5xx within the same reservation.
       onBeforeModelStep: async ({ stepNumber }) => {
         const quota = getQuotaService();
         const attemptId = `${run.id}:${stepNumber}:${randomUUID()}`;

@@ -77,10 +77,15 @@ async function ensureConversation(
   db: Db,
   input: { id: string; userId: string; title: string },
 ): Promise<"ok" | "conflict"> {
-  await db
+  const [inserted] = await db
     .insert(conversationsTable)
     .values({ id: input.id, userId: input.userId, title: input.title })
-    .onConflictDoNothing({ target: conversationsTable.id });
+    .onConflictDoNothing({ target: conversationsTable.id })
+    .returning({ userId: conversationsTable.userId });
+
+  // A new conversation is owned by this user by construction; only an existing
+  // row needs an ownership re-read (one fewer round trip on the common path).
+  if (inserted) return inserted.userId === input.userId ? "ok" : "conflict";
 
   const [row] = await db
     .select({ userId: conversationsTable.userId })
@@ -140,6 +145,9 @@ export async function createRunForUser(
 
   const conversationId = input.conversationId ?? randomUUID();
   const title = input.task.slice(0, 200);
+  // The CPU-usage aggregate is independent of run/conversation creation, so
+  // overlap it with the writes instead of paying for it after they finish.
+  const cpuUsagePromise = cpuUsage();
   const conversation = await ensureConversation(db, {
     id: conversationId,
     userId: input.user.id,
@@ -221,8 +229,10 @@ export async function createRunForUser(
       console.log(`[run-creation][${correlationId}] run queued: ${result.row.id}`);
     }
 
-    const run = await hydrateRun(result.row);
-    run.runtime.workspace.usage = usageFor(await cpuUsage(), preflight);
+    const run = await hydrateRun(result.row, {
+      loadEvents: result.kind !== "created",
+    });
+    run.runtime.workspace.usage = usageFor(await cpuUsagePromise, preflight);
     return { kind: result.kind, run };
   } catch (error: unknown) {
     const err = (error as { cause?: unknown })?.cause;

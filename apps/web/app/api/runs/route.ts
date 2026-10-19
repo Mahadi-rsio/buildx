@@ -60,9 +60,7 @@ export async function POST(request: Request): Promise<Response> {
       const message =
         provider === "litellm"
           ? "The LiteLLM gateway key is not set. Add LITELLM_API_KEY and LITELLM_BASE_URL to .env.local and restart the dev server."
-          : provider === "vercel"
-            ? "The Vercel AI Gateway key is not set. Add VERCEL_AI_GATEWAY_API_KEY to .env.local and restart the dev server."
-            : "OPENAI_API_KEY is not set. Copy .env.example to .env.local, add your key, and restart the dev server.";
+          : "The Vercel AI Gateway key is not set. Add VERCEL_AI_GATEWAY_API_KEY to .env.local and restart the dev server.";
       return Response.json(
         { error: "missing_api_key", message },
         { status: 400 },

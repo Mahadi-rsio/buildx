@@ -102,7 +102,7 @@ pnpm install
 # 2. Copy and fill in environment variables
 cp .env.example apps/web/.env.local
 # Edit apps/web/.env.local — at minimum:
-#   DATABASE_URL, OPENAI_API_KEY, UPSTASH_BOX_API_KEY, BETTER_AUTH_SECRET
+#   DATABASE_URL, LITELLM_API_KEY, UPSTASH_BOX_API_KEY, BETTER_AUTH_SECRET
 
 # 3. Run database migrations
 pnpm --filter @buildx/db exec drizzle-kit push
@@ -124,11 +124,12 @@ See [`.env.example`](.env.example) for the full annotated list.
 |---|---|---|
 | `DATABASE_URL` | ✅ | Neon PostgreSQL pooled connection string |
 | `UPSTASH_BOX_API_KEY` | ✅ production | Upstash Box API key (sole production sandbox) |
-| `OPENAI_API_KEY` | ✅ | OpenAI-compatible API key |
+| `LITELLM_API_KEY` | ✅ | App-scoped LiteLLM virtual key |
 | `BETTER_AUTH_SECRET` | ✅ | Auth secret — `openssl rand -base64 32` |
 | `BUILDX_SANDBOX_KIND` | | `box` (production) or `local` (dev only) |
-| `OPENAI_BASE_URL` | | Override for OpenAI-compatible endpoints |
-| `AGENT_MODEL` | | Model ID, default `gpt-4o` |
+| `LITELLM_BASE_URL` | | LiteLLM proxy base URL, default `http://localhost:4000/v1` |
+| `VERCEL_AI_GATEWAY_API_KEY` | | Enables the full Vercel AI Gateway catalog in the picker |
+| `AGENT_MODEL` | | Model ID, default `auto` (LiteLLM) |
 | `AGENT_MAX_STEPS` | | Max agent loop steps, default `40` |
 
 Cloudflare bindings (`BUILDX_QUEUE`, `BUILDX_KV`, `BUILDX_R2`) are provided automatically by Wrangler — they are **not** environment variables.
@@ -163,7 +164,7 @@ pnpm --filter @buildx/web exec wrangler kv namespace create buildx-cache-kv
 # 2. Set production secrets
 pnpm --filter @buildx/web exec wrangler secret put DATABASE_URL
 pnpm --filter @buildx/web exec wrangler secret put UPSTASH_BOX_API_KEY
-pnpm --filter @buildx/web exec wrangler secret put OPENAI_API_KEY
+pnpm --filter @buildx/web exec wrangler secret put LITELLM_API_KEY
 pnpm --filter @buildx/web exec wrangler secret put BETTER_AUTH_SECRET
 
 # 3. Build Worker bundle

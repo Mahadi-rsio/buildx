@@ -1,0 +1,1 @@
+ALTER TABLE "conversation_events" ALTER COLUMN "seq" SET DATA TYPE bigint;

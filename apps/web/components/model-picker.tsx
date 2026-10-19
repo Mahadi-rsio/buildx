@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Check, ChevronDown, RotateCcw, Search, Settings2, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,7 +13,7 @@ import {
 import { useModels, type ModelOption } from "@/hooks/use-models";
 import { cn } from "@/lib/utils";
 
-const MAX_RESULTS = 120;
+const MAX_RESULTS = 500;
 
 export function ModelPicker({
   value,
@@ -34,10 +34,18 @@ export function ModelPicker({
   const { models, defaultModel, loading } = useModels();
   const [query, setQuery] = useState("");
 
-  const selected = value.trim();
+  const requested = value.trim();
+  const selected = models.some((m) => m.id === requested) ? requested : "";
   const effective = selected || defaultModel;
   const currentOption = models.find((m) => m.id === effective);
-  const displayName = selected ? currentOption?.name || selected : "Auto";
+  const displayName = currentOption?.name || selected || defaultModel || "Auto";
+
+  // Drop stale persisted overrides (removed providers/aliases) once the real
+  // catalog is known, so the composer never sends an unroutable model id.
+  useEffect(() => {
+    if (loading || models.length === 0) return;
+    if (requested && !models.some((m) => m.id === requested)) onChange("");
+  }, [loading, models, requested, onChange]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -52,7 +60,7 @@ export function ModelPicker({
 
   const visible = filtered.slice(0, MAX_RESULTS);
 
-  // Group the visible models by provider (OmniRoute / Vercel / ...) so the
+  // Group the visible models by provider (LiteLLM / Vercel / ...) so the
   // dropdown reads as distinct catalogs.
   const groups = (() => {
     const map = new Map<string, { id: string; label: string; models: ModelOption[] }>();
