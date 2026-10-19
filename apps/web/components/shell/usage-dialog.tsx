@@ -11,15 +11,18 @@ import {
 import { NumberTicker } from "@/components/ui/number-ticker";
 import { StatusBadge } from "@/components/status-badge";
 import { useShell } from "@/components/shell/shell-context";
+import { useQuota } from "@/hooks/use-quota";
 
 export function UsageDialog() {
   const { usageOpen, setUsageOpen, meta } = useShell();
+  const quota = useQuota(usageOpen);
   const tokens = meta.tokens ?? 0;
   const steps = meta.steps ?? 0;
   const usage = meta.workspace?.usage;
+  const resetAt = quota.data?.resetAt ?? usage?.nextDhakaResetAt;
   const resetLabel =
-    usage && Number.isFinite(usage.nextDhakaResetAt)
-      ? new Date(usage.nextDhakaResetAt).toLocaleString("en-US", {
+    resetAt && Number.isFinite(resetAt)
+      ? new Date(resetAt).toLocaleString("en-US", {
           hour: "2-digit",
           minute: "2-digit",
           month: "short",
@@ -96,9 +99,21 @@ export function UsageDialog() {
           <div className="flex items-center justify-between gap-3">
             <span className="text-muted-foreground">Daily requests</span>
             <span className="font-mono text-foreground/80">
-              {usage ? `${usage.dailyRequestsUsed} / ${usage.dailyRequestsLimit}` : "—"}
+              {quota.data
+                ? `${quota.data.used} / ${quota.data.limit}`
+                : usage
+                  ? `${usage.dailyRequestsUsed} / ${usage.dailyRequestsLimit}`
+                  : "—"}
             </span>
           </div>
+          {quota.data ? (
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-muted-foreground">Remaining</span>
+              <span className="font-mono text-foreground/80">
+                {quota.data.remaining}
+              </span>
+            </div>
+          ) : null}
           <div className="flex items-center justify-between gap-3">
             <span className="text-muted-foreground">Dhaka reset</span>
             <span className="font-mono text-foreground/80">{resetLabel}</span>

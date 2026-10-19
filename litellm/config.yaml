@@ -1,0 +1,82 @@
+# LiteLLM Proxy configuration for BuildX.
+#
+# Every `model_name` is a BuildX alias. The app never sees provider keys or raw
+# provider model ids; it sends an alias plus an app-scoped virtual key.
+#
+# IMPORTANT: retries and fallbacks are disabled. The app reserves daily quota
+# immediately before each upstream request and `packages/agent` sets
+# `maxRetries: 0`; any provider-level retry or silent fallback would issue
+# requests the quota never reserved, undercounting real usage. Fallback model
+# selection is handled app-side by alias resolution instead.
+#
+# Start with: docker compose up -d litellm
+# Keys come from the environment (see .env.example); never hardcode them here.
+
+model_list:
+  # The app's AGENT_MODEL default must also resolve while LiteLLM is active.
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: default-fast
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: google-fast
+    litellm_params:
+      model: gemini/gemini-2.0-flash
+      api_key: os.environ/GEMINI_API_KEY
+
+  - model_name: mistral-fast
+    litellm_params:
+      model: mistral/mistral-small-latest
+      api_key: os.environ/MISTRAL_API_KEY
+
+  - model_name: openrouter-fast
+    litellm_params:
+      model: openrouter/os.environ/OPENROUTER_MODEL
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  - model_name: groq-fast
+    litellm_params:
+      model: groq/llama-3.3-70b-versatile
+      api_key: os.environ/GROQ_API_KEY
+
+  # Vercel AI Gateway is OpenAI-compatible.
+  - model_name: vercel-fast
+    litellm_params:
+      model: openai/os.environ/VERCEL_MODEL
+      api_base: https://ai-gateway.vercel.sh/v1
+      api_key: os.environ/VERCEL_AI_GATEWAY_API_KEY
+
+  # Cloudflare AI Gateway (OpenAI-compatible gateway, NOT Workers AI).
+  - model_name: cloudflare-fast
+    litellm_params:
+      model: openai/os.environ/CLOUDFLARE_MODEL
+      api_base: os.environ/CLOUDFLARE_AI_GATEWAY_BASE_URL
+      api_key: os.environ/CLOUDFLARE_AI_GATEWAY_API_KEY
+
+  # Paid, higher-quality coder route (separate economical/paid OpenRouter keys).
+  - model_name: premium-coder
+    litellm_params:
+      model: openrouter/os.environ/OPENROUTER_PAID_MODEL
+      api_key: os.environ/OPENROUTER_PAID_API_KEY
+
+litellm_settings:
+  drop_params: true
+  num_retries: 0
+  fallbacks: []
+  default_fallbacks: []
+
+router_settings:
+  num_retries: 0
+  fallbacks: []
+  enable_pre_call_checks: true
+  routing_strategy: simple-shuffle
+
+general_settings:
+  # Provided via environment. This is the admin/master key; the app uses a
+  # separate virtual key created against this proxy.
+  master_key: os.environ/LITELLM_MASTER_KEY

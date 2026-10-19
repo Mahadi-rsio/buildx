@@ -227,6 +227,31 @@ export const tasks = pgTable(
   ],
 );
 
+/** Durable, user-owned conversation that groups one or more runs. */
+export const conversations = pgTable(
+  "conversations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    title: text("title"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .$onUpdate(() => new Date())
+      .notNull(),
+  },
+  (table) => [
+    index("conversations_userId_updatedAt_idx").on(
+      table.userId,
+      table.updatedAt,
+    ),
+  ],
+);
+
 export const runs = pgTable(
   "runs",
   {
@@ -234,6 +259,9 @@ export const runs = pgTable(
     userId: text("user_id")
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
+    conversationId: uuid("conversation_id").references(() => conversations.id, {
+      onDelete: "set null",
+    }),
     taskId: uuid("task_id").references(() => tasks.id, {
       onDelete: "cascade",
     }),
@@ -276,6 +304,10 @@ export const runs = pgTable(
   },
   (table) => [
     index("runs_taskId_idx").on(table.taskId),
+    index("runs_conversationId_createdAt_idx").on(
+      table.conversationId,
+      table.createdAt,
+    ),
     // Queue scanner: queued runs, oldest first, on the `FOR UPDATE SKIP LOCKED`
     // claim path used by the job worker.
     index("runs_status_createdAt_idx").on(table.status, table.createdAt),
@@ -287,6 +319,45 @@ export const runs = pgTable(
     uniqueIndex("runs_idempotency_key_idx")
       .on(table.userId, table.idempotencyKey)
       .where(sql`${table.idempotencyKey} IS NOT NULL`),
+  ],
+);
+
+/**
+ * Client-synced conversation messages. `id` is generated in the browser so the
+ * batch sync endpoint can be idempotent across retries; `seq` orders messages
+ * within a conversation.
+ */
+export const conversationEvents = pgTable(
+  "conversation_events",
+  {
+    id: text("id").primaryKey(),
+    conversationId: uuid("conversation_id")
+      .notNull()
+      .references(() => conversations.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    runId: uuid("run_id").references(() => runs.id, { onDelete: "set null" }),
+    role: text("role").$type<"user" | "assistant">().notNull(),
+    kind: text("kind").$type<"message">().notNull().default("message"),
+    content: text("content").notNull(),
+    seq: integer("seq").notNull(),
+    clientCreatedAt: timestamp("client_created_at", {
+      withTimezone: true,
+    }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("conversation_events_conversation_seq_idx").on(
+      table.conversationId,
+      table.seq,
+    ),
+    index("conversation_events_conversation_createdAt_idx").on(
+      table.conversationId,
+      table.clientCreatedAt,
+    ),
   ],
 );
 

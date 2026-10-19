@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { isTerminalStatus } from "@buildx/shared";
 import { ChatComposer } from "@/components/chat/chat-composer";
 import { ChatThread } from "@/components/chat/chat-thread";
@@ -17,6 +17,23 @@ import { useWorkspaceDiff } from "@/hooks/use-workspace-diff";
 import { useWorkspaceFiles } from "@/hooks/use-workspace-files";
 import { buildChatMessages, type ChatMessage } from "@/lib/chat-messages";
 import type { ConversationTurn } from "@buildx/shared";
+import { newConversationId } from "@/lib/conversation-id";
+import { enqueueConversationEvent } from "@/lib/conversation-sync";
+
+/** Final assistant prose, for the synced conversation log. */
+function lastAssistantText(messages: ChatMessage[]): string {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (message.role !== "assistant") continue;
+    return message.blocks
+      .filter((block) => block.kind === "text")
+      .map((block) => block.text ?? "")
+      .join("\n\n")
+      .trim()
+      .slice(0, 100_000);
+  }
+  return "";
+}
 
 const FILE_POLL_MS = 3000;
 
@@ -111,13 +128,52 @@ export default function RunPage() {
     [runId, run, events],
   );
 
+  const conversationIdRef = useRef<string>(
+    run?.conversationId ?? newConversationId(),
+  );
+  const syncedAssistantRef = useRef<string | null>(null);
+
+  // Persist the assistant's final answer once the run reaches a terminal state.
+  useEffect(() => {
+    const conversationId = run?.conversationId;
+    if (!run || !conversationId || !isTerminalStatus(run.status)) return;
+    if (run.status !== "completed") return;
+    const id = `${runId}:assistant`;
+    if (syncedAssistantRef.current === id) return;
+    const content = lastAssistantText(messages);
+    if (content.length === 0) return;
+    syncedAssistantRef.current = id;
+    enqueueConversationEvent({
+      id,
+      conversationId,
+      seq: Date.now(),
+      role: "assistant",
+      content,
+      kind: "message",
+      createdAt: Date.now(),
+      runId,
+    });
+  }, [run, messages, runId]);
+
   async function send() {
     const task = draft.trim();
     if (task.length === 0 || submitting) return;
+    const conversationId = run?.conversationId ?? conversationIdRef.current;
+    conversationIdRef.current = conversationId;
+    enqueueConversationEvent({
+      id: crypto.randomUUID(),
+      conversationId,
+      seq: Date.now(),
+      role: "user",
+      content: task,
+      kind: "message",
+      createdAt: Date.now(),
+    });
     const created = await createRun({
       task,
       model: modelOverride.trim() || undefined,
       history: toHistory(messages),
+      conversationId,
     });
     if (created) setDraft("");
   }
@@ -177,6 +233,7 @@ export default function RunPage() {
                     task: run.task,
                     model: modelOverride.trim() || undefined,
                     history: run.history,
+                    conversationId: run.conversationId,
                   });
                 }
               : undefined

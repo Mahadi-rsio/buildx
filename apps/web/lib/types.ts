@@ -31,6 +31,8 @@ export interface WorkspaceRuntime {
 
 export interface RunSummary {
   id: string;
+  /** Conversation grouping this run (follow-up turns share it). */
+  conversationId?: string;
   task: string;
   status: RunStatus;
   model: string;

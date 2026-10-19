@@ -23,6 +23,7 @@ type ChatRequest = {
 
 let server: Server;
 let baseURL: string;
+let modelRequests = 0;
 
 /**
  * A minimal OpenAI-compatible Chat Completions streaming endpoint. On the first
@@ -31,6 +32,7 @@ let baseURL: string;
  */
 before(async () => {
   server = createServer((req, res) => {
+    modelRequests += 1;
     let raw = "";
     req.on("data", (chunk) => {
       raw += chunk;
@@ -296,6 +298,62 @@ test("runTask executes a tool call, writes a file, and streams events", async ()
     if (last?.type === "status") {
       assert.equal(last.data.status, "completed");
     }
+  } finally {
+    await sandbox.destroy();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("onBeforeModelStep fires before every upstream model request", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "buildx-agent-quota-"));
+  const sandbox = new LocalSandbox({ rootDir: dir });
+  await sandbox.start();
+  const steps: number[] = [];
+
+  try {
+    const result = await runTask({
+      task: "Create hello.txt",
+      sandbox,
+      model: "gpt-4o-mini",
+      apiKey: "test-key",
+      baseURL,
+      onBeforeModelStep: ({ stepNumber }) => {
+        steps.push(stepNumber);
+      },
+      onEvent: () => undefined,
+    });
+
+    assert.equal(result.status, "completed");
+    // First request decides to call the tool; second produces the final text.
+    assert.equal(steps.length, 2);
+  } finally {
+    await sandbox.destroy();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("throwing in onBeforeModelStep aborts before the request is sent", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "buildx-agent-quota-abort-"));
+  const sandbox = new LocalSandbox({ rootDir: dir });
+  await sandbox.start();
+  modelRequests = 0;
+  // The quota error must surface without any model request being issued.
+  try {
+    const result = await runTask({
+      task: "Create hello.txt",
+      sandbox,
+      model: "gpt-4o-mini",
+      apiKey: "test-key",
+      baseURL,
+      onBeforeModelStep: () => {
+        throw new Error("Daily AI request limit reached (50/50)");
+      },
+      onEvent: () => undefined,
+    });
+
+    assert.equal(modelRequests, 0);
+    assert.equal(result.status, "failed");
+    assert.match(result.error ?? "", /Daily AI request limit/);
   } finally {
     await sandbox.destroy();
     await rm(dir, { recursive: true, force: true });

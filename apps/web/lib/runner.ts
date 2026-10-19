@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { runTask } from "@buildx/agent";
@@ -20,6 +21,7 @@ import {
 import { captureWorkspaceSnapshot } from "./workspace-fs";
 import { cancelRemoteBoxExecution, createSandbox, sandboxSettings } from "./sandbox";
 import { sourceForRun } from "./workspace-source";
+import { getQuotaService } from "./quota";
 
 function guardSandbox(sandbox: Sandbox, run: StoredRun): Sandbox {
   const checkOwnership = async (): Promise<void> => {
@@ -205,9 +207,11 @@ export async function startRun(run: StoredRun): Promise<void> {
   const endpoint = providerEndpoint(provider);
   if (!endpoint.apiKey) {
     const message =
-      provider === "vercel"
-        ? "VERCEL_AI_GATEWAY_API_KEY is not set for the selected model. Add it to .env.local and restart the dev server."
-        : "OPENAI_API_KEY is not set. Copy .env.example to .env.local, add your key, and restart the dev server.";
+      provider === "litellm"
+        ? "LITELLM_API_KEY is not set for the selected model. Add it to .env.local and restart the dev server."
+        : provider === "vercel"
+          ? "VERCEL_AI_GATEWAY_API_KEY is not set for the selected model. Add it to .env.local and restart the dev server."
+          : "OPENAI_API_KEY is not set. Copy .env.example to .env.local, add your key, and restart the dev server.";
     await appendEvent(run, { type: "error", data: { message }, ts: Date.now() });
     await closeRun(run, "failed", message);
     return;
@@ -238,6 +242,15 @@ export async function startRun(run: StoredRun): Promise<void> {
       baseURL: endpoint.baseURL,
       maxSteps: run.maxSteps,
       abortSignal: run.runtime.controller.signal,
+      // Reserve one unit immediately before every upstream model request. This
+      // includes tool-loop iterations; provider retries are disabled so the
+      // reservation cannot drift from the number of real requests.
+      onBeforeModelStep: async ({ stepNumber }) => {
+        const quota = getQuotaService();
+        const attemptId = `${run.id}:${stepNumber}:${randomUUID()}`;
+        await quota.reserve(run.userId, attemptId);
+        await quota.markDispatched(run.userId, attemptId);
+      },
       onEvent: (event) => {
         // Live usage event: keep the in-memory stats current and persist them so
         // a refresh mid-run still shows real tokens/steps.

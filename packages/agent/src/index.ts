@@ -31,6 +31,12 @@ export interface CreateAgentOptions {
   onTodo?: (todos: TodoItem[]) => void | Promise<void>;
   /** Called after a file is written or edited. */
   onFileChange?: (change: FileChangePayload) => void | Promise<void>;
+  /**
+   * Called once before every upstream model request, including tool-loop
+   * iterations. Throwing aborts the run before the request leaves the app, so
+   * this is the quota reservation boundary.
+   */
+  onBeforeModelStep?: (step: { stepNumber: number }) => void | Promise<void>;
 }
 
 /**
@@ -52,6 +58,14 @@ export function createAgent(options: CreateAgentOptions) {
       onFileChange: options.onFileChange,
     }),
     stopWhen: stepCountIs(options.maxSteps ?? DEFAULT_MAX_STEPS),
+    // One model request per agent step: provider-level retries would issue
+    // requests the quota never reserved, so retries stay disabled here and in
+    // the LiteLLM proxy (`num_retries: 0`).
+    maxRetries: 0,
+    prepareStep: async ({ stepNumber }) => {
+      await options.onBeforeModelStep?.({ stepNumber });
+      return {};
+    },
   });
 }
 

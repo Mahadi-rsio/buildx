@@ -3,6 +3,9 @@
 import { useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { ConversationTurn } from "@buildx/shared";
+import { getQueryClient } from "@/lib/query-client";
+import { quotaQueryKey } from "@/hooks/use-quota";
+import { runsQueryKey } from "@/hooks/use-runs";
 
 export function useCreateRun() {
   const router = useRouter();
@@ -14,6 +17,7 @@ export function useCreateRun() {
       task: string;
       model?: string;
       history?: ConversationTurn[];
+      conversationId?: string;
     }) => {
       const trimmed = args.task.trim();
       if (trimmed.length === 0 || submitting) return null;
@@ -28,6 +32,7 @@ export function useCreateRun() {
             task: trimmed,
             model: args.model?.trim() || undefined,
             history: args.history?.length ? args.history : undefined,
+            conversationId: args.conversationId,
           }),
         });
         const contentType = res.headers.get("content-type") ?? "";
@@ -43,6 +48,9 @@ export function useCreateRun() {
           setError(data.message ?? data.error ?? "Could not start the run");
           return null;
         }
+        const client = getQueryClient();
+        void client.invalidateQueries({ queryKey: runsQueryKey() });
+        void client.invalidateQueries({ queryKey: quotaQueryKey() });
         router.push(`/runs/${data.id}`);
         return data.id;
       } catch (err) {

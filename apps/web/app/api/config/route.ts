@@ -8,7 +8,8 @@ export async function GET(): Promise<Response> {
     model: config.model,
     maxSteps: config.maxSteps,
     baseURL: config.baseURL ?? null,
-    defaultProvider: "omniroute",
+    defaultProvider:
+      config.providers.find((provider) => provider.primary)?.id ?? "omniroute",
     providers: config.providers.map((provider) => ({
       id: provider.id,
       label: provider.label,

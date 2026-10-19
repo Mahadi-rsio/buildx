@@ -67,6 +67,8 @@ export interface RunRuntime {
 export interface StoredRun {
   id: string;
   userId: string;
+  /** Durable conversation grouping this and follow-up runs. */
+  conversationId?: string;
   workspaceName: string;
   task: string;
   /** Earlier turns replayed before `task` to keep follow-up context. */
@@ -127,6 +129,7 @@ function freshRuntime(): RunRuntime {
 /** Copy durable row fields onto a run object. Never touches `run.runtime`. */
 function syncFromRow(run: StoredRun, row: RunRow): void {
   run.userId = row.userId;
+  run.conversationId = row.conversationId ?? undefined;
   run.workspaceName = row.workspaceName ?? "workspace";
   run.task = row.task ?? "";
   run.history = row.history ?? undefined;
@@ -166,6 +169,7 @@ export async function hydrateRun(row: RunRow): Promise<StoredRun> {
   const run: StoredRun = {
     id: row.id,
     userId: row.userId,
+    conversationId: row.conversationId ?? undefined,
     workspaceName: row.workspaceName ?? "workspace",
     task: row.task ?? "",
     history: row.history ?? undefined,
@@ -314,6 +318,7 @@ export async function createRun(
   const run: StoredRun = {
     id: row.id,
     userId: row.userId,
+    conversationId: row.conversationId ?? undefined,
     workspaceName: row.workspaceName ?? "workspace",
     task: row.task ?? "",
     history: row.history ?? undefined,
@@ -687,6 +692,7 @@ export function isRunning(run: StoredRun): boolean {
 export function toRunSummary(run: StoredRun): RunSummary {
   return {
     id: run.id,
+    conversationId: run.conversationId,
     task: run.task,
     status: run.status,
     model: run.model,

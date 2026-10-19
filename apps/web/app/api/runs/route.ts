@@ -58,9 +58,11 @@ export async function POST(request: Request): Promise<Response> {
     const endpoint = providerEndpoint(provider);
     if (!endpoint.apiKey) {
       const message =
-        provider === "vercel"
-          ? "The Vercel AI Gateway key is not set. Add VERCEL_AI_GATEWAY_API_KEY to .env.local and restart the dev server."
-          : "OPENAI_API_KEY is not set. Copy .env.example to .env.local, add your key, and restart the dev server.";
+        provider === "litellm"
+          ? "The LiteLLM gateway key is not set. Add LITELLM_API_KEY and LITELLM_BASE_URL to .env.local and restart the dev server."
+          : provider === "vercel"
+            ? "The Vercel AI Gateway key is not set. Add VERCEL_AI_GATEWAY_API_KEY to .env.local and restart the dev server."
+            : "OPENAI_API_KEY is not set. Copy .env.example to .env.local, add your key, and restart the dev server.";
       return Response.json(
         { error: "missing_api_key", message },
         { status: 400 },
@@ -78,6 +80,7 @@ export async function POST(request: Request): Promise<Response> {
       model: selectedModel,
       maxSteps: parsed.data.maxSteps ?? config.maxSteps,
       history: parsed.data.history,
+      conversationId: parsed.data.conversationId,
       idempotencyKey: parsed.data.idempotencyKey,
       correlationId,
     });
@@ -86,11 +89,33 @@ export async function POST(request: Request): Promise<Response> {
       console.warn(`[POST /api/runs][${correlationId}] quota exhausted for user=${user.id}`);
       return Response.json(
         {
-          error: "daily_quota_exhausted",
+          error: "DAILY_AI_QUOTA_EXCEEDED",
           message:
-            "Daily request limit reached. Your work is saved — try again after the Dhaka reset.",
+            "Daily AI request limit (50) reached. It resets at midnight Asia/Dhaka.",
         },
         { status: 429 },
+      );
+    }
+
+    if (result.kind === "quota_unavailable") {
+      console.error(`[POST /api/runs][${correlationId}] quota service unavailable`);
+      return Response.json(
+        {
+          error: "QUOTA_SERVICE_UNAVAILABLE",
+          message:
+            "The daily quota service is unavailable, so the run was not started.",
+        },
+        { status: 503 },
+      );
+    }
+
+    if (result.kind === "conversation_conflict") {
+      return Response.json(
+        {
+          error: "conversation_conflict",
+          message: "That conversation belongs to another account.",
+        },
+        { status: 403 },
       );
     }
 

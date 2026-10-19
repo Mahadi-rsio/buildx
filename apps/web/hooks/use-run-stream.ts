@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import type {
   EventType,
   RunEvent,
@@ -30,12 +31,21 @@ interface Frame {
   data: unknown;
 }
 
+export function runDetailQueryKey(runId: string) {
+  return ["run", runId] as const;
+}
+
 export function useRunStream(runId: string) {
-  const [run, setRun] = useState<RunDetail | null>(null);
-  const [events, setEvents] = useState<RunEvent[]>([]);
+  const queryClient = useQueryClient();
+  const cached =
+    runId.length > 0
+      ? queryClient.getQueryData<RunDetail>(runDetailQueryKey(runId))
+      : undefined;
+  const [run, setRun] = useState<RunDetail | null>(cached ?? null);
+  const [events, setEvents] = useState<RunEvent[]>(cached?.events ?? []);
   const [streamError, setStreamError] = useState<string | null>(null);
   const [notFound, setNotFound] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!cached);
   const lastIdRef = useRef(0);
 
   useEffect(() => {
@@ -99,6 +109,7 @@ export function useRunStream(runId: string) {
                   if (!res.ok || !alive) return;
                   const data = (await res.json()) as RunDetail;
                   if (!alive) return;
+                  queryClient.setQueryData(runDetailQueryKey(runId), data);
                   setRun((previous) =>
                     previous
                       ? {
@@ -181,12 +192,22 @@ export function useRunStream(runId: string) {
     void (async () => {
       await Promise.resolve();
       if (!alive) return;
-      setLoading(true);
+      const local = queryClient.getQueryData<RunDetail>(
+        runDetailQueryKey(runId),
+      );
+      if (local) {
+        // Local-first: show the persisted thread while the server refreshes.
+        setRun(local);
+        setEvents(local.events);
+        lastIdRef.current = local.events.at(-1)?.id ?? 0;
+      } else {
+        setLoading(true);
+        setRun(null);
+        setEvents([]);
+        lastIdRef.current = 0;
+      }
       setNotFound(false);
       setStreamError(null);
-      setRun(null);
-      setEvents([]);
-      lastIdRef.current = 0;
       try {
         const res = await fetch(`/api/runs/${runId}`);
         if (!res.ok) {
@@ -198,6 +219,7 @@ export function useRunStream(runId: string) {
         }
         const data = (await res.json()) as RunDetail;
         if (!alive) return;
+        queryClient.setQueryData(runDetailQueryKey(runId), data);
         setRun(data);
         setEvents(data.events);
         const last = data.events.at(-1);
@@ -217,7 +239,7 @@ export function useRunStream(runId: string) {
       detach?.();
       source?.close();
     };
-  }, [runId]);
+  }, [runId, queryClient]);
 
   const stop = useCallback(async () => {
     try {

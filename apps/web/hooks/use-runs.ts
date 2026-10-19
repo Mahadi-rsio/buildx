@@ -1,42 +1,30 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import type { RunSummary } from "@/lib/types";
 
+async function fetchRuns(): Promise<RunSummary[]> {
+  const res = await fetch("/api/runs");
+  if (!res.ok) throw new Error(`runs request failed (${res.status})`);
+  const data = (await res.json()) as { runs?: RunSummary[] };
+  return data.runs ?? [];
+}
+
+export function runsQueryKey() {
+  return ["runs"] as const;
+}
+
 export function useRuns(pollMs = 4000) {
-  const [runs, setRuns] = useState<RunSummary[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [refreshNonce, setRefreshNonce] = useState(0);
+  const query = useQuery({
+    queryKey: runsQueryKey(),
+    queryFn: fetchRuns,
+    refetchInterval: pollMs,
+  });
 
-  const refresh = useCallback(() => {
-    setRefreshNonce((n) => n + 1);
-  }, []);
-
-  useEffect(() => {
-    let alive = true;
-
-    const load = async () => {
-      try {
-        const res = await fetch("/api/runs");
-        const data = (await res.json()) as { runs?: RunSummary[] };
-        if (!alive) return;
-        setRuns(data.runs ?? []);
-        setError(null);
-      } catch {
-        if (alive) setError("Could not load conversations");
-      } finally {
-        if (alive) setLoading(false);
-      }
-    };
-
-    void load();
-    const timer = window.setInterval(() => void load(), pollMs);
-    return () => {
-      alive = false;
-      window.clearInterval(timer);
-    };
-  }, [pollMs, refreshNonce]);
-
-  return { runs, loading, error, refresh };
+  return {
+    runs: query.data ?? [],
+    loading: query.isLoading,
+    error: query.error ? "Could not load conversations" : null,
+    refresh: () => void query.refetch(),
+  };
 }

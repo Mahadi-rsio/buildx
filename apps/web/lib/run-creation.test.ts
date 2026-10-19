@@ -3,10 +3,6 @@ import { randomUUID } from "node:crypto";
 import { after, test } from "node:test";
 import type { Db } from "@buildx/db";
 import {
-  DAILY_REQUEST_LIMIT,
-  dailyRequestCount,
-  dailyRequests,
-  dhakaDay,
   getDb,
   inArray,
   runs as runsTable,
@@ -41,7 +37,18 @@ async function newUser(): Promise<string> {
   return id;
 }
 
-function inputFor(uid: string, idempotencyKey?: string) {
+function quotaAt(used: number) {
+  return {
+    read: async () => ({
+      limit: 50,
+      used,
+      remaining: Math.max(0, 50 - used),
+      resetAt: Date.UTC(2030, 0, 1),
+    }),
+  };
+}
+
+function inputFor(uid: string, idempotencyKey?: string, used = 0) {
   return {
     user: { id: uid, name: "Test User", email: `test-${uid}@test.local` },
     task: "make a file",
@@ -49,6 +56,7 @@ function inputFor(uid: string, idempotencyKey?: string) {
     maxSteps: 5,
     idempotencyKey,
     db: db!,
+    quota: quotaAt(used),
   };
 }
 
@@ -103,9 +111,8 @@ after(async () => {
   await db!.delete(user).where(inArray(user.id, createdUsers));
 });
 
-test("idempotency replay returns the original run and consumes quota once", { skip: skipReason }, async () => {
+test("idempotency replay returns the original run", { skip: skipReason }, async () => {
   const uid = await newUser();
-  const day = dhakaDay();
 
   const first = await createRunForUser(inputFor(uid, "post-a"));
   assert.equal(first.kind, "created");
@@ -116,28 +123,22 @@ test("idempotency replay returns the original run and consumes quota once", { sk
   assert.equal(second.kind === "replayed" && second.run.id, first.run.id);
 
   assert.equal(await countRuns(uid), 1, "one retried POST queues one run");
-  assert.equal(await dailyRequestCount(db!, uid, day), 1, "a replay does not double-charge");
 
   const third = await createRunForUser(inputFor(uid));
   assert.equal(third.kind, "created");
-  const dayCountAfter = await dailyRequestCount(db!, uid, day);
-  assert.equal(dayCountAfter, 2, "a genuinely new run consumes a new slot");
+  assert.equal(await countRuns(uid), 2, "a genuinely new run is created");
 });
 
 test("a day already at the limit is rejected before anything is queued", { skip: skipReason }, async () => {
   const uid = await newUser();
-  const day = dhakaDay();
 
-  await db!.insert(dailyRequests).values({ userId: uid, day, count: DAILY_REQUEST_LIMIT });
-
-  const result = await createRunForUser(inputFor(uid, "post-full"));
+  const result = await createRunForUser(inputFor(uid, "post-full", 50));
   assert.equal(result.kind, "quota_exhausted");
   assert.equal(await countRuns(uid), 0, "no run row is created over the limit");
 });
 
-test("concurrent submissions with the same key produce exactly one run and one charge", { skip: skipReason }, async () => {
+test("concurrent submissions with the same key produce exactly one run", { skip: skipReason }, async () => {
   const uid = await newUser();
-  const day = dhakaDay();
 
   const results = await Promise.all(
     Array.from({ length: 5 }, () => createRunForUser(inputFor(uid, "post-race"))),
@@ -147,16 +148,18 @@ test("concurrent submissions with the same key produce exactly one run and one c
   const replayed = results.filter((r) => r.kind === "replayed");
   assert.equal(created.length, 1, "only one of the racing requests creates the run");
   assert.equal(replayed.length, 4, "the rest replay the winner");
-  const ids = new Set(results.map((r) => r.kind !== "quota_exhausted" && r.run.id));
+  const ids = new Set(
+    results.map((r) =>
+      r.kind === "created" || r.kind === "replayed" ? r.run.id : null,
+    ),
+  );
   assert.equal(ids.size, 1, "every caller sees the same run");
 
   assert.equal(await countRuns(uid), 1);
-  assert.equal(await dailyRequestCount(db!, uid, day), 1, "exactly one quota slot consumed");
 });
 
-test("a failed creation does not consume a quota slot", { skip: skipReason }, async () => {
+test("a failed creation leaves no run behind", { skip: skipReason }, async () => {
   const uid = await newUser();
-  const day = dhakaDay();
 
   await assert.rejects(
     createRunForUser({
@@ -167,38 +170,20 @@ test("a failed creation does not consume a quota slot", { skip: skipReason }, as
   );
 
   assert.equal(await countRuns(uid), 0, "the failed insert left no run row");
-  assert.equal(await dailyRequestCount(db!, uid, day), 0, "quota is untouched on failure");
 });
 
-test("concurrent run creation at the quota limit allows exactly one winner", { skip: skipReason }, async () => {
+test("every request on a full day is rejected", { skip: skipReason }, async () => {
   const uid = await newUser();
-  const day = dhakaDay();
 
-  // Pre-fill to 1 slot before DAILY_REQUEST_LIMIT
-  await db!.insert(dailyRequests).values({
-    userId: uid,
-    day,
-    count: DAILY_REQUEST_LIMIT - 1,
-  });
-
-  // 5 distinct requests race for that single slot
   const results = await Promise.all(
     Array.from({ length: 5 }, (_, i) =>
-      createRunForUser(inputFor(uid, `race-limit-${i}`)),
+      createRunForUser(inputFor(uid, `race-limit-${i}`, 50)),
     ),
   );
 
-  const created = results.filter((r) => r.kind === "created");
   const exhausted = results.filter((r) => r.kind === "quota_exhausted");
-
-  assert.equal(created.length, 1, "exactly one request claims the final quota slot");
-  assert.equal(exhausted.length, 4, "all other racing requests receive quota_exhausted");
-  assert.equal(await countRuns(uid), 1, "only one run was created in the database");
-  assert.equal(
-    await dailyRequestCount(db!, uid, day),
-    DAILY_REQUEST_LIMIT,
-    "quota count strictly caps at the limit and cannot be bypassed",
-  );
+  assert.equal(exhausted.length, 5, "all requests receive quota_exhausted");
+  assert.equal(await countRuns(uid), 0, "no run was created in the database");
 });
 
 test("worker claiming during in-flight creation cannot claim uncommitted run", { skip: skipReason }, async () => {

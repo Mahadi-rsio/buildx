@@ -1,6 +1,7 @@
 import {
   envStatus,
   providerEndpoint,
+  LITELLM_MODEL_ALIASES,
   type ModelProviderId,
 } from "@buildx/shared";
 
@@ -141,6 +142,18 @@ function prettifyId(id: string): string {
     .trim();
 }
 
+/** Human labels for the curated LiteLLM routing aliases. */
+const LITELLM_ALIAS_LABELS: Record<string, string> = {
+  "default-fast": "Default · fast routing",
+  "google-fast": "Google / Gemini fast",
+  "mistral-fast": "Mistral fast",
+  "openrouter-fast": "OpenRouter cheap",
+  "groq-fast": "Groq fast",
+  "vercel-fast": "Vercel AI Gateway",
+  "cloudflare-fast": "Cloudflare AI Gateway",
+  "premium-coder": "Premium coding model",
+};
+
 const CHAT_UNSUPPORTED = /(embedding|whisper|tts|dall-e|moderation|image-)/i;
 
 /** Best-effort `/models` fetch from an OpenAI-compatible endpoint. */
@@ -178,7 +191,9 @@ export async function GET(): Promise<Response> {
   const defaultModel = env.model;
   const omni = providerEndpoint("omniroute");
   const vercel = providerEndpoint("vercel");
-  const omniLabel = env.providers[0]?.label ?? "OmniRoute";
+  const litellmEnabled = env.providers.some(
+    (provider) => provider.id === "litellm" && provider.hasApiKey,
+  );
 
   const seen = new Set<string>();
   const models: ModelOption[] = [];
@@ -189,30 +204,56 @@ export async function GET(): Promise<Response> {
     models.push(option);
   };
 
-  // The active default is always first and always present (OmniRoute).
-  push({
-    id: defaultModel,
-    name: prettifyId(defaultModel),
-    description: "Default · automatic routing via OmniRoute",
-    provider: omniLabel,
-    providerId: "omniroute",
-  });
-
-  // Primary (OmniRoute) catalog.
-  let omniModels: ModelOption[] = [];
-  try {
-    const fetched = await fetchCatalog(omni.baseURL, omni.apiKey);
-    omniModels = fetched.map((m) => ({
-      id: m.id,
-      name: m.name || prettifyId(m.id),
-      provider: omniLabel,
+  // Curated LiteLLM aliases are the production catalog.
+  if (litellmEnabled) {
+    for (const alias of LITELLM_MODEL_ALIASES) {
+      push({
+        id: alias,
+        name: LITELLM_ALIAS_LABELS[alias] ?? prettifyId(alias),
+        description: "Routed by the LiteLLM proxy",
+        provider: "LiteLLM",
+        providerId: "litellm",
+      });
+    }
+  } else {
+    // The active default is always first and always present (OmniRoute).
+    push({
+      id: defaultModel,
+      name: prettifyId(defaultModel),
+      description: "Default · automatic routing via OmniRoute",
+      provider: "OmniRoute",
       providerId: "omniroute",
-    }));
-  } catch {
-    // Unreachable or unauthenticated — fall through to the fallback catalog.
+    });
   }
-  if (omniModels.length === 0) omniModels = FALLBACK_MODELS;
-  for (const model of omniModels) push(model);
+
+  // The active default is present even when an alias provider is configured.
+  if (litellmEnabled) {
+    push({
+      id: defaultModel,
+      name: prettifyId(defaultModel),
+      description: "Configured default model",
+      provider: env.providers.find((p) => p.primary)?.label ?? "LiteLLM",
+      providerId: "litellm",
+    });
+  }
+
+  // Primary (OmniRoute) catalog — hidden while the LiteLLM gateway is active.
+  if (!litellmEnabled) {
+    let omniModels: ModelOption[] = [];
+    try {
+      const fetched = await fetchCatalog(omni.baseURL, omni.apiKey);
+      omniModels = fetched.map((m) => ({
+        id: m.id,
+        name: m.name || prettifyId(m.id),
+        provider: "OmniRoute",
+        providerId: "omniroute",
+      }));
+    } catch {
+      // Unreachable or unauthenticated — fall through to the fallback catalog.
+    }
+    if (omniModels.length === 0) omniModels = FALLBACK_MODELS;
+    for (const model of omniModels) push(model);
+  }
 
   // Vercel AI Gateway (paid) catalog — only when the gateway is configured.
   if (vercel.baseURL && vercel.apiKey) {

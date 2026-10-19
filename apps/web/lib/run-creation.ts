@@ -1,15 +1,11 @@
 import { randomUUID } from "node:crypto";
 import {
-  DAILY_REQUEST_LIMIT,
   MONTHLY_CPU_HOURS,
   and,
-  consumeDailyRequest,
-  dailyRequestCount,
-  dhakaDay,
+  conversations as conversationsTable,
   eq,
   getDb,
   monthlyCpuSecondsUsed,
-  nextDhakaReset,
   runs as runsTable,
   type Db,
 } from "@buildx/db";
@@ -20,22 +16,34 @@ import {
   hydrateRun,
   type StoredRun,
 } from "./store";
+import {
+  QuotaServiceUnavailableError,
+  readConfiguredQuota,
+  type QuotaSnapshot,
+} from "./quota";
 
 /**
  * Create a run for a user with idempotent + quota-safe atomic semantics:
  *
  * 1. A repeat submit with the same `idempotencyKey` replays the original run
- *    and never consumes another quota slot.
+ *    and never reserves another model request.
  * 2. A day that is already at its hard limit is rejected *before* any row is
- *    created.
- * 3. Quota reservation and run creation are executed atomically inside a single
- *    database transaction.
+ *    created (the per-step reservation still happens right before each request).
+ * 3. Quota reads fail closed when Redis is unavailable; runs are never queued
+ *    without a working quota service.
  * 4. The run is created as `queued`; the in-process worker claims and executes it.
  */
 export type CreateRunResult =
   | { kind: "created"; run: StoredRun }
   | { kind: "replayed"; run: StoredRun }
-  | { kind: "quota_exhausted" };
+  | { kind: "quota_exhausted" }
+  | { kind: "quota_unavailable" }
+  | { kind: "conversation_conflict" };
+
+/** Injectable quota reader so tests never touch Redis. */
+export interface QuotaGate {
+  read(userId: string): Promise<QuotaSnapshot>;
+}
 
 export interface CreateRunInput {
   user: { id: string; name?: string | null; email: string };
@@ -43,24 +51,43 @@ export interface CreateRunInput {
   model: string;
   maxSteps: number;
   history?: ConversationTurn[];
+  conversationId?: string;
   idempotencyKey?: string;
   correlationId?: string;
   /** Injectable for tests; defaults to the app's database. */
   db?: Db;
+  /** Injectable for tests; defaults to the Upstash-backed service. */
+  quota?: QuotaGate;
 }
 
-async function usageFor(db: Db, userId: string): Promise<WorkspaceUsage> {
-  const [usedCpuSeconds, usedDaily] = await Promise.all([
-    monthlyCpuSecondsUsed(db, userId),
-    dailyRequestCount(db, userId),
-  ]);
+function usageFor(
+  cpuSeconds: number,
+  quota: QuotaSnapshot,
+): WorkspaceUsage {
   return {
-    cpuHoursUsed: Number((usedCpuSeconds / 3600).toFixed(2)),
+    cpuHoursUsed: Number((cpuSeconds / 3600).toFixed(2)),
     cpuHoursLimit: MONTHLY_CPU_HOURS,
-    dailyRequestsUsed: usedDaily,
-    dailyRequestsLimit: DAILY_REQUEST_LIMIT,
-    nextDhakaResetAt: nextDhakaReset().getTime(),
+    dailyRequestsUsed: quota.used,
+    dailyRequestsLimit: quota.limit,
+    nextDhakaResetAt: quota.resetAt,
   };
+}
+
+async function ensureConversation(
+  db: Db,
+  input: { id: string; userId: string; title: string },
+): Promise<"ok" | "conflict"> {
+  await db
+    .insert(conversationsTable)
+    .values({ id: input.id, userId: input.userId, title: input.title })
+    .onConflictDoNothing({ target: conversationsTable.id });
+
+  const [row] = await db
+    .select({ userId: conversationsTable.userId })
+    .from(conversationsTable)
+    .where(eq(conversationsTable.id, input.id));
+  if (!row || row.userId !== input.userId) return "conflict";
+  return "ok";
 }
 
 /**
@@ -73,10 +100,24 @@ export async function createRunForUser(
   input: CreateRunInput,
 ): Promise<CreateRunResult> {
   const db = input.db ?? getDb();
-  const day = dhakaDay();
   const correlationId = input.correlationId ?? randomUUID();
+  const quotaGate: QuotaGate = input.quota ?? {
+    read: readConfiguredQuota,
+  };
 
-  // Fast-path replay check outside transaction
+  const readQuota = async (): Promise<QuotaSnapshot | null> => {
+    try {
+      return await quotaGate.read(input.user.id);
+    } catch (error) {
+      if (error instanceof QuotaServiceUnavailableError) return null;
+      throw error;
+    }
+  };
+
+  const cpuUsage = async (): Promise<number> =>
+    input.db ? 0 : monthlyCpuSecondsUsed(db, input.user.id);
+
+  // Fast-path replay check outside the transaction.
   if (input.idempotencyKey) {
     const existing = await getRunForIdempotencyKey(
       input.user.id,
@@ -84,14 +125,27 @@ export async function createRunForUser(
       { db },
     );
     if (existing) {
-      existing.runtime.workspace.usage = await usageFor(db, input.user.id);
+      const quota = await readQuota();
+      if (!quota) return { kind: "quota_unavailable" };
+      existing.runtime.workspace.usage = usageFor(await cpuUsage(), quota);
       return { kind: "replayed", run: existing };
     }
   }
 
   // Pre-check: hard daily ceiling — never queue into an already-full day.
-  const used = await dailyRequestCount(db, input.user.id, day);
-  if (used >= DAILY_REQUEST_LIMIT) return { kind: "quota_exhausted" };
+  // The actual reservation is per model step inside the agent loop.
+  const preflight = await readQuota();
+  if (!preflight) return { kind: "quota_unavailable" };
+  if (preflight.remaining <= 0) return { kind: "quota_exhausted" };
+
+  const conversationId = input.conversationId ?? randomUUID();
+  const title = input.task.slice(0, 200);
+  const conversation = await ensureConversation(db, {
+    id: conversationId,
+    userId: input.user.id,
+    title,
+  });
+  if (conversation === "conflict") return { kind: "conversation_conflict" };
 
   const runInTx = async <T>(
     database: Db,
@@ -121,7 +175,7 @@ export async function createRunForUser(
 
   try {
     const result = await runInTx(db, async (tx) => {
-      // Re-check idempotency inside the transaction
+      // Re-check idempotency inside the transaction.
       if (input.idempotencyKey) {
         const [existingRow] = await tx
           .select()
@@ -137,13 +191,6 @@ export async function createRunForUser(
         }
       }
 
-      // Atomically reserve a quota slot inside the transaction
-      const count = await consumeDailyRequest(tx, input.user.id, day);
-      if (count === null) {
-        return { kind: "quota_exhausted" as const };
-      }
-
-      // Quota reservation succeeded. Now create the run row inside the same transaction
       const id = randomUUID();
       const now = new Date();
       const rows = await tx
@@ -151,6 +198,7 @@ export async function createRunForUser(
         .values({
           id,
           userId: input.user.id,
+          conversationId,
           model: input.model,
           status: "queued",
           task: input.task,
@@ -169,16 +217,12 @@ export async function createRunForUser(
       return { kind: "created" as const, row: rows[0] };
     });
 
-    if (result.kind === "quota_exhausted") {
-      return { kind: "quota_exhausted" };
-    }
-
     if (result.kind === "created") {
       console.log(`[run-creation][${correlationId}] run queued: ${result.row.id}`);
     }
 
     const run = await hydrateRun(result.row);
-    run.runtime.workspace.usage = await usageFor(db, input.user.id);
+    run.runtime.workspace.usage = usageFor(await cpuUsage(), preflight);
     return { kind: result.kind, run };
   } catch (error: unknown) {
     const err = (error as { cause?: unknown })?.cause;
@@ -196,7 +240,9 @@ export async function createRunForUser(
         { db },
       );
       if (existing) {
-        existing.runtime.workspace.usage = await usageFor(db, input.user.id);
+        const quota = await readQuota();
+        if (!quota) return { kind: "quota_unavailable" };
+        existing.runtime.workspace.usage = usageFor(await cpuUsage(), quota);
         return { kind: "replayed", run: existing };
       }
     }
