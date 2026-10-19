@@ -115,12 +115,27 @@ function toText(value: unknown): string {
  */
 function describeProviderError(error: unknown, model: string | undefined): string {
   const message = toText(error);
-  const invalidTool = message.match(/attempted to call tool '([^']+)'/i)?.[1];
-  if (!invalidTool) return message;
+  const responseBody = (error as { responseBody?: unknown } | null)?.responseBody;
+  const body =
+    typeof responseBody === "string"
+      ? responseBody
+      : responseBody === undefined
+        ? ""
+        : toText(responseBody);
+  const haystack = `${message}\n${body}`;
   const isAuto = !model || model === "auto" || model.startsWith("auto/");
   const guidance = isAuto
-    ? 'This usually happens with OmniRoute "auto" routing, which can switch to a model with its own built-in tools. Pick a concrete model in Settings.'
+    ? "The router picked an upstream with unreliable tool calling. Retry the run or pick a concrete model in Settings."
     : "The model invented a tool Buildx does not provide. Pick a model with reliable tool calling in Settings.";
+
+  // LiteLLM currently wraps Groq's `tool_use_failed` error in a Python
+  // ValueError, so the original message may not include the tool name.
+  if (/tool_use_failed/i.test(haystack)) {
+    return `The upstream model tried to call a tool Buildx does not provide. ${guidance}`;
+  }
+
+  const invalidTool = haystack.match(/attempted to call tool '([^']+)'/i)?.[1];
+  if (!invalidTool) return message;
   return `The model tried to call unknown tool "${invalidTool}". Buildx only provides its workspace tools. ${guidance}`;
 }
 

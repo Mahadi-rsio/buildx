@@ -16,10 +16,17 @@ model_list:
   # `auto` is the only model the app exposes from LiteLLM. All deployments
   # share one model group; `order` makes the proxy try them in sequence when an
   # upstream is rate-limited or unavailable.
+  #
+  # gpt-4o-mini is first because it has the most reliable tool calling of the
+  # three. Groq's gpt-oss-120b is a last resort: it occasionally emits its own
+  # built-in tools (e.g. `repo_browser.print_tree`), which Groq rejects with
+  # `tool_use_failed`, and its 8k TPM free tier is too small for most agent
+  # runs.
   - model_name: auto
     litellm_params:
-      model: groq/openai/gpt-oss-120b
-      api_key: os.environ/GROQ_API_KEY
+      model: openai/openai/gpt-4o-mini
+      api_base: https://ai-gateway.vercel.sh/v1
+      api_key: os.environ/VERCEL_AI_GATEWAY_API_KEY
       order: 1
   - model_name: auto
     litellm_params:
@@ -28,9 +35,8 @@ model_list:
       order: 2
   - model_name: auto
     litellm_params:
-      model: openai/openai/gpt-4o-mini
-      api_base: https://ai-gateway.vercel.sh/v1
-      api_key: os.environ/VERCEL_AI_GATEWAY_API_KEY
+      model: groq/openai/gpt-oss-120b
+      api_key: os.environ/GROQ_API_KEY
       order: 3
 
 litellm_settings:

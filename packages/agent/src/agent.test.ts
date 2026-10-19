@@ -65,6 +65,19 @@ before(async () => {
         return;
       }
 
+      if (userText === "tool-use-failed") {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            message: "invalid literal for int() with base 10: 'tool_use_failed'",
+            type: "None",
+            param: "None",
+            code: "500",
+          }),
+        );
+        return;
+      }
+
       res.writeHead(200, {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
@@ -692,12 +705,36 @@ test("provider tool-name validation errors become actionable messages", async ()
 
     assert.equal(result.status, "failed");
     assert.match(result.error ?? "", /unknown tool "repo_browser\.print_tree"/);
-    assert.match(result.error ?? "", /auto/);
+    assert.match(result.error ?? "", /router picked an upstream/);
     const errorEvent = events.find((event) => event.type === "error");
     assert.match(
       String((errorEvent?.data as { message?: string }).message),
       /unknown tool/,
     );
+  } finally {
+    await sandbox.destroy();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("LiteLLM's wrapped tool_use_failed error becomes actionable", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "buildx-agent-tool-use-failed-"));
+  const sandbox = new TestSandbox({ rootDir: dir });
+  await sandbox.start();
+  try {
+    const result = await runTask({
+      task: "tool-use-failed",
+      sandbox,
+      model: "auto",
+      apiKey: "test",
+      baseURL,
+      maxSteps: 2,
+      onEvent: () => {},
+    });
+
+    assert.equal(result.status, "failed");
+    assert.match(result.error ?? "", /tried to call a tool Buildx does not provide/);
+    assert.match(result.error ?? "", /Settings/);
   } finally {
     await sandbox.destroy();
     await rm(dir, { recursive: true, force: true });
