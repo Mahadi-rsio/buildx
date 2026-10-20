@@ -8,6 +8,7 @@ import {
   Ellipsis,
   Pin,
   PinOff,
+  Plug,
   Plus,
   Search,
   Settings2,
@@ -290,7 +291,24 @@ function SidebarBody({
       </ScrollArea>
 
       <div className="border-t border-border/80 p-2">
-        <div className="grid grid-cols-2 gap-1.5">
+        <div className="grid grid-cols-3 gap-1.5">
+          <Button
+            type="button"
+            variant="ghost"
+            size="xs"
+            className={cn(
+              "flex items-center justify-center gap-1.5 py-2 text-xs",
+              pathname === "/mcp"
+                ? "text-foreground"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+            render={<Link href="/mcp" />}
+            nativeButton={false}
+            onClick={onNavigate}
+          >
+            <Plug className="size-3.5" />
+            <span>MCP</span>
+          </Button>
           <Button
             type="button"
             variant="ghost"

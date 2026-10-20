@@ -18,6 +18,7 @@ import {
 } from "./store";
 import { cancelRemoteBoxExecution, createSandbox } from "./sandbox";
 import { getQuotaService } from "./quota";
+import { loadEnabledMcpServerConfigs } from "./mcp/store";
 
 function guardSandbox(sandbox: Sandbox, run: StoredRun): Sandbox {
   const checkOwnership = async (): Promise<void> => {
@@ -179,6 +180,18 @@ export async function startRun(run: StoredRun): Promise<void> {
     return;
   }
 
+  // A missing or corrupt MCP config must degrade gracefully: the run still
+  // executes with workspace tools, just without the affected server.
+  const mcpServers = await loadEnabledMcpServerConfigs(run.userId).catch(
+    (error: unknown) => {
+      console.error(
+        `[buildx-worker] failed to load MCP servers for run ${run.id}`,
+        error,
+      );
+      return [];
+    },
+  );
+
   const rawSandbox = createSandbox({ userId: run.userId });
   const sandbox = guardSandbox(rawSandbox, run);
   try {
@@ -193,6 +206,7 @@ export async function startRun(run: StoredRun): Promise<void> {
       baseURL: endpoint.baseURL,
       maxSteps: run.maxSteps,
       abortSignal: run.runtime.controller.signal,
+      mcpServers,
       // Reserve one unit before every agent step, including each tool-loop
       // iteration. Provider retries are disabled; LiteLLM's `order` failover
       // may try another upstream after a 429/5xx within the same reservation.
@@ -213,6 +227,9 @@ export async function startRun(run: StoredRun): Promise<void> {
               outputTokens: event.data.outputTokens,
               totalTokens: event.data.totalTokens,
             },
+            ...(event.data.context
+              ? { context: event.data.context }
+              : {}),
           };
           void persistStats(run).catch((error) => {
             console.error(

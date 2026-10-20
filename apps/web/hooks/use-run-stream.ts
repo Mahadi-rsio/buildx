@@ -24,6 +24,7 @@ const EVENT_TYPES: EventType[] = [
   "error",
   "workspace",
   "usage",
+  "context",
 ];
 
 interface Frame {
@@ -139,6 +140,7 @@ export function useRunStream(runId: string) {
                         outputTokens: payload.outputTokens,
                         totalTokens: payload.totalTokens,
                       },
+                      ...(payload.context ? { context: payload.context } : {}),
                     },
                     updatedAt: frame.ts,
                   }

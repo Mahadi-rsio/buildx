@@ -1,10 +1,17 @@
 import type { RunTaskUsage } from "@buildx/agent";
-import type { ConversationTurn, RunEvent, RunStatus } from "@buildx/shared";
+import type {
+  ContextUsagePayload,
+  ConversationTurn,
+  RunEvent,
+  RunStatus,
+} from "@buildx/shared";
 
 /** Usage/step accounting surfaced on run responses (from `runTask`). */
 export interface RunStats {
   steps: number;
   usage?: RunTaskUsage;
+  /** Live context-window accounting from the last usage event, when emitted. */
+  context?: ContextUsagePayload;
 }
 
 export interface WorkspaceUsage {

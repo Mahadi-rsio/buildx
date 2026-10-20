@@ -3,6 +3,7 @@
 import { AlertTriangle, CheckCircle2, ExternalLink, Loader2 } from "lucide-react";
 import { useConfig } from "@/hooks/use-config";
 import { ModelPicker } from "@/components/model-picker";
+import { McpServersSection } from "@/components/shell/mcp-servers-section";
 import {
   Dialog,
   DialogContent,
@@ -120,15 +121,12 @@ export function SettingsDialog() {
             </p>
           </section>
 
+          <McpServersSection open={settingsOpen} />
+
           <section className="space-y-2">
             <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
               Integrations
             </h3>
-            <div className="rounded-lg border border-border px-3 py-2 text-xs text-muted-foreground">
-              MCP servers, preview URLs, and steering mid-run are not wired in
-              this phase. Tabs that reference them say so instead of faking a
-              connection.
-            </div>
             <a
               href="https://github.com/anomalyco/opencode/issues"
               target="_blank"

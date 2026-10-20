@@ -475,6 +475,47 @@ export const secrets = pgTable(
   (table) => [index("secrets_projectId_idx").on(table.projectId)],
 );
 
+/**
+ * Per-user MCP servers. Only the Streamable HTTP transport is enabled today
+ * (arbitrary stdio servers would run on the worker host, outside the sandbox).
+ * Auth headers are stored encrypted at rest; plaintext never leaves the server.
+ */
+export const mcpServers = pgTable(
+  "mcp_servers",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    transport: text("transport")
+      .$type<"streamable_http">()
+      .notNull()
+      .default("streamable_http"),
+    url: text("url").notNull(),
+    /** AES-256-GCM JSON blob of request headers, or null when unauthenticated. */
+    headersEncrypted: text("headers_encrypted"),
+    enabled: boolean("enabled").default(true).notNull(),
+    allowPrivate: boolean("allow_private").default(false).notNull(),
+    lastStatus: text("last_status")
+      .$type<"unknown" | "connected" | "error">()
+      .default("unknown")
+      .notNull(),
+    lastError: text("last_error"),
+    lastCheckedAt: timestamp("last_checked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index("mcp_servers_userId_idx").on(table.userId),
+    uniqueIndex("mcp_servers_userId_name_idx").on(table.userId, table.name),
+  ],
+);
+
 export const checkpoints = pgTable(
   "checkpoints",
   {

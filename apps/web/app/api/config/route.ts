@@ -7,6 +7,7 @@ export async function GET(): Promise<Response> {
     hasApiKey: config.hasApiKey,
     model: config.model,
     maxSteps: config.maxSteps,
+    allowPrivateMcpHosts: process.env.MCP_ALLOW_PRIVATE_HOSTS === "true",
     baseURL: config.baseURL ?? null,
     defaultProvider:
       config.providers.find((provider) => provider.primary)?.id ??

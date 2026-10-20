@@ -22,11 +22,20 @@ export type StreamItem =
       output?: unknown;
       isError?: boolean;
       pending: boolean;
+      /** MCP server that owns this tool, when it came from an MCP server. */
+      mcpServer?: string;
       /** Live stdout/stderr streamed while a bash command runs. */
       terminal?: string;
     }
   | { key: number; kind: "file_change"; ts: number; path: string; change: string }
   | { key: number; kind: "todo"; ts: number; todos: TodoItem[] }
+  | {
+      key: number;
+      kind: "context";
+      ts: number;
+      summary: string;
+      estimatedTokens: number;
+    }
   | { key: number; kind: "approval"; ts: number; command: string; status: string }
   | {
       key: number;
@@ -101,6 +110,7 @@ export function toStreamItems(events: RunEvent[]): StreamItem[] {
           toolCallId: event.data.toolCallId,
           toolName: event.data.toolName,
           input: event.data.input,
+          mcpServer: event.data.mcpServer,
           pending: true,
         });
         break;
@@ -111,6 +121,7 @@ export function toStreamItems(events: RunEvent[]): StreamItem[] {
         if (existing?.kind === "tool") {
           existing.output = event.data.output;
           existing.isError = event.data.isError;
+          existing.mcpServer = event.data.mcpServer ?? existing.mcpServer;
           existing.pending = false;
         } else {
           items.push({
@@ -122,6 +133,7 @@ export function toStreamItems(events: RunEvent[]): StreamItem[] {
             input: undefined,
             output: event.data.output,
             isError: event.data.isError,
+            mcpServer: event.data.mcpServer,
             pending: false,
           });
         }
@@ -142,6 +154,15 @@ export function toStreamItems(events: RunEvent[]): StreamItem[] {
           kind: "todo",
           ts: event.ts,
           todos: event.data.todos,
+        });
+        break;
+      case "context":
+        items.push({
+          key: event.id,
+          kind: "context",
+          ts: event.ts,
+          summary: event.data.summary,
+          estimatedTokens: event.data.estimatedTokens,
         });
         break;
       case "approval":

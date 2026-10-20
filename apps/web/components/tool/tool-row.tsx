@@ -12,6 +12,7 @@ import { pretty, type StreamItem } from "@/components/run-events";
 import { ansiToHtml, hasAnsi } from "@/lib/ansi";
 import { computeLineDiff } from "@/lib/diff";
 import { guessLanguage } from "@/lib/language";
+import { formatTokens } from "@/lib/tokens";
 import { cn } from "@/lib/utils";
 
 type ToolItem = Extract<StreamItem, { kind: "tool" }>;
@@ -533,6 +534,29 @@ function PlanTool({ status, input }: RendererProps) {
   );
 }
 
+function ContextCompactionRow({
+  item,
+}: {
+  item: Extract<StreamItem, { kind: "context" }>;
+}) {
+  const { open, toggle } = useDisclosure(false);
+  const contentId = `context-${item.key}`;
+  return (
+    <ToolRow
+      status="done"
+      verb="Compacted"
+      target="context window"
+      meta={`${formatTokens(item.estimatedTokens)} tokens`}
+      expandable
+      open={open}
+      onToggle={toggle}
+      contentId={contentId}
+    >
+      <OutputBlock>{item.summary}</OutputBlock>
+    </ToolRow>
+  );
+}
+
 function GenericTool({ item, status, input }: RendererProps) {
   const target =
     stringField(input, "command") ??
@@ -547,7 +571,11 @@ function GenericTool({ item, status, input }: RendererProps) {
   return (
     <ToolRow
       status={status}
-      verb={verbFor(status, "Using", "Used")}
+      verb={
+        item.mcpServer
+          ? `Using ${item.mcpServer}`
+          : verbFor(status, "Using", "Used")
+      }
       target={<span className="truncate">{target}</span>}
       expandable={expandable}
       open={open}
@@ -594,6 +622,7 @@ export function ToolCallRow({
   item: StreamItem;
   cancelled?: boolean;
 }) {
+  if (item.kind === "context") return <ContextCompactionRow item={item} />;
   if (item.kind !== "tool") return null;
   const status = toolStatus(item, cancelled);
   const input = parseInput(item.input);

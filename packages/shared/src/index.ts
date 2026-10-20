@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+/** Model → context-window metadata used to render live context stats. */
+export { getModelContextWindow } from "./model-context";
+
 /** Default model id when `AGENT_MODEL` is unset. */
 export const DEFAULT_MODEL = "auto";
 
@@ -45,6 +48,8 @@ export interface ToolCallPayload {
   toolCallId: string;
   toolName: string;
   input: unknown;
+  /** Set when the tool came from an MCP server. */
+  mcpServer?: string;
 }
 
 export interface ToolResultPayload {
@@ -52,6 +57,15 @@ export interface ToolResultPayload {
   toolName: string;
   output: unknown;
   isError?: boolean;
+  /** Set when the tool came from an MCP server. */
+  mcpServer?: string;
+}
+
+/** Emitted when the harness compacts the conversation to fit the token budget. */
+export interface ContextPayload {
+  summary: string;
+  /** Estimated tokens in the transcript that was replaced. */
+  estimatedTokens: number;
 }
 
 export interface TerminalPayload {
@@ -92,12 +106,37 @@ export interface ConversationTurn {
   content: string;
 }
 
+/**
+ * Per-request context-window accounting emitted on each `usage` event. The
+ * estimate is a chars/4 approximation of the assembled request (system prompt +
+ * transcript + tool schemas), tagged `estimated: true` so the UI never passes
+ * it off as provider-measured token counts.
+ */
+export interface ContextUsagePayload {
+  /** Provider-reported input tokens for this single step's request. */
+  requestInputTokens?: number;
+  /** Provider-reported output tokens for this single step's request. */
+  requestOutputTokens?: number;
+  /** Estimated tokens in the assembled request that was sent. */
+  assembledTokens?: number;
+  /** True when `assembledTokens` is an approximation, not provider usage. */
+  estimated: boolean;
+  /** Model context-window limit in tokens, when known for this model. */
+  contextLimit?: number;
+  /** `assembledTokens` / `contextLimit` as a 0–100 number, when both known. */
+  utilizationPercent?: number;
+  /** Number of times the transcript has been compacted so far in this run. */
+  compactedCount?: number;
+}
+
 /** Live step/token accounting emitted while the agent loop is still running. */
 export interface UsagePayload {
   steps: number;
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  /** Context-window stats for the most recent request (optional, live). */
+  context?: ContextUsagePayload;
 }
 
 export type WorkspaceEventStatus =
@@ -137,6 +176,7 @@ export interface RunEventMap {
   error: ErrorPayload;
   workspace: WorkspacePayload;
   usage: UsagePayload;
+  context: ContextPayload;
 }
 
 export type EventType = keyof RunEventMap;

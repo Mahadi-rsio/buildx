@@ -121,6 +121,92 @@ before(async () => {
         return;
       }
 
+      if (userText === "mcp-call") {
+        if (!hasToolResult) {
+          send(
+            chunk(
+              {
+                role: "assistant",
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "call_mcp",
+                    type: "function",
+                    function: {
+                      name: "mcp_test__echo",
+                      arguments: JSON.stringify({ text: "hello mcp" }),
+                    },
+                  },
+                ],
+              },
+              null,
+            ),
+          );
+          send(chunk({}, "tool_calls"));
+        } else {
+          send(chunk({ role: "assistant", content: "MCP echo done" }, null));
+          send(chunk({}, "stop"));
+        }
+        send({
+          id: "chatcmpl-test",
+          object: "chat.completion.chunk",
+          created: Math.floor(Date.now() / 1000),
+          model,
+          choices: [],
+          usage: { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 },
+        });
+        res.write("data: [DONE]\n\n");
+        res.end();
+        return;
+      }
+
+      const compacted = messages.some(
+        (message) =>
+          message.role === "user" &&
+          typeof message.content === "string" &&
+          message.content.includes("compacted to stay within"),
+      );
+      if (userText.startsWith("compact") || compacted) {
+        if (!compacted) {
+          send(
+            chunk(
+              {
+                role: "assistant",
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "call_summarize",
+                    type: "function",
+                    function: {
+                      name: "summarize_context",
+                      arguments: "{}",
+                    },
+                  },
+                ],
+              },
+              null,
+            ),
+          );
+          send(chunk({}, "tool_calls"));
+        } else {
+          send(
+            chunk({ role: "assistant", content: "Compacted and finished" }, null),
+          );
+          send(chunk({}, "stop"));
+        }
+        send({
+          id: "chatcmpl-test",
+          object: "chat.completion.chunk",
+          created: Math.floor(Date.now() / 1000),
+          model,
+          choices: [],
+          usage: { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 },
+        });
+        res.write("data: [DONE]\n\n");
+        res.end();
+        return;
+      }
+
       if (userText === "slow-tool") {
         if (!hasToolResult) {
           send(
@@ -268,6 +354,121 @@ before(async () => {
 
 after(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()));
+});
+
+let mcpServer: Server;
+let mcpURL: string;
+
+/**
+ * A minimal Streamable HTTP MCP server (JSON responses, one fixed session).
+ * It exposes `echo` (read-only) and `destroy_all` (destructive) so the run loop
+ * can be tested end to end without a real MCP vendor.
+ */
+before(async () => {
+  mcpServer = createServer((req, res) => {
+    let raw = "";
+    req.on("data", (chunk) => {
+      raw += chunk;
+    });
+    req.on("end", () => {
+      if (req.method === "GET" || req.method === "DELETE") {
+        res.writeHead(200);
+        res.end();
+        return;
+      }
+      let message: {
+        id?: number | string;
+        method?: string;
+        params?: Record<string, unknown>;
+      };
+      try {
+        message = JSON.parse(raw || "{}");
+      } catch {
+        res.writeHead(400);
+        res.end();
+        return;
+      }
+      res.setHeader("Mcp-Session-Id", "test-session");
+      if (message.method?.startsWith("notifications/")) {
+        res.writeHead(202);
+        res.end();
+        return;
+      }
+      const reply = (result: unknown) => {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({ jsonrpc: "2.0", id: message.id, result }),
+        );
+      };
+      switch (message.method) {
+        case "initialize":
+          reply({
+            protocolVersion:
+              (message.params?.protocolVersion as string | undefined) ??
+              "2025-06-18",
+            capabilities: { tools: {} },
+            serverInfo: { name: "test-mcp", version: "1.0.0" },
+          });
+          return;
+        case "tools/list":
+          reply({
+            tools: [
+              {
+                name: "echo",
+                description: "Echo the provided text",
+                inputSchema: {
+                  type: "object",
+                  properties: { text: { type: "string" } },
+                  required: ["text"],
+                },
+                annotations: { readOnlyHint: true },
+              },
+              {
+                name: "destroy_all",
+                description: "Delete everything",
+                inputSchema: { type: "object", properties: {} },
+                annotations: { destructiveHint: true },
+              },
+            ],
+          });
+          return;
+        case "tools/call": {
+          const name = message.params?.name as string;
+          const args = (message.params?.arguments ?? {}) as {
+            text?: string;
+          };
+          reply({
+            content: [
+              {
+                type: "text",
+                text:
+                  name === "echo"
+                    ? `echo: ${args.text ?? ""}`
+                    : "destroyed",
+              },
+            ],
+          });
+          return;
+        }
+        default:
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: message.id,
+              error: { code: -32601, message: "method not found" },
+            }),
+          );
+      }
+    });
+  });
+  await new Promise<void>((resolve) => mcpServer.listen(0, "127.0.0.1", resolve));
+  const address = mcpServer.address() as AddressInfo;
+  mcpURL = `http://127.0.0.1:${address.port}/mcp`;
+});
+
+after(async () => {
+  await new Promise<void>((resolve) => mcpServer.close(() => resolve()));
 });
 
 test("runTask executes a tool call, writes a file, and streams events", async () => {
@@ -916,3 +1117,106 @@ test("end-to-end regression: runTask executes list_dir (Read) on '.' with depth 
   }
 });
 
+
+test("runTask connects to a Streamable HTTP MCP server and namespaces its tools", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "buildx-agent-mcp-"));
+  const sandbox = new TestSandbox({ rootDir: dir });
+  await sandbox.start();
+
+  const events: RunEvent[] = [];
+  try {
+    const result = await runTask({
+      task: "mcp-call",
+      sandbox,
+      model: "gpt-4o-mini",
+      apiKey: "test-key",
+      baseURL,
+      mcpServers: [
+        { id: "mcp-1", name: "mcp test", url: mcpURL, allowPrivate: true },
+      ],
+      onEvent: (event) => {
+        events.push({ ...event, id: events.length + 1, runId: "run-mcp" });
+      },
+    });
+
+    assert.equal(result.status, "completed");
+    const call = events.find(
+      (event) =>
+        event.type === "tool_call" &&
+        event.data.toolName === "mcp_test__echo",
+    );
+    assert.ok(call && call.type === "tool_call");
+    assert.equal(call.data.mcpServer, "mcp test");
+    assert.deepEqual(call.data.input, { text: "hello mcp" });
+
+    const toolResult = events.find(
+      (event) =>
+        event.type === "tool_result" &&
+        event.data.toolName === "mcp_test__echo",
+    );
+    assert.ok(toolResult && toolResult.type === "tool_result");
+    assert.equal(toolResult.data.output, "echo: hello mcp");
+    assert.equal(toolResult.data.mcpServer, "mcp test");
+  } finally {
+    await sandbox.destroy();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("context budget summarizes and replaces an over-budget transcript", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "buildx-agent-compact-"));
+  const sandbox = new TestSandbox({ rootDir: dir });
+  await sandbox.start();
+
+  const events: RunEvent[] = [];
+  try {
+    const result = await runTask({
+      task: `compact ${"detail ".repeat(400)}`,
+      sandbox,
+      model: "gpt-4o-mini",
+      apiKey: "test-key",
+      baseURL,
+      contextBudget: { limitTokens: 200 },
+      onEvent: (event) => {
+        events.push({ ...event, id: events.length + 1, runId: "run-compact" });
+      },
+    });
+
+    assert.equal(result.status, "completed");
+    assert.equal(result.text, "Compacted and finished");
+
+    const summarizeCall = events.find(
+      (event) =>
+        event.type === "tool_call" &&
+        event.data.toolName === "summarize_context",
+    );
+    assert.ok(summarizeCall, "expected the forced summarize_context call");
+
+    const contextEvent = events.find((event) => event.type === "context");
+    assert.ok(contextEvent && contextEvent.type === "context");
+    assert.match(contextEvent.data.summary, /compact/);
+    assert.ok(contextEvent.data.estimatedTokens > 200);
+  } finally {
+    await sandbox.destroy();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("MCP SSRF guard blocks loopback and local hostnames unless allowed", async () => {
+  const { assertSafeMcpUrl, McpSecurityError } = await import("./index");
+  await assert.rejects(
+    () => assertSafeMcpUrl("http://127.0.0.1:9000/mcp"),
+    McpSecurityError,
+  );
+  await assert.rejects(
+    () => assertSafeMcpUrl("http://localhost:9000/mcp"),
+    McpSecurityError,
+  );
+  await assert.rejects(
+    () => assertSafeMcpUrl("file:///etc/passwd"),
+    McpSecurityError,
+  );
+  await assert.doesNotReject(() =>
+    assertSafeMcpUrl("http://127.0.0.1:9000/mcp", { allowPrivate: true }),
+  );
+});

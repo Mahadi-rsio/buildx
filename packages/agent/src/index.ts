@@ -3,18 +3,48 @@ import type { Sandbox } from "@buildx/sandbox";
 import {
   DEFAULT_MAX_STEPS,
   DEFAULT_MODEL,
+  getModelContextWindow,
+  type ContextUsagePayload,
   type ConversationTurn,
   type FileChangePayload,
   type RunEventInput,
   type RunStatus,
   type TodoItem,
 } from "@buildx/shared";
-import { stepCountIs, ToolLoopAgent, type ModelMessage } from "ai";
+import { stepCountIs, ToolLoopAgent, type ModelMessage, type ToolSet } from "ai";
+import {
+  createContextBudget,
+  estimateRequestTokens,
+  SUMMARIZE_TOOL_NAME,
+  type ContextBudgetOptions,
+} from "./context-budget";
+import {
+  buildMcpTools,
+  connectMcpServer,
+  type BuildMcpToolsOptions,
+  type McpConnection,
+  type McpServerConfig,
+} from "./mcp";
 import { buildSystemPrompt } from "./prompt";
 import { buildTools } from "./tools";
 
 export { buildSystemPrompt } from "./prompt";
 export { buildTools, type AgentTools } from "./tools";
+export {
+  DEFAULT_CONTEXT_BUDGET_TOKENS,
+  SUMMARIZE_TOOL_NAME,
+  estimateMessageTokens,
+  estimateRequestTokens,
+} from "./context-budget";
+export {
+  assertSafeMcpUrl,
+  buildMcpTools,
+  connectMcpServer,
+  listMcpServerTools,
+  McpSecurityError,
+  type McpServerConfig,
+  type McpToolInfo,
+} from "./mcp";
 
 export interface CreateAgentOptions {
   /** Model id passed to the OpenAI-compatible provider. */
@@ -43,6 +73,43 @@ export interface CreateAgentOptions {
    * this is the quota reservation boundary.
    */
   onBeforeModelStep?: (step: { stepNumber: number }) => void | Promise<void>;
+  /** MCP tools already discovered for this run, merged with workspace tools. */
+  mcpTools?: ToolSet;
+  /**
+   * Compact the conversation once it exceeds this token budget. Enabled by
+   * default at 75k tokens so long runs never overflow the model window.
+   */
+  contextBudget?: ContextBudgetOptions;
+  /**
+   * Explicit model context-window size in tokens, overriding the built-in
+   * catalog lookup for `model`. Omit to look the window up from the catalog.
+   */
+  contextWindowTokens?: number;
+  /**
+   * Internal wiring: called with the assembled-request token estimate after
+   * every `prepareStep`, so the orchestrator can emit live context stats.
+   */
+  onContextAssembled?: (info: { assembledTokens: number }) => void | Promise<void>;
+}
+
+function buildToolSet(options: CreateAgentOptions): {
+  tools: ToolSet;
+  budget?: ReturnType<typeof createContextBudget>;
+} {
+  const workspaceTools = buildTools(options.sandbox, {
+    onTodo: options.onTodo,
+    onFileChange: options.onFileChange,
+    onTerminal: options.onTerminal,
+  });
+  // Enabled by default at 75k tokens; callers can raise the limit or pass
+  // `limitTokens: 0` / `Infinity` to opt out.
+  const budget = createContextBudget(options.contextBudget ?? {});
+  const tools: ToolSet = {
+    ...workspaceTools,
+    ...(budget ? { [SUMMARIZE_TOOL_NAME]: budget.summarizeTool } : {}),
+    ...(options.mcpTools ?? {}),
+  };
+  return { tools, budget };
 }
 
 /**
@@ -55,23 +122,29 @@ export function createAgent(options: CreateAgentOptions) {
     apiKey: options.apiKey ?? process.env.OPENAI_API_KEY,
     baseURL: options.baseURL ?? process.env.OPENAI_BASE_URL,
   });
+  const { tools, budget } = buildToolSet(options);
+  const instructions = options.instructions ?? buildSystemPrompt();
 
   return new ToolLoopAgent({
     model: provider.chat(options.model ?? DEFAULT_MODEL),
-    instructions: options.instructions ?? buildSystemPrompt(),
-    tools: buildTools(options.sandbox, {
-      onTodo: options.onTodo,
-      onFileChange: options.onFileChange,
-      onTerminal: options.onTerminal,
-    }),
+    instructions,
+    tools,
     stopWhen: stepCountIs(options.maxSteps ?? DEFAULT_MAX_STEPS),
     // One quota reservation per agent step. Provider-level retries stay
     // disabled here and in LiteLLM (`num_retries: 0`); LiteLLM may still try
     // another upstream via `order`, which is a failover, not a retry loop.
     maxRetries: 0,
-    prepareStep: async ({ stepNumber }) => {
+    prepareStep: async ({ stepNumber, messages }) => {
       await options.onBeforeModelStep?.({ stepNumber });
-      return {};
+      const result = budget ? await budget.prepareStep({ messages }) : undefined;
+      await options.onContextAssembled?.({
+        assembledTokens: estimateRequestTokens({
+          system: instructions,
+          messages,
+          tools,
+        }),
+      });
+      return result ?? {};
     },
   });
 }
@@ -81,6 +154,10 @@ export interface RunTaskOptions extends CreateAgentOptions {
   abortSignal?: AbortSignal;
   /** Called for every step the run produces, in order. */
   onEvent: (event: RunEventInput) => void | Promise<void>;
+  /** Streaming-HTTP MCP servers to connect for the duration of this run. */
+  mcpServers?: McpServerConfig[];
+  /** Approval gate for MCP tools the server marks destructive. */
+  approveMcpTool?: BuildMcpToolsOptions["approve"];
 }
 
 export interface RunTaskUsage {
@@ -153,11 +230,71 @@ export async function runTask(options: RunTaskOptions): Promise<RunTaskResult> {
   const emit = (event: RunEventInput): Promise<void> =>
     Promise.resolve(options.onEvent(event)).then(() => undefined);
   const ts = (): number => Date.now();
+  // Live context-window accounting: refreshed on every prepareStep, surfaced on
+  // usage events. `contextLimit` prefers the explicit override, then the model
+  // catalog; unknown models omit it so the UI can say "unknown window".
+  const contextLimit =
+    options.contextWindowTokens ?? getModelContextWindow(options.model) ?? undefined;
+  let lastContext: ContextUsagePayload | undefined;
+  let compactionCount = 0;
 
   await emit({ type: "status", data: { status: "running" }, ts: ts() });
 
+  // Connect each enabled MCP server. One unreachable server must not abort the
+  // run, so failures are logged and the remaining servers still contribute
+  // tools. Connections are closed when the run finishes.
+  const connections: McpConnection[] = [];
+  for (const server of options.mcpServers ?? []) {
+    try {
+      connections.push(
+        await connectMcpServer(server, { signal: options.abortSignal }),
+      );
+    } catch (error) {
+      console.warn(
+        `[mcp] could not connect to "${server.name}": ${toText(error)}`,
+      );
+    }
+  }
+  const { tools: mcpTools, serverByTool } = buildMcpTools(connections, {
+    approve: options.approveMcpTool,
+  });
+  const mcpServerFor = (toolName: string): string | undefined =>
+    serverByTool[toolName]?.config.name;
+
   const agent = createAgent({
     ...options,
+    mcpTools,
+    contextBudget: {
+      ...(options.contextBudget ?? {}),
+      onCompacted: async (info) => {
+        compactionCount += 1;
+        await options.contextBudget?.onCompacted?.(info);
+        await emit({
+          type: "context",
+          data: {
+            summary: info.summary,
+            estimatedTokens: info.estimatedTokensBefore,
+          },
+          ts: ts(),
+        });
+      },
+    },
+    onContextAssembled: async ({ assembledTokens }) => {
+      lastContext = {
+        assembledTokens,
+        estimated: true,
+        ...(contextLimit !== undefined
+          ? {
+              contextLimit,
+              utilizationPercent: Math.min(
+                100,
+                Math.round((assembledTokens / contextLimit) * 100),
+              ),
+            }
+          : {}),
+        compactedCount: compactionCount,
+      };
+    },
     onTodo: async (todos) => {
       await options.onTodo?.(todos);
       await emit({ type: "todo", data: { todos }, ts: ts() });
@@ -213,6 +350,7 @@ export async function runTask(options: RunTaskOptions): Promise<RunTaskResult> {
               toolCallId: part.toolCallId,
               toolName: part.toolName,
               input: part.input,
+              mcpServer: mcpServerFor(part.toolName),
             },
             ts: ts(),
           });
@@ -225,6 +363,7 @@ export async function runTask(options: RunTaskOptions): Promise<RunTaskResult> {
               toolCallId: part.toolCallId,
               toolName: part.toolName,
               output: part.output,
+              mcpServer: mcpServerFor(part.toolName),
             },
             ts: ts(),
           });
@@ -238,6 +377,7 @@ export async function runTask(options: RunTaskOptions): Promise<RunTaskResult> {
               toolName: part.toolName,
               output: toText(part.error),
               isError: true,
+              mcpServer: mcpServerFor(part.toolName),
             },
             ts: ts(),
           });
@@ -253,7 +393,19 @@ export async function runTask(options: RunTaskOptions): Promise<RunTaskResult> {
           };
           await emit({
             type: "usage",
-            data: { steps: completedSteps, ...liveUsage },
+            data: {
+              steps: completedSteps,
+              ...liveUsage,
+              ...(lastContext
+                ? {
+                    context: {
+                      ...lastContext,
+                      requestInputTokens: part.usage.inputTokens,
+                      requestOutputTokens: part.usage.outputTokens,
+                    },
+                  }
+                : {}),
+            },
             ts: ts(),
           });
           break;
@@ -294,6 +446,7 @@ export async function runTask(options: RunTaskOptions): Promise<RunTaskResult> {
         inputTokens: usage?.inputTokens ?? liveUsage.inputTokens,
         outputTokens: usage?.outputTokens ?? liveUsage.outputTokens,
         totalTokens: usage?.totalTokens ?? liveUsage.totalTokens,
+        ...(lastContext ? { context: lastContext } : {}),
       },
       ts: ts(),
     });
@@ -335,5 +488,7 @@ export async function runTask(options: RunTaskOptions): Promise<RunTaskResult> {
     await emit({ type: "error", data: { message }, ts: ts() });
     await emit({ type: "status", data: { status }, ts: ts() });
     return { status, text: "", steps: 0, error: message };
+  } finally {
+    await Promise.allSettled(connections.map((connection) => connection.close()));
   }
 }

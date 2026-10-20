@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { isTerminalStatus } from "@buildx/shared";
 import { ChatComposer } from "@/components/chat/chat-composer";
 import { ChatThread } from "@/components/chat/chat-thread";
+import { ContextStatsPanel } from "@/components/context-stats-panel";
 import { PanelSplit } from "@/components/shell/panel-split";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -200,8 +201,14 @@ export default function RunPage() {
   return (
     <PanelSplit workspace={workspace}>
       <div className="flex h-full min-h-0 min-w-0 flex-col">
-        {run?.error || streamError ? (
+        {run?.error || streamError || (run && run.stats?.context) ? (
           <div className="mx-auto w-full max-w-3xl shrink-0 space-y-2 px-4 pt-3 sm:px-6">
+            {run && run.stats?.context ? (
+              <ContextStatsPanel
+                model={run.model}
+                context={run.stats.context}
+              />
+            ) : null}
             {run?.error ? (
               <Alert variant="destructive">
                 <AlertTitle>Run failed</AlertTitle>
