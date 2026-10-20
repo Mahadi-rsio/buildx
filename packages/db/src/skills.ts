@@ -130,23 +130,29 @@ export async function failSkillInstallation(
 export interface InstalledSkill {
   installationId: string;
   state: SkillInstallState;
+  enabled: boolean;
+  projectId: string | null;
   skill: SkillRow;
 }
+
+const installedSkillSelection = {
+  installationId: skillInstallations.id,
+  state: skillInstallations.state,
+  enabled: skillInstallations.enabled,
+  projectId: skillInstallations.projectId,
+  skill: skills,
+};
 
 /** List installed skills for a scope. Failed/running installs are excluded. */
 export async function listInstalledSkills(
   db: Db,
-  input: { userId: string; scope: SkillScope },
+  input: { userId: string; scope: SkillScope; enabledOnly?: boolean },
 ): Promise<InstalledSkill[]> {
   if (input.scope.kind === "project") {
     await assertProjectOwner(db, input.userId, input.scope.projectId);
   }
   const rows = await db
-    .select({
-      installationId: skillInstallations.id,
-      state: skillInstallations.state,
-      skill: skills,
-    })
+    .select(installedSkillSelection)
     .from(skillInstallations)
     .innerJoin(skills, eq(skillInstallations.skillId, skills.id))
     .where(
@@ -154,10 +160,49 @@ export async function listInstalledSkills(
         eq(skillInstallations.userId, input.userId),
         eq(skillInstallations.scopeKey, skillScopeKey(input.userId, input.scope)),
         eq(skillInstallations.state, "installed"),
+        ...(input.enabledOnly ? [eq(skillInstallations.enabled, true)] : []),
       ),
     )
     .orderBy(skillInstallations.name);
   return rows;
+}
+
+/** Load one installed skill by id. Cross-user ids are indistinguishable from missing. */
+export async function getInstalledSkill(
+  db: Db,
+  input: { userId: string; installationId: string },
+): Promise<InstalledSkill | undefined> {
+  const [row] = await db
+    .select(installedSkillSelection)
+    .from(skillInstallations)
+    .innerJoin(skills, eq(skillInstallations.skillId, skills.id))
+    .where(
+      and(
+        eq(skillInstallations.id, input.installationId),
+        eq(skillInstallations.userId, input.userId),
+        eq(skillInstallations.state, "installed"),
+      ),
+    );
+  return row;
+}
+
+/** Enable or disable an installation owned by the caller. */
+export async function setSkillEnabled(
+  db: Db,
+  input: { userId: string; installationId: string; enabled: boolean },
+): Promise<InstalledSkill | undefined> {
+  const updated = await db
+    .update(skillInstallations)
+    .set({ enabled: input.enabled, updatedAt: new Date() })
+    .where(
+      and(
+        eq(skillInstallations.id, input.installationId),
+        eq(skillInstallations.userId, input.userId),
+      ),
+    )
+    .returning({ id: skillInstallations.id });
+  if (updated.length === 0) return undefined;
+  return getInstalledSkill(db, input);
 }
 
 /**
@@ -171,11 +216,13 @@ export async function listRuntimeSkills(
   const userSkills = await listInstalledSkills(db, {
     userId: input.userId,
     scope: { kind: "user" },
+    enabledOnly: true,
   });
   if (!input.projectId) return userSkills;
   const projectSkills = await listInstalledSkills(db, {
     userId: input.userId,
     scope: { kind: "project", projectId: input.projectId },
+    enabledOnly: true,
   });
   const byName = new Map(userSkills.map((row) => [row.skill.name, row]));
   for (const row of projectSkills) byName.set(row.skill.name, row);

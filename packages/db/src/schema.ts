@@ -632,6 +632,8 @@ export const skillInstallations = pgTable(
     /** `user:<id>` or `project:<id>` — enforces ownership at the DB level. */
     scopeKey: text("scope_key").notNull(),
     state: text("state").$type<SkillInstallState>().notNull().default("installing"),
+    /** Disabled skills stay installed but are excluded from the agent runtime. */
+    enabled: boolean("enabled").notNull().default(true),
     lastError: text("last_error"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()

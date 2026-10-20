@@ -1,7 +1,16 @@
 "use client";
 
 import { useEffect, useRef, type FormEvent, type KeyboardEvent } from "react";
-import { ArrowUp, ImagePlus, Loader2, Paperclip, Plus, Square } from "lucide-react";
+import Link from "next/link";
+import {
+  ArrowUp,
+  BookOpen,
+  ImagePlus,
+  Loader2,
+  Paperclip,
+  Plus,
+  Square,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ModelPicker } from "@/components/model-picker";
 import {
@@ -12,6 +21,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { useSkillCount } from "@/hooks/use-skills";
 import { cn } from "@/lib/utils";
 
 export function ChatComposer({
@@ -44,6 +54,7 @@ export function ChatComposer({
   hint?: string;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const { count: skillCount } = useSkillCount();
 
   useEffect(() => {
     const el = textareaRef.current;
@@ -122,6 +133,20 @@ export function ChatComposer({
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+
+          {skillCount > 0 ? (
+            <Link
+              href="/skills"
+              aria-label={`${skillCount} skill${skillCount === 1 ? "" : "s"} installed`}
+              className="inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-xs text-[var(--text-muted)] transition hover:bg-[var(--surface-hover)] hover:text-[var(--text)]"
+            >
+              <BookOpen className="size-3.5" />
+              <span>Skills</span>
+              <span className="font-mono text-[10px] text-[var(--text-faint)]">
+                {skillCount}
+              </span>
+            </Link>
+          ) : null}
 
           {/* Model picker */}
           <ModelPicker

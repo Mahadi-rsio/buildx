@@ -52,6 +52,7 @@ export {
   discoverGitHubSkill,
   discoverSkill,
   parseSkillMarkdown,
+  previewSkill,
   parseSkillSource,
   safeSkillPath,
   SkillSecurityError,
@@ -65,6 +66,7 @@ export {
   type ParsedSkillSource,
   type SkillMetadata,
   type SkillPackage,
+  type SkillPreview,
   type SkillRuntime,
   type SkillSource,
 } from "./skills";

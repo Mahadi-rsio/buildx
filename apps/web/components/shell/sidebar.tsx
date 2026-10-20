@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   BarChart3,
+  BookOpen,
   Ellipsis,
   Pin,
   PinOff,
@@ -356,7 +357,7 @@ function SidebarBody({
       </ScrollArea>
 
       <div className="border-t border-border/70 p-2.5">
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-3 gap-1.5">
           <Link
             href="/mcp"
             onClick={onNavigate}
@@ -370,6 +371,20 @@ function SidebarBody({
           >
             <Plug className="size-3.5" />
             <span>MCP</span>
+          </Link>
+          <Link
+            href="/skills"
+            onClick={onNavigate}
+            aria-current={pathname === "/skills" ? "page" : undefined}
+            className={cn(
+              "flex h-9 items-center gap-2 rounded-lg border px-2.5 text-xs transition",
+              pathname === "/skills"
+                ? "border-border bg-[var(--surface)] text-foreground"
+                : "border-transparent text-muted-foreground hover:border-border hover:bg-[var(--surface)] hover:text-foreground",
+            )}
+          >
+            <BookOpen className="size-3.5" />
+            <span>Skills</span>
           </Link>
           <button
             type="button"

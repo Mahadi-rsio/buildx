@@ -592,6 +592,36 @@ function GenericTool({ item, status, input }: RendererProps) {
   );
 }
 
+function LoadSkillTool({ item, status, input }: RendererProps) {
+  const name =
+    stringField(input, "name") ??
+    stringField(input, "skill") ??
+    stringField(input, "skill_name") ??
+    pretty(item.input);
+  return (
+    <ToolRow
+      status={status}
+      verb={verbFor(status, "Loading skill", "Loaded skill")}
+      target={<span className="min-w-0 truncate">{name}</span>}
+    />
+  );
+}
+
+function ReadSkillFileTool({ item, status, input }: RendererProps) {
+  const path =
+    stringField(input, "path") ??
+    stringField(input, "file") ??
+    stringField(input, "file_path") ??
+    pretty(item.input);
+  return (
+    <ToolRow
+      status={status}
+      verb={verbFor(status, "Reading skill file", "Read skill file")}
+      target={<FileTarget path={path} />}
+    />
+  );
+}
+
 const TOOL_RENDERERS: Record<
   string,
   (props: RendererProps) => ReactNode
@@ -606,6 +636,8 @@ const TOOL_RENDERERS: Record<
   glob: GlobTool,
   semantic_search: SearchTool,
   todo_write: PlanTool,
+  load_skill: LoadSkillTool,
+  read_skill_file: ReadSkillFileTool,
   // Explicit aliases so a Read-like name can never fall through to Bash.
   read: ReadTool,
   write: WriteTool,

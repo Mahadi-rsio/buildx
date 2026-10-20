@@ -6,9 +6,11 @@ import { loadRootEnv } from "@buildx/shared/node";
 import { getDb, type Db } from "./client";
 import {
   assertProjectOwner,
+  getInstalledSkill,
   installSkill,
   listInstalledSkills,
   listRuntimeSkills,
+  setSkillEnabled,
   skillScopeKey,
   uninstallSkill,
 } from "./skills";
@@ -139,4 +141,73 @@ test("project scope overrides a same-named user skill for runtime", { skip: skip
     skillScopeKey(userId, { kind: "project", projectId }),
     `project:${projectId}`,
   );
+});
+
+test("disabled skills stay installed but leave the runtime", { skip: skipReason }, async () => {
+  const userId = await newUser();
+  const installed = await installSkill(db!, {
+    userId,
+    scope: { kind: "user" },
+    catalog: catalog("pdf", "f".repeat(64)),
+  });
+  assert.equal(installed.enabled, true);
+
+  const disabled = await setSkillEnabled(db!, {
+    userId,
+    installationId: installed.id,
+    enabled: false,
+  });
+  assert.equal(disabled?.enabled, false);
+
+  assert.equal((await listRuntimeSkills(db!, { userId })).length, 0);
+  const managed = await listInstalledSkills(db!, {
+    userId,
+    scope: { kind: "user" },
+  });
+  assert.equal(managed.length, 1);
+  assert.equal(managed[0].enabled, false);
+
+  const reinstalled = await installSkill(db!, {
+    userId,
+    scope: { kind: "user" },
+    catalog: catalog("pdf", "g".repeat(64)),
+  });
+  assert.equal(reinstalled.enabled, false);
+  assert.equal(
+    (await listRuntimeSkills(db!, { userId })).length,
+    0,
+  );
+});
+
+test("getInstalledSkill and setSkillEnabled are user-scoped", { skip: skipReason }, async () => {
+  const owner = await newUser();
+  const other = await newUser();
+  const installed = await installSkill(db!, {
+    userId: owner,
+    scope: { kind: "user" },
+    catalog: catalog("pdf", "h".repeat(64)),
+  });
+
+  assert.equal(
+    await getInstalledSkill(db!, { userId: other, installationId: installed.id }),
+    undefined,
+  );
+  assert.equal(
+    await setSkillEnabled(db!, {
+      userId: other,
+      installationId: installed.id,
+      enabled: false,
+    }),
+    undefined,
+  );
+  assert.equal(
+    (await getInstalledSkill(db!, { userId: owner, installationId: installed.id }))?.enabled,
+    true,
+  );
+  const updated = await setSkillEnabled(db!, {
+    userId: owner,
+    installationId: installed.id,
+    enabled: false,
+  });
+  assert.equal(updated?.enabled, false);
 });

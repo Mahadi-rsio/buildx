@@ -11,9 +11,11 @@ import {
 import {
   assertProjectOwner,
   getDb,
+  getInstalledSkill,
   installSkill,
   listInstalledSkills,
   listRuntimeSkills,
+  setSkillEnabled,
   uninstallSkill,
   type InstalledSkill,
   type SkillScope,
@@ -105,6 +107,9 @@ export interface SkillInstallationView {
   resolvedRef: string;
   digest: string;
   scope: "user" | "project";
+  enabled: boolean;
+  fileCount: number;
+  totalBytes: number;
   installedAt: string;
 }
 
@@ -122,6 +127,9 @@ function toView(row: InstalledSkill, scope: SkillScope): SkillInstallationView {
     resolvedRef: row.skill.resolvedRef,
     digest: row.skill.digest,
     scope: scope.kind,
+    enabled: row.enabled,
+    fileCount: row.skill.fileCount,
+    totalBytes: row.skill.totalBytes,
     installedAt: row.skill.createdAt.toISOString(),
   };
 }
@@ -181,6 +189,48 @@ export async function installSkillFromSource(input: {
   const installed = rows.find((row) => row.skill.name === pkg.metadata.name);
   if (!installed) throw new Error("skill installation did not persist");
   return toView(installed, scope);
+}
+
+export interface SkillInstallationDetail {
+  skill: SkillInstallationView;
+  instructions: string;
+  files: string[];
+}
+
+/** Load one installation and verify its stored artifact before returning it. */
+export async function getInstalledSkillDetail(
+  userId: string,
+  installationId: string,
+): Promise<SkillInstallationDetail | undefined> {
+  const row = await getInstalledSkill(getDb(), { userId, installationId });
+  if (!row) return undefined;
+  const bytes = await storage().getObject(row.skill.artifactKey, {
+    maxBytes: MAX_SKILL_ARTIFACT_BYTES,
+  });
+  if (!bytes) return undefined;
+  const pkg = decodeArtifact(bytes, row.skill.digest);
+  const scope: SkillScope = row.projectId
+    ? { kind: "project", projectId: row.projectId }
+    : { kind: "user" };
+  return {
+    skill: toView(row, scope),
+    instructions: pkg.instructions,
+    files: Object.keys(pkg.files).sort(),
+  };
+}
+
+/** Enable or disable an installation owned by the caller. */
+export async function setInstalledSkillEnabled(
+  userId: string,
+  installationId: string,
+  enabled: boolean,
+): Promise<SkillInstallationView | undefined> {
+  const row = await setSkillEnabled(getDb(), { userId, installationId, enabled });
+  if (!row) return undefined;
+  const scope: SkillScope = row.projectId
+    ? { kind: "project", projectId: row.projectId }
+    : { kind: "user" };
+  return toView(row, scope);
 }
 
 export async function uninstallSkillById(

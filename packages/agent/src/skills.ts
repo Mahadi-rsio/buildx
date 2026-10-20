@@ -705,12 +705,16 @@ function extractZip(bytes: Uint8Array): RawPackageFile[] {
   return files;
 }
 
-function selectSkillRoot(files: RawPackageFile[], selected?: string): string {
-  const candidates = [...new Set(
+function skillCandidates(files: Array<{ path: string }>): string[] {
+  return [...new Set(
     files
       .filter((file) => basename(file.path) === "SKILL.md")
       .map((file) => dirname(file.path)),
-  )];
+  )].sort();
+}
+
+function selectSkillRoot(files: RawPackageFile[], selected?: string): string {
+  const candidates = skillCandidates(files);
   if (candidates.length === 0) throw new SkillValidationError("No SKILL.md found in the skill source.");
   if (selected !== undefined) {
     const normalized = selected.replace(/^\.\//, "").replace(/\/+$/, "");
@@ -781,10 +785,10 @@ async function fetchGitHubJson<T>(
   }
 }
 
-export async function discoverGitHubSkill(
+async function fetchGitHubBlobs(
   source: Extract<ParsedSkillSource, { kind: "github" }>,
-  options: DiscoverSkillOptions = {},
-): Promise<SkillPackage> {
+  options: DiscoverSkillOptions,
+): Promise<{ sha: string; blobs: Array<GitHubTreeEntry & { type: "blob" }> }> {
   const repositoryUrl = `https://api.github.com/repos/${encodeURIComponent(source.owner)}/${encodeURIComponent(source.repo)}`;
   const repo = await fetchGitHubJson<{ default_branch?: string }>(repositoryUrl, options);
   const ref = source.ref ?? repo.default_branch;
@@ -808,6 +812,14 @@ export async function discoverGitHubSkill(
   const blobs = tree.tree.filter(
     (entry): entry is GitHubTreeEntry & { type: "blob" } => entry.type === "blob",
   );
+  return { sha, blobs };
+}
+
+export async function discoverGitHubSkill(
+  source: Extract<ParsedSkillSource, { kind: "github" }>,
+  options: DiscoverSkillOptions = {},
+): Promise<SkillPackage> {
+  const { sha, blobs } = await fetchGitHubBlobs(source, options);
   const root = selectSkillRoot(
     blobs.map((entry) => ({ path: safeSkillPath(entry.path), data: new Uint8Array() })),
     options.path ?? source.path,
@@ -848,10 +860,10 @@ export async function discoverGitHubSkill(
   });
 }
 
-export async function discoverArchiveSkill(
+async function fetchArchiveFiles(
   url: string,
-  options: DiscoverSkillOptions = {},
-): Promise<SkillPackage> {
+  options: DiscoverSkillOptions,
+): Promise<{ body: Uint8Array; files: RawPackageFile[] }> {
   const { body } = await safeFetch(url, {
     fetch: options.fetch ?? fetch,
     resolve: options.resolveHost,
@@ -860,6 +872,14 @@ export async function discoverArchiveSkill(
   const files = body[0] === 0x50 && body[1] === 0x4b
     ? extractZip(body)
     : extractTarGz(body);
+  return { body, files };
+}
+
+export async function discoverArchiveSkill(
+  url: string,
+  options: DiscoverSkillOptions = {},
+): Promise<SkillPackage> {
+  const { body, files } = await fetchArchiveFiles(url, options);
   const root = selectSkillRoot(files, options.path);
   return buildPackage({
     files,
@@ -916,6 +936,55 @@ export async function discoverSkill(
     resolvedRef: catalogEntry.resolvedRef ?? `sha256:${catalogEntry.digest}`,
     digest: catalogEntry.digest,
   };
+}
+
+export interface SkillPreview {
+  candidates: string[];
+  skill?: SkillPackage;
+}
+
+/**
+ * Inspect a source without side effects. Multi-skill sources return their
+ * candidate directories so the caller can ask the user which one to import;
+ * only a selected (or unambiguous) source downloads the package files.
+ */
+export async function previewSkill(
+  input: string,
+  options: DiscoverSkillOptions = {},
+): Promise<SkillPreview> {
+  const parsed = parseSkillSource(input);
+  if (parsed.kind === "skill-md") {
+    return { candidates: [], skill: await discoverDirectSkill(parsed.url, options) };
+  }
+  if (parsed.kind === "archive") {
+    const { body, files } = await fetchArchiveFiles(parsed.url, options);
+    const candidates = skillCandidates(files);
+    if (candidates.length > 1 && options.path === undefined) return { candidates };
+    return {
+      candidates,
+      skill: buildPackage({
+        files,
+        skillRoot: selectSkillRoot(files, options.path),
+        source: publicSourceUrl(parsed.url),
+        sourceKind: "archive",
+        resolvedRef: `sha256:${createHash("sha256").update(body).digest("hex")}`,
+      }),
+    };
+  }
+  if (parsed.kind === "github") {
+    const { blobs } = await fetchGitHubBlobs(parsed, options);
+    const candidates = skillCandidates(
+      blobs.map((entry) => ({ path: safeSkillPath(entry.path) })),
+    );
+    if (candidates.length > 1 && options.path === undefined && parsed.path === undefined) {
+      return { candidates };
+    }
+    return {
+      candidates,
+      skill: await discoverGitHubSkill(parsed, options),
+    };
+  }
+  throw new SkillValidationError(`Unknown skill reference "${parsed.ref}".`);
 }
 
 /* ── Progressive runtime ──────────────────────────────────────────────────── */

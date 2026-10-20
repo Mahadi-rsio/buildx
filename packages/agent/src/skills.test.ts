@@ -10,6 +10,7 @@ import {
   discoverGitHubSkill,
   discoverSkill,
   parseSkillMarkdown,
+  previewSkill,
   parseSkillSource,
   safeSkillPath,
   skillRuntimeFromPackages,
@@ -217,6 +218,42 @@ test("imports a selected skill from a multi-skill GitHub repository", async () =
   assert.deepEqual(Object.keys(pkg.files), ["references/guide.md", "SKILL.md"]);
   assert.match(pkg.digest, /^[a-f0-9]{64}$/);
   assert.ok(calls.every((url) => url.includes(`/${sha}/`) || url.includes("api.github.com")));
+});
+
+test("previews multi-skill GitHub repositories without downloading blobs", async () => {
+  const sha = "b".repeat(40);
+  const tree = [
+    { path: "pdf/SKILL.md", mode: "100644", type: "blob", sha: "1", size: 100 },
+    { path: "pdf/references/guide.md", mode: "100644", type: "blob", sha: "2", size: 100 },
+    { path: "slides/SKILL.md", mode: "100644", type: "blob", sha: "3", size: 100 },
+  ];
+  const calls: string[] = [];
+  const mockFetch = async (url: string): Promise<Response> => {
+    calls.push(url);
+    if (url.endsWith("/repos/acme/skills")) return response(JSON.stringify({ default_branch: "main" }));
+    if (url.includes("/commits/main")) return response(JSON.stringify({ sha }));
+    if (url.includes(`/git/trees/${sha}`)) return response(JSON.stringify({ tree, truncated: false }));
+    if (url.endsWith("/pdf/SKILL.md")) return response(skillMd("pdf", "Work with PDFs."));
+    if (url.endsWith("/pdf/references/guide.md")) return response("# Guide\nRead me.");
+    throw new Error(`unexpected URL ${url}`);
+  };
+
+  const preview = await previewSkill("acme/skills", {
+    fetch: mockFetch,
+    resolveHost: publicResolve,
+  });
+  assert.deepEqual(preview.candidates, ["pdf", "slides"]);
+  assert.equal(preview.skill, undefined);
+  assert.ok(calls.every((url) => url.includes("api.github.com")));
+
+  const selected = await previewSkill("acme/skills", {
+    fetch: mockFetch,
+    resolveHost: publicResolve,
+    path: "pdf",
+  });
+  assert.deepEqual(selected.candidates, ["pdf", "slides"]);
+  assert.equal(selected.skill?.metadata.name, "pdf");
+  assert.ok(calls.some((url) => url.includes("raw.githubusercontent.com")));
 });
 
 test("loads full skill instructions only when requested", async () => {
