@@ -9,7 +9,11 @@ import {
   runs as runsTable,
   type Db,
 } from "@buildx/db";
-import type { ConversationTurn } from "@buildx/shared";
+import {
+  DEFAULT_CONTEXT_WINDOW_TOKENS,
+  type ContextWindowTokens,
+  type ConversationTurn,
+} from "@buildx/shared";
 import type { WorkspaceUsage } from "./types";
 import {
   getRunForIdempotencyKey,
@@ -50,6 +54,7 @@ export interface CreateRunInput {
   task: string;
   model: string;
   maxSteps: number;
+  contextWindowTokens?: ContextWindowTokens;
   history?: ConversationTurn[];
   conversationId?: string;
   idempotencyKey?: string;
@@ -216,6 +221,8 @@ export async function createRunForUser(
             input.user.email.split("@")[0] ||
             "workspace",
           maxSteps: input.maxSteps,
+          contextWindowTokens:
+            input.contextWindowTokens ?? DEFAULT_CONTEXT_WINDOW_TOKENS,
           idempotencyKey: input.idempotencyKey ?? null,
           createdAt: now,
           updatedAt: now,

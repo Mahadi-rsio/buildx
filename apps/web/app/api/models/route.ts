@@ -6,7 +6,7 @@ export interface ModelOption {
   id: string;
   name: string;
   description?: string;
-  /** Human label for the provider (LiteLLM / OpenRouter). */
+  /** Human label for the provider group (free / OpenRouter). */
   provider?: string;
   /** Provider id used by the UI to group models into sections. */
   providerId?: ModelProviderId | string;
@@ -157,10 +157,10 @@ export async function GET(): Promise<Response> {
   if (litellmEnabled) {
     push({
       id: "auto",
-      name: "Auto",
-      description: "Automatic routing via the LiteLLM proxy",
-      provider: "LiteLLM",
-      providerId: "litellm",
+      name: "auto",
+      description: "Automatic routing across configured models",
+      provider: "free",
+      providerId: "free",
     });
     defaultModel = "auto";
   }

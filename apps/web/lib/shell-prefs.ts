@@ -1,9 +1,17 @@
 /** Client-only layout prefs for the app shell (sidebar/panel). Non-sensitive. */
 
+import {
+  DEFAULT_CONTEXT_WINDOW_TOKENS,
+  isContextWindowTokens,
+  type ContextWindowTokens,
+} from "@buildx/shared";
+
 export interface ShellPrefs {
   sidebarCollapsed: boolean;
   panelOpen: boolean;
   modelOverride: string;
+  /** Compaction / utilization window applied to the next run. */
+  contextWindowTokens: ContextWindowTokens;
 }
 
 const STORAGE_KEY = "buildx.shell";
@@ -13,6 +21,7 @@ const DEFAULTS: ShellPrefs = {
   sidebarCollapsed: false,
   panelOpen: false,
   modelOverride: "",
+  contextWindowTokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
 };
 
 /**
@@ -34,6 +43,9 @@ export function loadShellPrefs(): ShellPrefs {
       panelOpen: parsed.panelOpen === undefined ? false : Boolean(parsed.panelOpen),
       modelOverride:
         stored.length > 0 && !LEGACY_INVALID_MODELS.has(stored) ? stored : "",
+      contextWindowTokens: isContextWindowTokens(parsed.contextWindowTokens)
+        ? parsed.contextWindowTokens
+        : DEFAULT_CONTEXT_WINDOW_TOKENS,
     };
   } catch {
     return DEFAULTS;

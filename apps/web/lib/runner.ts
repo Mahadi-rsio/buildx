@@ -205,6 +205,15 @@ export async function startRun(run: StoredRun): Promise<void> {
       apiKey: endpoint.apiKey,
       baseURL: endpoint.baseURL,
       maxSteps: run.maxSteps,
+      // The selected window drives both live utilization and compaction. Keep
+      // ~10% headroom for the model's response and token-estimate error.
+      contextWindowTokens: run.contextWindowTokens,
+      contextBudget: {
+        limitTokens: Math.max(
+          16_000,
+          Math.floor(run.contextWindowTokens * 0.9),
+        ),
+      },
       abortSignal: run.runtime.controller.signal,
       mcpServers,
       // Reserve one unit before every agent step, including each tool-loop

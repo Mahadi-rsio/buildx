@@ -1,0 +1,1 @@
+ALTER TABLE "runs" ADD COLUMN "context_window_tokens" integer DEFAULT 100000 NOT NULL;

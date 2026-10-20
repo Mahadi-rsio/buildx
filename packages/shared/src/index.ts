@@ -32,6 +32,27 @@ export function isLitellmAlias(model: string | undefined): boolean {
 /** Default agent loop cap when `AGENT_MAX_STEPS` is unset (see `.env.example`). */
 export const DEFAULT_MAX_STEPS = 40;
 
+/** Context-window sizes the dashboard lets the user pick from. */
+export const CONTEXT_WINDOW_OPTIONS = [
+  100_000,
+  200_000,
+  500_000,
+  1_000_000,
+] as const;
+export type ContextWindowTokens = (typeof CONTEXT_WINDOW_OPTIONS)[number];
+
+/** Default context window / compaction ceiling for a run. */
+export const DEFAULT_CONTEXT_WINDOW_TOKENS: ContextWindowTokens = 100_000;
+
+export function isContextWindowTokens(
+  value: unknown,
+): value is ContextWindowTokens {
+  return (
+    typeof value === "number" &&
+    (CONTEXT_WINDOW_OPTIONS as readonly number[]).includes(value)
+  );
+}
+
 /**
  * Lifecycle status of a run. Mirrors the `runs.status` column in
  * arcetecture.md §4.
@@ -227,6 +248,12 @@ export const createRunSchema = z.object({
   conversationId: z.string().uuid().optional(),
   /** Prior conversation turns; the agent replays them before the new task. */
   history: z.array(conversationTurnSchema).max(100).optional(),
+  /** Requested context window for compaction and live utilization stats. */
+  contextWindow: z
+    .number()
+    .int()
+    .refine(isContextWindowTokens, "unsupported context window")
+    .optional(),
 });
 export type CreateRunRequest = z.infer<typeof createRunSchema>;
 

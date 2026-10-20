@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { DEFAULT_MODEL, isTerminalStatus } from "@buildx/shared";
+import {
+  DEFAULT_CONTEXT_WINDOW_TOKENS,
+  DEFAULT_MODEL,
+  isContextWindowTokens,
+  isTerminalStatus,
+} from "@buildx/shared";
 import type {
+  ContextWindowTokens,
   ConversationTurn,
   RunEvent,
   RunEventInput,
@@ -75,8 +81,12 @@ export interface StoredRun {
   status: RunStatus;
   model: string;
   maxSteps: number;
+  /** Selected context window used for compaction / utilization stats. */
+  contextWindowTokens: ContextWindowTokens;
   createdAt: number;
   updatedAt: number;
+  startedAt?: number;
+  endedAt?: number;
   error?: string;
   stats?: RunStats;
   /** Lease id owning this run while it is being executed (set by the worker). */
@@ -107,6 +117,12 @@ const globalForStore = globalThis as unknown as {
   __BUILDX_RUNS__?: Map<string, StoredRun>;
 };
 
+function contextWindowFromRow(value: number): ContextWindowTokens {
+  return isContextWindowTokens(value)
+    ? value
+    : DEFAULT_CONTEXT_WINDOW_TOKENS;
+}
+
 function cachedRuns(): Map<string, StoredRun> {
   if (!globalForStore.__BUILDX_RUNS__) {
     globalForStore.__BUILDX_RUNS__ = new Map();
@@ -133,6 +149,9 @@ function syncFromRow(run: StoredRun, row: RunRow): void {
   run.status = row.status;
   run.model = row.model ?? DEFAULT_MODEL;
   run.maxSteps = row.maxSteps;
+  run.contextWindowTokens = contextWindowFromRow(row.contextWindowTokens);
+  run.startedAt = row.startedAt?.getTime() ?? undefined;
+  run.endedAt = row.endedAt?.getTime() ?? undefined;
   run.leaseId = row.leaseId ?? undefined;
   run.fencingToken = row.fencingToken ?? 0;
   run.leaseExpiresAt = row.leaseExpiresAt?.getTime() ?? undefined;
@@ -179,8 +198,11 @@ export async function hydrateRun(
     status: row.status,
     model: row.model ?? DEFAULT_MODEL,
     maxSteps: row.maxSteps,
+    contextWindowTokens: contextWindowFromRow(row.contextWindowTokens),
     createdAt: row.createdAt.getTime(),
     updatedAt: row.updatedAt.getTime(),
+    startedAt: row.startedAt?.getTime() ?? undefined,
+    endedAt: row.endedAt?.getTime() ?? undefined,
     error: row.error ?? undefined,
     leaseId: row.leaseId ?? undefined,
     fencingToken: row.fencingToken ?? 0,
@@ -232,6 +254,7 @@ export interface CreateRunArgs {
   history?: ConversationTurn[];
   model: string;
   maxSteps: number;
+  contextWindowTokens?: ContextWindowTokens;
   usage?: WorkspaceUsage;
   /** Optional client-supplied key: a repeat request with the same key returns
    *  the original run instead of queuing a second one. */
@@ -287,6 +310,8 @@ export async function createRun(
         history: args.history?.length ? args.history : null,
         workspaceName: args.workspaceName,
         maxSteps: args.maxSteps,
+        contextWindowTokens:
+          args.contextWindowTokens ?? DEFAULT_CONTEXT_WINDOW_TOKENS,
         idempotencyKey: args.idempotencyKey ?? null,
         createdAt: timestamps.createdAt,
         updatedAt: timestamps.updatedAt,
@@ -329,8 +354,11 @@ export async function createRun(
     status: "queued",
     model: row.model ?? DEFAULT_MODEL,
     maxSteps: row.maxSteps,
+    contextWindowTokens: contextWindowFromRow(row.contextWindowTokens),
     createdAt: row.createdAt.getTime() ?? Date.now(),
     updatedAt: row.updatedAt.getTime() ?? Date.now(),
+    startedAt: row.startedAt?.getTime() ?? undefined,
+    endedAt: row.endedAt?.getTime() ?? undefined,
     fencingToken: row.fencingToken ?? 0,
     events: [],
     runtime,
@@ -700,9 +728,12 @@ export function toRunSummary(run: StoredRun): RunSummary {
     status: run.status,
     model: run.model,
     maxSteps: run.maxSteps,
+    contextWindowTokens: run.contextWindowTokens,
     workspaceId: run.id,
     createdAt: run.createdAt,
     updatedAt: run.updatedAt,
+    startedAt: run.startedAt,
+    endedAt: run.endedAt,
     error: run.error,
     stats: run.stats,
     workspace: run.runtime.workspace,

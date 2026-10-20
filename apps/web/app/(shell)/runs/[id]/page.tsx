@@ -1,9 +1,15 @@
 "use client";
 
 import Link from "next/link";
+import { X } from "lucide-react";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { isTerminalStatus } from "@buildx/shared";
+import {
+  isContextWindowTokens,
+  isTerminalStatus,
+  type ContextWindowTokens,
+  type ConversationTurn,
+} from "@buildx/shared";
 import { ChatComposer } from "@/components/chat/chat-composer";
 import { ChatThread } from "@/components/chat/chat-thread";
 import { ContextStatsPanel } from "@/components/context-stats-panel";
@@ -17,7 +23,6 @@ import { useRunStream } from "@/hooks/use-run-stream";
 import { useWorkspaceDiff } from "@/hooks/use-workspace-diff";
 import { useWorkspaceFiles } from "@/hooks/use-workspace-files";
 import { buildChatMessages, type ChatMessage } from "@/lib/chat-messages";
-import type { ConversationTurn } from "@buildx/shared";
 import { newConversationId } from "@/lib/conversation-id";
 import { enqueueConversationEvent } from "@/lib/conversation-sync";
 
@@ -37,6 +42,29 @@ function lastAssistantText(messages: ChatMessage[]): string {
 }
 
 const FILE_POLL_MS = 3000;
+
+interface QueuedTurn {
+  id: string;
+  task: string;
+  model?: string;
+  contextWindow: ContextWindowTokens;
+}
+
+function isQueuedTurn(value: unknown): value is QueuedTurn {
+  if (value === null || typeof value !== "object") return false;
+  const item = value as Partial<QueuedTurn>;
+  return (
+    typeof item.id === "string" &&
+    typeof item.task === "string" &&
+    item.task.trim().length > 0 &&
+    (item.model === undefined || typeof item.model === "string") &&
+    isContextWindowTokens(item.contextWindow)
+  );
+}
+
+function queueStorageKey(conversationId: string | undefined): string | null {
+  return conversationId ? `buildx.queue.${conversationId}` : null;
+}
 
 /** Flatten the visible thread into turns for the follow-up run. */
 function toHistory(messages: ChatMessage[]): ConversationTurn[] {
@@ -62,8 +90,19 @@ export default function RunPage() {
   const { run, events, streamError, notFound, loading, stop } =
     useRunStream(runId);
   const { createRun, submitting, error: createError } = useCreateRun();
-  const { modelOverride, setModelOverride, panelVisible } = useShell();
+  const {
+    modelOverride,
+    setModelOverride,
+    contextWindowTokens,
+    panelVisible,
+  } = useShell();
   const [draft, setDraft] = useState("");
+  const [queue, setQueue] = useState<QueuedTurn[]>([]);
+  const [queuePaused, setQueuePaused] = useState(false);
+  const dispatchInFlightRef = useRef(false);
+  const dispatchedRunRef = useRef<string | null>(null);
+  const loadedQueueKeyRef = useRef<string | null>(null);
+  const queueKey = queueStorageKey(run?.conversationId);
 
   const status = run?.status ?? "idle";
   useShellMeta({
@@ -74,6 +113,10 @@ export default function RunPage() {
     task: run?.task,
     steps: run?.stats?.steps,
     tokens: run?.stats?.usage?.totalTokens,
+    contextWindowTokens: run?.contextWindowTokens,
+    context: run?.stats?.context,
+    startedAt: run?.startedAt,
+    endedAt: run?.endedAt,
     workspace: run?.workspace,
   });
 
@@ -135,6 +178,75 @@ export default function RunPage() {
   );
   const syncedAssistantRef = useRef<string | null>(null);
 
+  // Queued turns live in sessionStorage so they survive the route push to the
+  // next run. Read synchronously, then publish after an await (set-state rule).
+  useEffect(() => {
+    if (!queueKey || loadedQueueKeyRef.current === queueKey) return;
+    loadedQueueKeyRef.current = queueKey;
+    let stored: QueuedTurn[] = [];
+    try {
+      const raw = window.sessionStorage.getItem(queueKey);
+      const parsed: unknown = raw ? JSON.parse(raw) : [];
+      if (Array.isArray(parsed)) stored = parsed.filter(isQueuedTurn);
+    } catch {
+      stored = [];
+    }
+    void Promise.resolve().then(() => {
+      setQueue(stored);
+      setQueuePaused(false);
+    });
+  }, [queueKey]);
+
+  useEffect(() => {
+    if (!queueKey || loadedQueueKeyRef.current !== queueKey) return;
+    try {
+      window.sessionStorage.setItem(queueKey, JSON.stringify(queue));
+    } catch {
+      // Best-effort; the in-memory queue still works for this run.
+    }
+  }, [queue, queueKey]);
+
+  // Dispatch the next queued turn once this run reaches a terminal state.
+  useEffect(() => {
+    if (
+      !run ||
+      !isTerminalStatus(run.status) ||
+      queuePaused ||
+      queue.length === 0 ||
+      dispatchInFlightRef.current ||
+      dispatchedRunRef.current === run.id
+    ) {
+      return;
+    }
+    const next = queue[0];
+    dispatchInFlightRef.current = true;
+    dispatchedRunRef.current = run.id;
+    void Promise.resolve()
+      .then(async () => {
+        setQueue((current) =>
+          current.filter((item) => item.id !== next.id),
+        );
+        const created = await createRun({
+          task: next.task,
+          model: next.model,
+          contextWindow: next.contextWindow,
+          history: toHistory(messages),
+          conversationId: run.conversationId ?? conversationIdRef.current,
+        });
+        if (created) return;
+        dispatchedRunRef.current = null;
+        setQueue((current) =>
+          current.some((item) => item.id === next.id)
+            ? current
+            : [next, ...current],
+        );
+        setQueuePaused(true);
+      })
+      .finally(() => {
+        dispatchInFlightRef.current = false;
+      });
+  }, [run, queue, queuePaused, messages, createRun]);
+
   // Persist the assistant's final answer once the run reaches a terminal state.
   useEffect(() => {
     const conversationId = run?.conversationId;
@@ -160,6 +272,22 @@ export default function RunPage() {
   async function send() {
     const task = draft.trim();
     if (task.length === 0 || submitting) return;
+
+    if (running || queue.length > 0) {
+      setQueue((current) => [
+        ...current,
+        {
+          id: crypto.randomUUID(),
+          task,
+          model: modelOverride.trim() || undefined,
+          contextWindow: contextWindowTokens,
+        },
+      ]);
+      setQueuePaused(false);
+      setDraft("");
+      return;
+    }
+
     const conversationId = run?.conversationId ?? conversationIdRef.current;
     conversationIdRef.current = conversationId;
     enqueueConversationEvent({
@@ -174,6 +302,7 @@ export default function RunPage() {
     const created = await createRun({
       task,
       model: modelOverride.trim() || undefined,
+      contextWindow: contextWindowTokens,
       history: toHistory(messages),
       conversationId,
     });
@@ -207,6 +336,7 @@ export default function RunPage() {
               <ContextStatsPanel
                 model={run.model}
                 context={run.stats.context}
+                contextWindowTokens={run.contextWindowTokens}
               />
             ) : null}
             {run?.error ? (
@@ -240,6 +370,7 @@ export default function RunPage() {
                   void createRun({
                     task: run.task,
                     model: modelOverride.trim() || undefined,
+                    contextWindow: run.contextWindowTokens,
                     history: run.history,
                     conversationId: run.conversationId,
                   });
@@ -248,6 +379,61 @@ export default function RunPage() {
           }
           onEdit={run ? () => setDraft(run.task) : undefined}
         />
+
+        {queue.length > 0 ? (
+          <div className="mx-auto w-full max-w-3xl shrink-0 px-3 pb-1 sm:px-4">
+            <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2">
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] font-medium text-[var(--text)]">
+                  Queued · {queue.length}
+                </span>
+                <span className="text-2xs text-[var(--text-faint)]">
+                  {queuePaused
+                    ? "Paused after a failed send"
+                    : running
+                      ? "Sends when this run finishes"
+                      : "Ready to send"}
+                </span>
+                {queuePaused ? (
+                  <button
+                    type="button"
+                    onClick={() => setQueuePaused(false)}
+                    className="ml-auto text-2xs font-medium text-[var(--text)] underline-offset-2 hover:underline"
+                  >
+                    Retry
+                  </button>
+                ) : null}
+              </div>
+              <ul className="mt-1.5 space-y-1">
+                {queue.map((item) => (
+                  <li
+                    key={item.id}
+                    className="flex items-start gap-2 rounded-md bg-[var(--bg)]/40 px-2 py-1.5"
+                  >
+                    <span className="mt-0.5 font-mono text-2xs text-[var(--text-faint)]">
+                      {item.contextWindow / 1000}k
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-xs text-[var(--text-muted)]">
+                      {item.task}
+                    </span>
+                    <button
+                      type="button"
+                      aria-label="Remove queued message"
+                      onClick={() =>
+                        setQueue((current) =>
+                          current.filter((queued) => queued.id !== item.id),
+                        )
+                      }
+                      className="shrink-0 text-[var(--text-faint)] transition-colors hover:text-[var(--text)]"
+                    >
+                      <X className="size-3" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        ) : null}
 
         <ChatComposer
           value={draft}

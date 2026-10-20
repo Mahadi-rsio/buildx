@@ -13,7 +13,7 @@ export default function NewChatPage() {
   useShellMeta({ status: "idle" });
 
   const { createRun, submitting, error } = useCreateRun();
-  const { modelOverride, setModelOverride } = useShell();
+  const { modelOverride, setModelOverride, contextWindowTokens } = useShell();
   const [draft, setDraft] = useState("");
   const conversationIdRef = useRef<string | null>(null);
 
@@ -36,6 +36,7 @@ export default function NewChatPage() {
     const created = await createRun({
       task,
       model: modelOverride.trim() || undefined,
+      contextWindow: contextWindowTokens,
       conversationId,
     });
     if (created) setDraft("");

@@ -9,7 +9,12 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { RunStatus } from "@buildx/shared";
+import {
+  DEFAULT_CONTEXT_WINDOW_TOKENS,
+  type ContextUsagePayload,
+  type ContextWindowTokens,
+  type RunStatus,
+} from "@buildx/shared";
 import {
   loadShellPrefs,
   saveShellPrefs,
@@ -29,6 +34,10 @@ export interface ShellMeta {
   task?: string;
   steps?: number;
   tokens?: number;
+  contextWindowTokens?: number;
+  context?: ContextUsagePayload;
+  startedAt?: number;
+  endedAt?: number;
   workspace?: WorkspaceRuntime;
 }
 
@@ -54,6 +63,8 @@ interface ShellContextValue {
   setUsageOpen: (open: boolean) => void;
   modelOverride: string;
   setModelOverride: (model: string) => void;
+  contextWindowTokens: ContextWindowTokens;
+  setContextWindowTokens: (tokens: ContextWindowTokens) => void;
 }
 
 const ShellContext = createContext<ShellContextValue | null>(null);
@@ -72,19 +83,59 @@ export function useShell(): ShellContextValue {
  */
 export function useShellMeta(meta: ShellMeta): void {
   const { setMeta } = useShell();
-  const { status, model, runId, workspaceId, task, steps, tokens, workspace } = meta;
+  const {
+    status,
+    model,
+    runId,
+    workspaceId,
+    task,
+    steps,
+    tokens,
+    contextWindowTokens,
+    context,
+    startedAt,
+    endedAt,
+    workspace,
+  } = meta;
 
   useEffect(() => {
     let alive = true;
     void (async () => {
       await Promise.resolve();
       if (!alive) return;
-      setMeta({ status, model, runId, workspaceId, task, steps, tokens, workspace });
+      setMeta({
+        status,
+        model,
+        runId,
+        workspaceId,
+        task,
+        steps,
+        tokens,
+        contextWindowTokens,
+        context,
+        startedAt,
+        endedAt,
+        workspace,
+      });
     })();
     return () => {
       alive = false;
     };
-  }, [status, model, runId, workspaceId, task, steps, tokens, workspace, setMeta]);
+  }, [
+    status,
+    model,
+    runId,
+    workspaceId,
+    task,
+    steps,
+    tokens,
+    contextWindowTokens,
+    context,
+    startedAt,
+    endedAt,
+    workspace,
+    setMeta,
+  ]);
 }
 
 export function ShellProvider({ children }: { children: ReactNode }) {
@@ -92,6 +143,7 @@ export function ShellProvider({ children }: { children: ReactNode }) {
     sidebarCollapsed: false,
     panelOpen: false,
     modelOverride: "",
+    contextWindowTokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
   });
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [panelTouched, setPanelTouched] = useState(false);
@@ -154,6 +206,13 @@ export function ShellProvider({ children }: { children: ReactNode }) {
     [updatePrefs],
   );
 
+  const setContextWindowTokens = useCallback(
+    (contextWindowTokens: ContextWindowTokens) => {
+      updatePrefs({ contextWindowTokens });
+    },
+    [updatePrefs],
+  );
+
   const panelVisible = prefs.panelOpen && (!isMobile || panelTouched);
 
   const value = useMemo<ShellContextValue>(
@@ -175,6 +234,8 @@ export function ShellProvider({ children }: { children: ReactNode }) {
       setUsageOpen,
       modelOverride: prefs.modelOverride,
       setModelOverride,
+      contextWindowTokens: prefs.contextWindowTokens,
+      setContextWindowTokens,
     }),
     [
       meta,
@@ -182,6 +243,7 @@ export function ShellProvider({ children }: { children: ReactNode }) {
       prefs.sidebarCollapsed,
       prefs.panelOpen,
       prefs.modelOverride,
+      prefs.contextWindowTokens,
       toggleCollapsed,
       sidebarOpen,
       togglePanel,
@@ -191,6 +253,7 @@ export function ShellProvider({ children }: { children: ReactNode }) {
       panelTab,
       usageOpen,
       setModelOverride,
+      setContextWindowTokens,
     ],
   );
 

@@ -36,7 +36,7 @@ export function ModelPicker({
   const selected = models.some((m) => m.id === requested) ? requested : "";
   const effective = selected || defaultModel;
   const currentOption = models.find((m) => m.id === effective);
-  const displayName = currentOption?.name || selected || defaultModel || "Auto";
+  const displayName = currentOption?.name || selected || defaultModel || "auto";
 
   // Drop stale persisted overrides (removed providers/aliases) once the real
   // catalog is known, so the composer never sends an unroutable model id.
@@ -58,7 +58,7 @@ export function ModelPicker({
 
   const visible = filtered.slice(0, MAX_RESULTS);
 
-  // Group the visible models by provider (LiteLLM / OpenRouter / ...) so the
+  // Group the visible models by provider (free / OpenRouter / ...) so the
   // dropdown reads as distinct catalogs.
   const groups = (() => {
     const map = new Map<string, { id: string; label: string; models: ModelOption[] }>();
@@ -168,11 +168,6 @@ export function ModelPicker({
                             {isDefault ? (
                               <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground">
                                 default
-                              </span>
-                            ) : null}
-                            {m.provider ? (
-                              <span className="shrink-0 rounded bg-border/60 px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground/80">
-                                {m.provider}
                               </span>
                             ) : null}
                           </div>

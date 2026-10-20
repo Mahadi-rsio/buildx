@@ -1,6 +1,7 @@
 import type { RunTaskUsage } from "@buildx/agent";
 import type {
   ContextUsagePayload,
+  ContextWindowTokens,
   ConversationTurn,
   RunEvent,
   RunStatus,
@@ -44,10 +45,14 @@ export interface RunSummary {
   status: RunStatus;
   model: string;
   maxSteps: number;
+  /** Context window selected for this run (compaction + utilization). */
+  contextWindowTokens: ContextWindowTokens;
   /** Id of the sandbox workspace backing this run (equal to the run id here). */
   workspaceId: string;
   createdAt: number;
   updatedAt: number;
+  startedAt?: number;
+  endedAt?: number;
   error?: string;
   stats?: RunStats;
   workspace: WorkspaceRuntime;

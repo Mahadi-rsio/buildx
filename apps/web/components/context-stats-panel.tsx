@@ -20,14 +20,20 @@ function formatTokens(value: number | undefined): string {
 export function ContextStatsPanel({
   model,
   context,
+  contextWindowTokens,
   className,
 }: {
   model: string | undefined;
   context?: ContextUsagePayload | undefined;
+  /** Selected run window, used before the first usage payload arrives. */
+  contextWindowTokens?: number;
   className?: string;
 }) {
   const contextLimit =
-    context?.contextLimit ?? getModelContextWindow(model) ?? undefined;
+    context?.contextLimit ??
+    contextWindowTokens ??
+    getModelContextWindow(model) ??
+    undefined;
   const assembled = context?.assembledTokens;
   const percent = context?.utilizationPercent;
 

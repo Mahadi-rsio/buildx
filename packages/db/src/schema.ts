@@ -1,4 +1,7 @@
-import type { ConversationTurn } from "@buildx/shared";
+import {
+  DEFAULT_CONTEXT_WINDOW_TOKENS,
+  type ConversationTurn,
+} from "@buildx/shared";
 import { relations, sql } from "drizzle-orm";
 import {
   pgTable,
@@ -276,6 +279,10 @@ export const runs = pgTable(
     /** Human label for the sandbox workspace backing this run. */
     workspaceName: text("workspace_name"),
     maxSteps: integer("max_steps").notNull().default(40),
+    /** Selected context window: drives compaction and live utilization stats. */
+    contextWindowTokens: integer("context_window_tokens")
+      .notNull()
+      .default(DEFAULT_CONTEXT_WINDOW_TOKENS),
     stepCount: integer("step_count").notNull().default(0),
     inputTokens: integer("input_tokens").notNull().default(0),
     outputTokens: integer("output_tokens").notNull().default(0),

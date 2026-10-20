@@ -77,6 +77,7 @@ export async function POST(request: Request): Promise<Response> {
       task: parsed.data.task.trim(),
       model: selectedModel,
       maxSteps: parsed.data.maxSteps ?? config.maxSteps,
+      contextWindowTokens: parsed.data.contextWindow,
       history: parsed.data.history,
       conversationId: parsed.data.conversationId,
       idempotencyKey: parsed.data.idempotencyKey,

@@ -2,7 +2,7 @@
 
 import { useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { ConversationTurn } from "@buildx/shared";
+import type { ContextWindowTokens, ConversationTurn } from "@buildx/shared";
 import { getQueryClient } from "@/lib/query-client";
 import { quotaQueryKey } from "@/hooks/use-quota";
 import { runsQueryKey } from "@/hooks/use-runs";
@@ -16,6 +16,7 @@ export function useCreateRun() {
     async (args: {
       task: string;
       model?: string;
+      contextWindow?: ContextWindowTokens;
       history?: ConversationTurn[];
       conversationId?: string;
     }) => {
@@ -31,6 +32,7 @@ export function useCreateRun() {
           body: JSON.stringify({
             task: trimmed,
             model: args.model?.trim() || undefined,
+            contextWindow: args.contextWindow,
             history: args.history?.length ? args.history : undefined,
             conversationId: args.conversationId,
           }),

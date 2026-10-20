@@ -13,6 +13,16 @@ test("createRunSchema rejects an empty task", () => {
   assert.throws(() => createRunSchema.parse({ task: "" }));
 });
 
+test("createRunSchema accepts supported context windows only", () => {
+  assert.equal(
+    createRunSchema.parse({ task: "x", contextWindow: 200_000 }).contextWindow,
+    200_000,
+  );
+  assert.throws(() =>
+    createRunSchema.parse({ task: "x", contextWindow: 300_000 }),
+  );
+});
+
 test("loadEnv applies defaults and ignores blank values", () => {
   const env = loadEnv({
     AGENT_MODEL: "",

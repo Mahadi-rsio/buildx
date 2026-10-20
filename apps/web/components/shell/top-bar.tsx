@@ -7,7 +7,6 @@ import { ModelPicker } from "@/components/model-picker";
 import { ThemeToggle } from "@/components/shell/theme-toggle";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useShell } from "@/components/shell/shell-context";
-import { cn } from "@/lib/utils";
 
 export function TopBar() {
   const isMobile = useIsMobile();
@@ -22,9 +21,6 @@ export function TopBar() {
     panelOpen,
     togglePanel,
   } = useShell();
-
-  const status = meta.status;
-  const active = status === "running" || status === "queued" || status === "waiting_input";
 
   return (
     <header className="flex h-12 shrink-0 items-center gap-1.5 border-b border-border bg-background/80 px-2 backdrop-blur sm:gap-2 sm:px-3">
@@ -69,18 +65,8 @@ export function TopBar() {
         </Link>
       </div>
 
-      {/* Center: connection dot + truncated run title. */}
+      {/* Center: truncated run title. */}
       <div className="flex min-w-0 flex-1 items-center justify-center gap-2 overflow-hidden px-1">
-        <span
-          aria-hidden
-          title={active ? `Connected · ${status.replace("_", " ")}` : "Idle"}
-          className={cn(
-            "size-1.5 shrink-0 rounded-full",
-            active
-              ? "bg-[var(--text)] animate-pulse motion-reduce:animate-none"
-              : "bg-[var(--text-faint)]",
-          )}
-        />
         {meta.task ? (
           <span
             title={meta.task}
@@ -89,7 +75,6 @@ export function TopBar() {
             {meta.task}
           </span>
         ) : null}
-        <span className="sr-only">{status.replace("_", " ")}</span>
       </div>
 
       <div className="flex shrink-0 items-center gap-0.5 sm:gap-1">
