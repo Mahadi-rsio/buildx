@@ -67,6 +67,45 @@ export const mcpServerUpdateSchema = z
 export type McpServerCreateInput = z.infer<typeof mcpServerCreateSchema>;
 export type McpServerUpdateInput = z.infer<typeof mcpServerUpdateSchema>;
 
+/**
+ * GitHub's official MCP endpoint (api.githubcopilot.com) and the retired
+ * `github` catalog entry are blocked: repository work goes through the local
+ * git service instead. Generic custom MCP URLs and every other provider stay
+ * available.
+ */
+export const BLOCKED_MCP_CATALOG_ID = "github";
+export const BLOCKED_MCP_HOST = "api.githubcopilot.com";
+
+export function isBlockedGitHubMcp(input: {
+  catalogId?: string | null;
+  url?: string | null;
+}): boolean {
+  if ((input.catalogId ?? "").trim().toLowerCase() === BLOCKED_MCP_CATALOG_ID) {
+    return true;
+  }
+  const raw = (input.url ?? "").trim();
+  if (!raw) return false;
+  try {
+    const hostname = new URL(raw).hostname.toLowerCase().replace(/\.$/, "");
+    return hostname === BLOCKED_MCP_HOST;
+  } catch {
+    return false;
+  }
+}
+
+/** Standard 400 payload when a GitHub MCP server is requested. */
+export function githubMcpDisabled(): Response {
+  return Response.json(
+    {
+      error: "github_mcp_disabled",
+      message:
+        "The GitHub MCP server is not supported. Use the workspace Git tools " +
+        "(clone, branches, commits, local pull-request drafts) instead.",
+    },
+    { status: 400 },
+  );
+}
+
 /** Turn a ZodError into the first human-readable issue. */
 export function firstIssue(error: z.ZodError): string {
   return error.issues[0]?.message ?? "invalid request";

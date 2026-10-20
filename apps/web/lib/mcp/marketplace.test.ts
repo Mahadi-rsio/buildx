@@ -18,22 +18,22 @@ import {
 } from "./oauth";
 
 const OAUTH: McpOAuthConfig = {
-  provider: "github",
-  authorizationUrl: "https://github.com/login/oauth/authorize",
-  tokenUrl: "https://github.com/login/oauth/access_token",
-  scopes: ["repo", "read:user"],
+  provider: "vercel",
+  authorizationUrl: "https://vercel.com/oauth/authorize",
+  tokenUrl: "https://api.vercel.com/v2/oauth/access_token",
+  scopes: [],
 };
 
 const ENTRY: McpCatalogEntry = {
-  id: "github",
-  name: "GitHub",
-  summary: "Repos",
+  id: "vercel",
+  name: "Vercel",
+  summary: "Deployments",
   description: "Desc",
-  category: "code",
+  category: "dev-tools",
   tags: [],
-  icon: "🐙",
-  officialUrl: "https://example.com",
-  endpoint: "https://api.githubcopilot.com/mcp/",
+  icon: "▲",
+  officialUrl: "https://vercel.com",
+  endpoint: "https://mcp.vercel.app/mcp",
   authModes: ["oauth", "api-key"],
   oauth: OAUTH,
   popularity: 90,
@@ -53,28 +53,28 @@ test("PKCE verifier is URL-safe and produces a stable S256 challenge", () => {
 });
 
 test("buildAuthorizationUrl includes PKCE + state + redirect params", () => {
-  process.env.MCP_OAUTH_GITHUB_CLIENT_ID = "client-123";
+  process.env.MCP_OAUTH_VERCEL_CLIENT_ID = "client-123";
   const url = new URL(
     buildAuthorizationUrl({
       entry: ENTRY,
       oauth: OAUTH,
       state: "state-abc",
       pkce: { verifier: "v", challenge: "c" },
-      redirectUri: "http://localhost:3000/api/mcp/catalog/github/oauth/callback",
+      redirectUri: "http://localhost:3000/api/mcp/catalog/vercel/oauth/callback",
     }),
   );
-  assert.equal(url.origin + url.pathname, "https://github.com/login/oauth/authorize");
+  assert.equal(url.origin + url.pathname, "https://vercel.com/oauth/authorize");
   assert.equal(url.searchParams.get("client_id"), "client-123");
   assert.equal(url.searchParams.get("response_type"), "code");
   assert.equal(url.searchParams.get("state"), "state-abc");
   assert.equal(url.searchParams.get("code_challenge"), "c");
   assert.equal(url.searchParams.get("code_challenge_method"), "S256");
-  assert.equal(url.searchParams.get("scope"), "repo read:user");
+  assert.equal(url.searchParams.get("scope"), null);
 });
 
 test("exchangeAuthorizationCode posts real PKCE params and reads the token", async () => {
-  process.env.MCP_OAUTH_GITHUB_CLIENT_ID = "client-123";
-  process.env.MCP_OAUTH_GITHUB_CLIENT_SECRET = "secret-456";
+  process.env.MCP_OAUTH_VERCEL_CLIENT_ID = "client-123";
+  process.env.MCP_OAUTH_VERCEL_CLIENT_SECRET = "secret-456";
   let postedBody: string | null = null;
   const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit) => {
     assert.equal(String(input), OAUTH.tokenUrl);
@@ -82,9 +82,9 @@ test("exchangeAuthorizationCode posts real PKCE params and reads the token", asy
     postedBody = init?.body as string;
     return new Response(
       JSON.stringify({
-        access_token: "gho_token_1",
+        access_token: "vc_token_1",
         token_type: "bearer",
-        scope: "repo read:user",
+        scope: "",
       }),
       { status: 200, headers: { "Content-Type": "application/json" } },
     );
@@ -97,7 +97,7 @@ test("exchangeAuthorizationCode posts real PKCE params and reads the token", asy
     redirectUri: "http://localhost:3000/cb",
     fetchImpl: fetchImpl as typeof fetch,
   });
-  assert.equal(token.accessToken, "gho_token_1");
+  assert.equal(token.accessToken, "vc_token_1");
   assert.equal(token.tokenType, "bearer");
 
   const params = new URLSearchParams(postedBody ?? "");
@@ -110,8 +110,8 @@ test("exchangeAuthorizationCode posts real PKCE params and reads the token", asy
 });
 
 test("exchangeAuthorizationCode surfaces provider error descriptions", async () => {
-  process.env.MCP_OAUTH_GITHUB_CLIENT_ID = "client-123";
-  process.env.MCP_OAUTH_GITHUB_CLIENT_SECRET = "secret-456";
+  process.env.MCP_OAUTH_VERCEL_CLIENT_ID = "client-123";
+  process.env.MCP_OAUTH_VERCEL_CLIENT_SECRET = "secret-456";
   const fetchImpl = async () =>
     new Response(
       JSON.stringify({ error: "invalid_grant", error_description: "code expired" }),
@@ -131,8 +131,8 @@ test("exchangeAuthorizationCode surfaces provider error descriptions", async () 
 });
 
 test("exchangeAuthorizationCode rejects a missing access_token", async () => {
-  process.env.MCP_OAUTH_GITHUB_CLIENT_ID = "client-123";
-  process.env.MCP_OAUTH_GITHUB_CLIENT_SECRET = "secret-456";
+  process.env.MCP_OAUTH_VERCEL_CLIENT_ID = "client-123";
+  process.env.MCP_OAUTH_VERCEL_CLIENT_SECRET = "secret-456";
   const fetchImpl = async () =>
     new Response(JSON.stringify({}), {
       status: 200,
@@ -153,22 +153,22 @@ test("exchangeAuthorizationCode rejects a missing access_token", async () => {
 test("oauthConfigured reflects env presence", () => {
   assert.equal(
     oauthConfigured(OAUTH, {
-      MCP_OAUTH_GITHUB_CLIENT_ID: "id",
-      MCP_OAUTH_GITHUB_CLIENT_SECRET: "secret",
+      MCP_OAUTH_VERCEL_CLIENT_ID: "id",
+      MCP_OAUTH_VERCEL_CLIENT_SECRET: "secret",
     }),
     true,
   );
   assert.equal(
-    oauthConfigured(OAUTH, { MCP_OAUTH_GITHUB_CLIENT_ID: "id" }),
+    oauthConfigured(OAUTH, { MCP_OAUTH_VERCEL_CLIENT_ID: "id" }),
     false,
   );
   assert.equal(oauthConfigured(OAUTH, {}), false);
 });
 
 test("oauthEnvKeys normalizes provider names", () => {
-  assert.deepEqual(oauthEnvKeys("github"), {
-    clientIdVar: "MCP_OAUTH_GITHUB_CLIENT_ID",
-    clientSecretVar: "MCP_OAUTH_GITHUB_CLIENT_SECRET",
+  assert.deepEqual(oauthEnvKeys("vercel"), {
+    clientIdVar: "MCP_OAUTH_VERCEL_CLIENT_ID",
+    clientSecretVar: "MCP_OAUTH_VERCEL_CLIENT_SECRET",
   });
 });
 
@@ -184,7 +184,7 @@ test("catalog: local-only entries are never connectable and note why", () => {
 
 test("catalog: every remote entry has a verified-looking endpoint and auth", () => {
   const remote = MCP_CATALOG.filter((entry) => !entry.requiresLocal);
-  assert.ok(remote.length >= 10, `expected >= 10 remote entries, got ${remote.length}`);
+  assert.ok(remote.length >= 9, `expected >= 9 remote entries, got ${remote.length}`);
   for (const entry of remote) {
     assert.ok(entry.endpoint?.startsWith("https://"), `${entry.id} uses https`);
     assert.ok(entry.authModes.length > 0, `${entry.id} declares auth`);
@@ -225,4 +225,34 @@ test("catalogAuthHeaders: respects each provider's header and prefix", () => {
     Authorization: "Bearer fc-key",
   });
   assert.deepEqual(catalogAuthHeaders(exa, "   "), {});
+});
+
+test("catalog: the GitHub MCP entry is removed entirely", () => {
+  assert.equal(getCatalogEntry("github"), undefined);
+  assert.equal(
+    MCP_CATALOG.some((entry) => entry.id === "github"),
+    false,
+    "no catalog entry may use id github",
+  );
+  assert.equal(
+    popularCatalog(MCP_CATALOG.length).some((entry) => entry.id === "github"),
+    false,
+    "the popular grid never lists GitHub MCP",
+  );
+});
+
+test("catalog: generic non-GitHub providers keep working", () => {
+  process.env.MCP_OAUTH_VERCEL_CLIENT_ID = "client-123";
+  const vercel = getCatalogEntry("vercel");
+  assert.ok(vercel, "vercel remains in the catalog");
+  assert.equal(vercel.authModes.includes("oauth"), true);
+
+  const authUrl = buildAuthorizationUrl({
+    entry: vercel,
+    oauth: vercel.oauth ?? OAUTH,
+    state: "state-generic",
+    pkce: { verifier: "v", challenge: "c" },
+    redirectUri: "http://localhost:3000/api/mcp/catalog/vercel/oauth/callback",
+  });
+  assert.equal(new URL(authUrl).hostname, "vercel.com");
 });

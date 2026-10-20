@@ -16,6 +16,8 @@ interface BoxMockOptions {
   stdout?: Uint8Array;
   /** Additional stderr chunk to merge into output (for legacy test compat). */
   stderr?: Uint8Array;
+  /** Override the live exec.session() implementation. */
+  session?: (options: Record<string, unknown>) => Promise<Record<string, unknown>>;
 }
 
 /** Default output chunks. Combined into a single "output" event in the stream. */
@@ -146,7 +148,8 @@ function makeMockBox(options: BoxMockOptions = {}): Box {
           status: "completed" as const,
         };
       },
-      session: async () => ({}),
+      session: async (sessionOptions: Record<string, unknown>) =>
+        options.session ? options.session(sessionOptions) : {},
       code: async () => {},
     },
     snapshot: async (_options: { name: string }) => {
@@ -570,4 +573,79 @@ test("BoxSandbox reconnects when a concurrent create wins the race", async () =>
     Box.getByName = originalGet;
     Box.create = originalCreate;
   }
+});
+
+test("BoxSandbox.openSession maps options and forwards session controls", async () => {
+  const seen: Record<string, unknown> = {};
+  const writes: (string | Uint8Array)[] = [];
+  const resizes: [number, number][] = [];
+  const signals: (string | undefined)[] = [];
+  let terminated = false;
+  let closed = false;
+
+  const s = makeSandbox({
+    session: async (options) => {
+      Object.assign(seen, options);
+      const onStdout = options.onStdout as (data: Uint8Array) => void;
+      const onStderr = options.onStderr as (data: Uint8Array) => void;
+      const bytes = Buffer.from("héllo");
+      onStdout(bytes.subarray(0, 2));
+      onStdout(bytes.subarray(2));
+      onStderr(Buffer.from("warn"));
+      return {
+        pid: 99,
+        execId: "exec-99",
+        write: (data: string | Uint8Array) => writes.push(data),
+        endStdin: () => writes.push("<EOF>"),
+        resize: (rows: number, cols: number) => resizes.push([rows, cols]),
+        kill: (signal?: string) => signals.push(signal),
+        terminate: () => {
+          terminated = true;
+        },
+        wait: async () => 7,
+        close: () => {
+          closed = true;
+        },
+      };
+    },
+  });
+  await s.start();
+
+  const chunks: ExecChunk[] = [];
+  const handle = await s.openSession({
+    cmd: "npm test",
+    cwd: "src",
+    env: { FOO: "bar" },
+    rows: 20,
+    cols: 80,
+    onOutput: (chunk) => chunks.push(chunk),
+  });
+
+  assert.equal(seen.cmd, "npm test");
+  assert.equal(seen.cwd, "/workspace/home/src");
+  assert.deepEqual(seen.env, ["FOO=bar"]);
+  assert.equal(seen.tty, true);
+  assert.equal(seen.rows, 20);
+  assert.equal(seen.cols, 80);
+  assert.equal(handle.pid, 99);
+  assert.equal(handle.execId, "exec-99");
+  assert.deepEqual(chunks, [
+    { stream: "stdout", data: "h" },
+    { stream: "stdout", data: "éllo" },
+    { stream: "stderr", data: "warn" },
+  ]);
+
+  handle.write("y");
+  handle.endStdin();
+  handle.resize(40, 120);
+  handle.kill("INT");
+  handle.terminate(500);
+  assert.equal(await handle.wait(), 7);
+  handle.close();
+
+  assert.deepEqual(writes, ["y", "<EOF>"]);
+  assert.deepEqual(resizes, [[40, 120]]);
+  assert.deepEqual(signals, ["INT"]);
+  assert.equal(terminated, true);
+  assert.equal(closed, true);
 });

@@ -1,6 +1,13 @@
 import { assertSafeMcpUrl, listMcpServerTools, McpSecurityError } from "@buildx/agent";
 import { getCurrentUser, unauthorized } from "@/lib/auth/server";
-import { cleanHeaders, firstIssue, mcpServerCreateSchema, privateHostsAllowed } from "@/lib/mcp/validation";
+import {
+  cleanHeaders,
+  firstIssue,
+  githubMcpDisabled,
+  isBlockedGitHubMcp,
+  mcpServerCreateSchema,
+  privateHostsAllowed,
+} from "@/lib/mcp/validation";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -31,6 +38,9 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
   const input = parsed.data;
+  if (isBlockedGitHubMcp({ catalogId: input.catalogId, url: input.url })) {
+    return githubMcpDisabled();
+  }
   if (input.allowPrivate && !privateHostsAllowed()) {
     return Response.json(
       {

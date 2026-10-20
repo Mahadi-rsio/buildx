@@ -4,9 +4,12 @@ import { tool } from "ai";
 import { z } from "zod";
 
 const DEFAULT_READ_LIMIT = 400;
-const MAX_OUTPUT_CHARS = 20_000;
 /** Applied when the model omits timeoutMs, so an interactive CLI cannot hang the run. */
 const DEFAULT_TIMEOUT_MS = 180_000;
+const MAX_STDOUT_CHARS = 12_000;
+const MAX_STDERR_CHARS = 8_000;
+const MAX_TOTAL_OUTPUT_CHARS = 16_000;
+const MAX_LIST_DIR_ENTRIES = 500;
 const MAX_SEARCH_FILES = 300;
 const MAX_SEARCH_FILE_CHARS = 200_000;
 const SEARCH_CHUNK_LINES = 40;
@@ -35,14 +38,64 @@ export interface ToolHooks {
   }) => void | Promise<void>;
 }
 
-/** Keep the head and tail of long output, eliding the middle. */
-function truncate(text: string, max = MAX_OUTPUT_CHARS): string {
-  if (text.length <= max) return text;
-  const half = Math.floor(max / 2);
-  const head = text.slice(0, half);
-  const tail = text.slice(text.length - half);
-  const omitted = text.length - head.length - tail.length;
-  return `${head}\n\n… ${omitted} characters omitted — narrow the command …\n\n${tail}`;
+interface TruncatedText {
+  text: string;
+  truncated: boolean;
+  omitted: number;
+}
+
+/**
+ * Keep a bounded head+tail view. `tailShare` decides how much of the budget is
+ * reserved for the end of the text, so stderr can preserve the actual failure.
+ */
+function truncateMiddle(
+  text: string,
+  maxChars: number,
+  tailShare = 0.5,
+): TruncatedText {
+  if (text.length <= maxChars) {
+    return { text, truncated: false, omitted: 0 };
+  }
+  const roughNotice = "\n\n… [truncated 000000000 chars; kept head and tail] …\n\n";
+  let budget = Math.max(0, maxChars - roughNotice.length);
+  let headLen = Math.floor(budget * (1 - tailShare));
+  let tailLen = Math.max(0, budget - headLen);
+  let omitted = text.length - headLen - tailLen;
+  let notice = `\n\n… [truncated ${omitted} chars; kept first ${headLen} and last ${tailLen}] …\n\n`;
+  budget = Math.max(0, maxChars - notice.length);
+  headLen = Math.floor(budget * (1 - tailShare));
+  tailLen = Math.max(0, budget - headLen);
+  omitted = text.length - headLen - tailLen;
+  notice = `\n\n… [truncated ${omitted} chars; kept first ${headLen} and last ${tailLen}] …\n\n`;
+  return {
+    text: text.slice(0, headLen) + notice + text.slice(text.length - tailLen),
+    truncated: true,
+    omitted,
+  };
+}
+
+/** Bound each stream and the combined result without dropping stderr's tail. */
+function boundBashOutput(
+  rawStdout: string,
+  rawStderr: string,
+): { stdout: string; stderr: string; truncated: boolean } {
+  const stdout = truncateMiddle(rawStdout, MAX_STDOUT_CHARS);
+  const stderr = truncateMiddle(rawStderr, MAX_STDERR_CHARS, 0.75);
+  let boundedStdout = stdout.text;
+  const boundedStderr = stderr.text;
+  let truncated = stdout.truncated || stderr.truncated;
+
+  if (boundedStdout.length + boundedStderr.length > MAX_TOTAL_OUTPUT_CHARS) {
+    const stdoutBudget = Math.max(
+      0,
+      MAX_TOTAL_OUTPUT_CHARS - boundedStderr.length,
+    );
+    const total = truncateMiddle(boundedStdout, stdoutBudget, 0.4);
+    boundedStdout = total.text;
+    truncated = truncated || total.truncated;
+  }
+
+  return { stdout: boundedStdout, stderr: boundedStderr, truncated };
 }
 
 /** Prefix each line with its 1-based number, starting at `startLine`. */
@@ -58,9 +111,31 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
+const EXIT_MARKER = /\n?\[buildx: command exited with code (-?\d+)\]\n?/g;
+
+/** Extract the sandbox's synthetic exit trailer and remove it from the text. */
+function extractExitMarker(text: string): { text: string; exitCode?: number } {
+  let exitCode: number | undefined;
+  const cleaned = text.replace(EXIT_MARKER, (_match, code: string) => {
+    exitCode = Number(code);
+    return "";
+  });
+  return { text: cleaned, exitCode };
+}
+
 /** Strip the sandbox's synthetic "command exited" trailer from stderr. */
 function stripExitMarker(text: string): string {
-  return text.replace(/\n?\[buildx: command exited with code \d+\]\n?/g, "").trim();
+  return extractExitMarker(text).text.trim();
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
+function abortError(message = "Tool execution aborted: run cancelled"): Error {
+  const error = new Error(message);
+  error.name = "AbortError";
+  return error;
 }
 
 async function execCapture(
@@ -306,10 +381,14 @@ function rankChunks(
 export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}) {
   const bash = tool({
     description:
-      "Run a shell command in the workspace and return combined stdout/stderr. " +
-      "Long output is truncated. Commands are non-interactive (stdin is closed) and " +
-      "are killed after 3 minutes unless timeoutMs is set. Scaffolding tools such as " +
-      "`npm create vue` must be given non-interactive flags (`--yes`, `--default`).",
+      "Run a shell command in the workspace. Returns structured stdout, stderr, " +
+      "exitCode, and a truncation flag; stdout and stderr are bounded separately and " +
+      "non-zero exits are normal results. Commands are non-interactive (stdin is " +
+      "closed) and are killed after 3 minutes unless timeoutMs is set. Prefer " +
+      "targeted commands (grep/sed, head, test runners) over dumping whole files or " +
+      "directories, and do not repeat a command whose output you already have. " +
+      "Scaffolding tools such as `npm create vue` must be given non-interactive flags " +
+      "(`--yes`, `--default`).",
     inputSchema: z.object({
       command: z.string().describe("The shell command to run"),
       cwd: z
@@ -325,29 +404,71 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}) {
         .describe("Kill the command after this many milliseconds"),
     }),
     execute: async ({ command, cwd, timeoutMs }, options) => {
-      if (options?.abortSignal?.aborted) {
-        throw new Error("Tool execution aborted: run cancelled");
+      if (options?.abortSignal?.aborted) throw abortError();
+
+      const timeout = timeoutMs ?? DEFAULT_TIMEOUT_MS;
+      const controller = new AbortController();
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, timeout);
+      const onAbort = (): void => controller.abort();
+      options?.abortSignal?.addEventListener("abort", onAbort, { once: true });
+
+      const startedAt = Date.now();
+      let stdout = "";
+      let stderr = "";
+      try {
+        for await (const chunk of sandbox.exec(command, {
+          cwd,
+          signal: controller.signal,
+        })) {
+          if (chunk.stream === "stdout") stdout += chunk.data;
+          else stderr += chunk.data;
+          await hooks.onTerminal?.({
+            stream: chunk.stream,
+            chunk: chunk.data,
+            toolCallId: options?.toolCallId,
+          });
+        }
+      } catch (error) {
+        const cancelled =
+          options?.abortSignal?.aborted === true ||
+          (!timedOut && isAbortError(error));
+        if (cancelled || !timedOut) throw error;
+      } finally {
+        clearTimeout(timer);
+        options?.abortSignal?.removeEventListener("abort", onAbort);
       }
-      let output = "";
-      for await (const chunk of sandbox.exec(command, {
-        cwd,
-        timeoutMs: timeoutMs ?? DEFAULT_TIMEOUT_MS,
-        signal: options?.abortSignal,
-      })) {
-        output += chunk.data;
-        await hooks.onTerminal?.({
-          stream: chunk.stream,
-          chunk: chunk.data,
-          toolCallId: options?.toolCallId,
-        });
+
+      if (options?.abortSignal?.aborted && !timedOut) throw abortError();
+
+      const parsed = extractExitMarker(stderr);
+      stderr = parsed.text;
+      if (timedOut) {
+        stderr += `\n[buildx: command timed out after ${timeout}ms]\n`;
       }
-      return { output: truncate(output.trimEnd() || "(no output)") };
+      const bounded = boundBashOutput(stdout.trimEnd(), stderr.trimEnd());
+      const result = {
+        command,
+        cwd: cwd ?? ".",
+        exitCode: timedOut ? 124 : (parsed.exitCode ?? 0),
+        stdout: bounded.stdout,
+        stderr: bounded.stderr,
+        truncated: bounded.truncated,
+        durationMs: Date.now() - startedAt,
+        ...(timedOut ? { timedOut: true } : {}),
+      };
+      return result;
     },
   });
 
   const read_file = tool({
     description:
-      "Read a file, optionally restricted to a line range, with line numbers.",
+      "Read a file with line numbers, optionally restricted to a line range. " +
+      "Prefer narrow ranges (offset/limit) and `sed -n`/`grep` over rereading " +
+      "entire files.",
     inputSchema: z.object({
       path: z.string().describe("File path relative to the workspace root"),
       offset: z.number().int().min(0).optional().describe("0-based first line"),
@@ -433,7 +554,9 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}) {
 
   const list_dir = tool({
     description:
-      "List files and directories up to a depth, ignoring common build and VCS directories.",
+      "List files and directories up to a depth, ignoring common build and VCS " +
+      "directories. Entries are capped; use glob/grep or read_file ranges instead " +
+      "of repeatedly dumping large trees.",
     inputSchema: z.object({
       path: z
         .string()
@@ -472,7 +595,12 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}) {
         .map((line) => (line.startsWith("./") ? line.slice(2) : line))
         .filter((line) => line.length > 0)
         .sort();
-      return { path: dir, entries };
+      const truncated = entries.length > MAX_LIST_DIR_ENTRIES;
+      return {
+        path: dir,
+        entries: entries.slice(0, MAX_LIST_DIR_ENTRIES),
+        truncated,
+      };
     },
   });
 

@@ -7,6 +7,8 @@ import type {
   ProcId,
   ReadRange,
   Sandbox,
+  SessionHandle,
+  SessionOptions,
 } from "./index";
 
 export interface LazyBoxSandboxOptions {
@@ -73,6 +75,10 @@ export class LazyBoxSandbox implements Sandbox {
 
   async *exec(cmd: string, opts?: ExecOptions): AsyncIterable<ExecChunk> {
     yield* (await this.box()).exec(cmd, opts);
+  }
+
+  async openSession(options: SessionOptions): Promise<SessionHandle> {
+    return (await this.box()).openSession(options);
   }
 
   async readFile(path: string, range?: ReadRange): Promise<string> {

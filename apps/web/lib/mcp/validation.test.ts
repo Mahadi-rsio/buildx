@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   cleanHeaders,
   firstIssue,
+  isBlockedGitHubMcp,
   isMissingTableError,
   mcpServerCreateSchema,
   schemaNotMigrated,
@@ -125,4 +126,29 @@ test("schemaNotMigrated returns a 503 with an actionable message", async () => {
   const data = (await response.json()) as { error?: string; message?: string };
   assert.equal(data.error, "schema_not_migrated");
   assert.match(data.message ?? "", /db:migrate/);
+});
+
+test("isBlockedGitHubMcp rejects the retired catalog entry and endpoint host", () => {
+  assert.equal(isBlockedGitHubMcp({ catalogId: "github" }), true);
+  assert.equal(isBlockedGitHubMcp({ catalogId: " GitHub " }), true);
+  assert.equal(
+    isBlockedGitHubMcp({ url: "https://api.githubcopilot.com/mcp/" }),
+    true,
+  );
+  assert.equal(
+    isBlockedGitHubMcp({ url: "https://API.GITHUBCOPILOT.COM/mcp/" }),
+    true,
+  );
+});
+
+test("isBlockedGitHubMcp leaves other providers and custom URLs alone", () => {
+  assert.equal(
+    isBlockedGitHubMcp({ catalogId: "vercel", url: "https://mcp.vercel.app/mcp" }),
+    false,
+  );
+  assert.equal(
+    isBlockedGitHubMcp({ url: "https://mcp.example.com/github" }),
+    false,
+  );
+  assert.equal(isBlockedGitHubMcp({}), false);
 });

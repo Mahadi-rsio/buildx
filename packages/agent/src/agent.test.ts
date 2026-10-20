@@ -781,8 +781,19 @@ test("tools regression: filesystem and shell tools (read_file, write_file, edit_
   assert.ok(storage.get("/workspace/home/sample.txt")?.includes("edited line 2"));
 
   // 4. bash
-  const bashRes = (await tools.bash.execute({ command: "echo hello" }, dummyOpts)) as { output: string };
-  assert.ok(bashRes.output.includes("output of: echo hello"));
+  const bashRes = (await tools.bash.execute({ command: "echo hello" }, dummyOpts)) as {
+    command: string;
+    cwd: string;
+    exitCode: number;
+    stdout: string;
+    stderr: string;
+    truncated: boolean;
+  };
+  assert.equal(bashRes.command, "echo hello");
+  assert.equal(bashRes.cwd, ".");
+  assert.equal(bashRes.exitCode, 0);
+  assert.ok(bashRes.stdout.includes("output of: echo hello"));
+  assert.equal(bashRes.truncated, false);
   assert.ok(
     terminalChunks.some(
       (chunk) =>
@@ -894,6 +905,159 @@ test("search, todo, and file-change tools work on TestSandbox", async () => {
       opts,
     );
     assert.deepEqual(changes, [{ path: "src/new.ts", change: "write" }]);
+  } finally {
+    await sandbox.destroy();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("bash bounds stdout and preserves the stderr tail with an explicit notice", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "buildx-agent-bash-bounds-"));
+  const sandbox = new TestSandbox({ rootDir: dir });
+  await sandbox.start();
+  try {
+    const tools = buildTools(sandbox);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const opts: any = { messages: [], toolCallId: "bash-bounds" };
+
+    const largeStdout = (await tools.bash.execute(
+      {
+        command: `node -e "process.stdout.write('A'.repeat(50000))"`,
+        timeoutMs: 10_000,
+      },
+      opts,
+    )) as {
+      stdout: string;
+      stderr: string;
+      exitCode: number;
+      truncated: boolean;
+    };
+    assert.equal(largeStdout.exitCode, 0);
+    assert.equal(largeStdout.truncated, true);
+    assert.ok(largeStdout.stdout.startsWith("A"));
+    assert.match(largeStdout.stdout, /truncated \d+ chars/);
+    assert.ok(largeStdout.stdout.length <= 12_000 + 200);
+
+    const largeStderr = (await tools.bash.execute(
+      {
+        command: `node -e "for (let i = 0; i < 4000; i++) process.stderr.write('err ' + i + '\\n')"`,
+        timeoutMs: 10_000,
+      },
+      opts,
+    )) as {
+      stdout: string;
+      stderr: string;
+      exitCode: number;
+      truncated: boolean;
+    };
+    assert.equal(largeStderr.exitCode, 0);
+    assert.equal(largeStderr.truncated, true);
+    assert.match(largeStderr.stderr, /truncated \d+ chars/);
+    assert.match(largeStderr.stderr, /err 0/);
+    assert.match(largeStderr.stderr, /err 3999/);
+  } finally {
+    await sandbox.destroy();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("bash treats non-zero exits as results and removes the exit marker", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "buildx-agent-bash-exit-"));
+  const sandbox = new TestSandbox({ rootDir: dir });
+  await sandbox.start();
+  try {
+    const tools = buildTools(sandbox);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const opts: any = { messages: [], toolCallId: "bash-exit" };
+    const result = (await tools.bash.execute(
+      { command: "printf 'out\n'; printf 'err\n' >&2; exit 7" },
+      opts,
+    )) as {
+      stdout: string;
+      stderr: string;
+      exitCode: number;
+      truncated: boolean;
+      timedOut?: boolean;
+    };
+    assert.equal(result.exitCode, 7);
+    assert.equal(result.stdout, "out");
+    assert.equal(result.stderr, "err");
+    assert.equal(result.truncated, false);
+    assert.equal(result.timedOut, undefined);
+    assert.doesNotMatch(result.stderr, /\[buildx: command exited/);
+  } finally {
+    await sandbox.destroy();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("bash returns exitCode 124 and timedOut for a timeout", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "buildx-agent-bash-timeout-"));
+  const sandbox = new TestSandbox({ rootDir: dir });
+  await sandbox.start();
+  try {
+    const tools = buildTools(sandbox);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const opts: any = { messages: [], toolCallId: "bash-timeout" };
+    const result = (await tools.bash.execute(
+      { command: "sleep 5", timeoutMs: 100 },
+      opts,
+    )) as {
+      stdout: string;
+      stderr: string;
+      exitCode: number;
+      timedOut?: boolean;
+    };
+    assert.equal(result.exitCode, 124);
+    assert.equal(result.timedOut, true);
+    assert.match(result.stderr, /timed out after 100ms/);
+  } finally {
+    await sandbox.destroy();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("bash streams raw chunks (including the exit trailer) to onTerminal", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "buildx-agent-bash-raw-"));
+  const sandbox = new TestSandbox({ rootDir: dir });
+  await sandbox.start();
+  try {
+    const chunks: Array<{ stream: "stdout" | "stderr"; chunk: string; toolCallId?: string }> = [];
+    const tools = buildTools(sandbox, {
+      onTerminal: (chunk) => {
+        chunks.push(chunk);
+      },
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const opts: any = { messages: [], toolCallId: "bash-raw" };
+    await tools.bash.execute(
+      { command: "printf 'one\n'; printf 'two\n' >&2; exit 3" },
+      opts,
+    );
+    assert.ok(
+      chunks.some(
+        (chunk) =>
+          chunk.toolCallId === "bash-raw" &&
+          chunk.stream === "stdout" &&
+          chunk.chunk.includes("one"),
+      ),
+    );
+    assert.ok(
+      chunks.some(
+        (chunk) =>
+          chunk.toolCallId === "bash-raw" &&
+          chunk.stream === "stderr" &&
+          chunk.chunk.includes("two"),
+      ),
+    );
+    assert.ok(
+      chunks.some(
+        (chunk) =>
+          chunk.stream === "stderr" &&
+          chunk.chunk.includes("[buildx: command exited with code 3]"),
+      ),
+      "raw terminal keeps the exit trailer",
+    );
   } finally {
     await sandbox.destroy();
     await rm(dir, { recursive: true, force: true });

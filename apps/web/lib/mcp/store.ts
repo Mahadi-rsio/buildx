@@ -1,7 +1,7 @@
 import { and, eq, getDb, mcpServers } from "@buildx/db";
 import type { McpServerConfig } from "@buildx/agent";
 import { decryptJson } from "./crypto";
-import { privateHostsAllowed } from "./validation";
+import { isBlockedGitHubMcp, privateHostsAllowed } from "./validation";
 import type { McpServerView } from "./types";
 
 export type McpServerRow = typeof mcpServers.$inferSelect;
@@ -77,6 +77,12 @@ export async function loadEnabledMcpServerConfigs(
     .where(and(eq(mcpServers.userId, userId), eq(mcpServers.enabled, true)));
   const configs: McpServerConfig[] = [];
   for (const row of rows) {
+    // GitHub MCP is retired. Old rows may still be enabled in the database, so
+    // never let them contribute tools to a run.
+    if (isBlockedGitHubMcp({ catalogId: row.catalogId, url: row.url })) {
+      console.warn(`[mcp] skipping retired GitHub MCP server ${row.id}`);
+      continue;
+    }
     try {
       configs.push({
         id: row.id,

@@ -22,8 +22,9 @@ import {
 } from "@/lib/shell-prefs";
 import { useIsMobile } from "@/hooks/use-mobile";
 import type { WorkspaceRuntime } from "@/lib/types";
+import { DEFAULT_PANEL_TAB, type PanelTab } from "@/lib/panel-tabs";
 
-export type PanelTab = "files" | "changes";
+export type { PanelTab } from "@/lib/panel-tabs";
 
 /** Live run info pushed up by the active page so the top bar stays truthful. */
 export interface ShellMeta {
@@ -147,7 +148,7 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   });
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [panelTouched, setPanelTouched] = useState(false);
-  const [panelTab, setPanelTab] = useState<PanelTab>("files");
+  const [panelTab, setPanelTab] = useState<PanelTab>(DEFAULT_PANEL_TAB);
   const [usageOpen, setUsageOpen] = useState(false);
   const [meta, setMetaState] = useState<ShellMeta>(IDLE_META);
   const [ready, setReady] = useState(false);

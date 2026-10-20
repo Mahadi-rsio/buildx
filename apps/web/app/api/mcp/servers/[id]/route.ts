@@ -6,6 +6,8 @@ import { findMcpServer, toMcpServerView } from "@/lib/mcp/store";
 import {
   cleanHeaders,
   firstIssue,
+  githubMcpDisabled,
+  isBlockedGitHubMcp,
   isMissingTableError,
   mcpServerUpdateSchema,
   privateHostsAllowed,
@@ -73,6 +75,9 @@ export async function PATCH(
 
     const nextUrl = input.url ?? existing.url;
     const nextAllowPrivate = input.allowPrivate ?? existing.allowPrivate;
+    if (isBlockedGitHubMcp({ catalogId: existing.catalogId, url: nextUrl })) {
+      return githubMcpDisabled();
+    }
     if (input.url !== undefined || input.allowPrivate !== undefined) {
       await assertSafeMcpUrl(nextUrl, { allowPrivate: nextAllowPrivate });
     }

@@ -6,12 +6,16 @@ import {
   ChevronRight,
   FolderOpen,
   FolderTree,
+  GitBranch,
   Home,
   RefreshCw,
+  TerminalSquare,
 } from "lucide-react";
 import { FileIcon } from "@/components/workspace/file-icon";
 import { CodeViewer } from "@/components/workspace/code-viewer";
 import { DiffView } from "@/components/workspace/diff-view";
+import { WorkspaceGit } from "@/components/workspace/workspace-git";
+import { WorkspaceTerminal } from "@/components/workspace/workspace-terminal";
 import { File, Tree, type TreeViewElement } from "@/components/ui/file-tree";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -241,6 +245,20 @@ export function WorkspacePanel({
                 </span>
               ) : null}
             </TabsTrigger>
+            <TabsTrigger
+              value="terminal"
+              className="gap-1.5 rounded-md px-2.5 text-xs data-active:bg-muted/70"
+            >
+              <TerminalSquare className="size-3.5" />
+              Terminal
+            </TabsTrigger>
+            <TabsTrigger
+              value="git"
+              className="gap-1.5 rounded-md px-2.5 text-xs data-active:bg-muted/70"
+            >
+              <GitBranch className="size-3.5" />
+              Git
+            </TabsTrigger>
           </TabsList>
         </div>
 
@@ -337,6 +355,22 @@ export function WorkspacePanel({
               }}
             />
           )}
+        </TabsContent>
+
+        <TabsContent
+          value="terminal"
+          keepMounted
+          className="min-h-0 flex-1 overflow-hidden data-[hidden]:hidden"
+        >
+          <WorkspaceTerminal key={workspaceId} workspaceId={workspaceId} />
+        </TabsContent>
+
+        <TabsContent
+          value="git"
+          keepMounted
+          className="min-h-0 flex-1 overflow-hidden data-[hidden]:hidden"
+        >
+          <WorkspaceGit key={workspaceId} workspaceId={workspaceId} />
         </TabsContent>
       </Tabs>
     </div>

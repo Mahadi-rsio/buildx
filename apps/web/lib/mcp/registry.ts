@@ -14,7 +14,7 @@ const CACHE_TTL_MS = 5 * 60_000;
 const PAGE_LIMIT = 100;
 
 export interface RegistryServer {
-  /** Qualified name, e.g. `com.github/mcp`. */
+  /** Qualified name, e.g. `com.vercel/mcp`. */
   name: string;
   title: string | null;
   description: string | null;

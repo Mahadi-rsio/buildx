@@ -123,3 +123,15 @@ export interface DiffResponse {
   unchanged: number;
   skipped: number;
 }
+
+/** Git view types shared by the workspace Git API and the dashboard UI. */
+export type {
+  GitBranches,
+  GitChangedFile,
+  GitCommitSummary,
+  GitRepositoryInfo,
+  GitRepositorySummary,
+  GitStatusSummary,
+  PullRequestDraft,
+  PullRequestStatus,
+} from "@buildx/sandbox";

@@ -9,6 +9,10 @@
 # order 1 immediately escalates to order 2, then order 3, so `auto` still has a
 # failover path without app-side retries.
 #
+# All deployments below are free tiers. Ordered by tool-calling reliability and
+# throughput as measured on 2026-10-20 (see .env.example for the key names).
+# Every upstream was verified with a two-turn tool call before being added.
+#
 # Start with: docker compose up -d litellm
 # Keys come from the environment (see .env.example); never hardcode them here.
 
@@ -17,26 +21,63 @@ model_list:
   # share one model group; `order` makes the proxy try them in sequence when an
   # upstream is rate-limited or unavailable.
   #
-  # gpt-4o-mini is first because it has the most reliable tool calling of the
-  # three. Groq's gpt-oss-120b is a last resort: it occasionally emits its own
-  # built-in tools (e.g. `repo_browser.print_tree`), which Groq rejects with
-  # `tool_use_failed`, and its 8k TPM free tier is too small for most agent
-  # runs.
+  # Gemini 3.5 Flash is the strongest free model here and handles multi-turn
+  # tool calls. It is first for quality; its free tier has the tightest RPM, so
+  # spikes fall through to the faster free tiers below.
   - model_name: auto
     litellm_params:
-      model: openrouter/openai/gpt-4o-mini
-      api_key: os.environ/OPENROUTER_API_KEY
+      model: gemini/gemini-3.5-flash
+      api_key: os.environ/GEMINI_API_KEY
+      timeout: 60
       order: 1
+
+  # Cloudflare Workers AI has a generous free daily neuron budget and responds
+  # in ~2s with correct tool calls. Best throughput/cost trade-off.
   - model_name: auto
     litellm_params:
-      model: openrouter/meta-llama/llama-3.3-70b-instruct
-      api_key: os.environ/OPENROUTER_API_KEY
+      model: cloudflare/@cf/qwen/qwen3.8-27b
+      api_key: os.environ/CLOUDFLARE_API_KEY
+      timeout: 45
       order: 2
+
+  # Groq is the fastest option (~0.3-1s) and calls tools correctly. Kept below
+  # Cloudflare because gpt-oss occasionally emits its own built-in tools, which
+  # Groq rejects with `tool_use_failed`, and the free tier has a small TPM.
   - model_name: auto
     litellm_params:
       model: groq/openai/gpt-oss-120b
       api_key: os.environ/GROQ_API_KEY
+      timeout: 45
       order: 3
+
+  # OpenRouter's 1M-token Nemotron is the large-context fallback. The free pool
+  # is shared, so it can return 429; order handles that by moving on.
+  - model_name: auto
+    litellm_params:
+      model: openrouter/nvidia/nemotron-3-ultra-550b-a55b:free
+      api_key: os.environ/OPENROUTER_API_KEY
+      timeout: 60
+      order: 4
+
+  # Vercel AI Gateway's free Laguna endpoint. Zero-cost and tool-capable, but
+  # spends a lot of tokens on reasoning, so it sits near the end.
+  - model_name: auto
+    litellm_params:
+      model: vercel_ai_gateway/poolside/laguna-s-2.1-free
+      api_key: os.environ/VERCEL_AI_GATEWAY_API_KEY
+      api_base: https://ai-gateway.vercel.sh/v1
+      timeout: 60
+      order: 5
+
+  # Mistral's free account only exposes Codestral/Ministral (the small/medium
+  # endpoints report a 0 req/min quota). Codestral is code-focused, so it is a
+  # last-resort coding fallback.
+  - model_name: auto
+    litellm_params:
+      model: mistral/codestral-latest
+      api_key: os.environ/MISTRAL_API_KEY
+      timeout: 45
+      order: 6
 
 litellm_settings:
   drop_params: true

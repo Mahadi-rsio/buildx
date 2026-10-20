@@ -6,6 +6,8 @@ import { toMcpServerView } from "@/lib/mcp/store";
 import {
   cleanHeaders,
   firstIssue,
+  githubMcpDisabled,
+  isBlockedGitHubMcp,
   isMissingTableError,
   mcpServerCreateSchema,
   privateHostsAllowed,
@@ -53,6 +55,9 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
   const input = parsed.data;
+  if (isBlockedGitHubMcp({ catalogId: input.catalogId, url: input.url })) {
+    return githubMcpDisabled();
+  }
   if (input.allowPrivate && !privateHostsAllowed()) {
     return Response.json(
       {

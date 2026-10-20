@@ -6,6 +6,9 @@ import type {
   ProcId,
   ReadRange,
   Sandbox,
+  SessionHandle,
+  SessionOptions,
+  SessionSignal,
 } from "./index";
 import { Box, BoxError } from "@upstash/box";
 import type { BoxSize, Runtime } from "@upstash/box";
@@ -216,6 +219,20 @@ export class BoxSandbox implements Sandbox {
     }
   }
 
+  /**
+   * Explicitly make the box ready for new work. Unlike the lazy `start()` used
+   * by read-only consumers, this resumes a paused attached box (or starts one
+   * when no box is attached yet). Callers that must not provision a workspace
+   * should attach with `connect()` first and only call this after that succeeds.
+   */
+  async ensureRunning(): Promise<void> {
+    if (!this.box) {
+      await this.start();
+      return;
+    }
+    await this.resumeIfPaused(this.box);
+  }
+
   async suspend(): Promise<void> {
     if (!this.box) return;
     try {
@@ -365,6 +382,69 @@ export class BoxSandbox implements Sandbox {
       opts?.signal?.removeEventListener("abort", abort);
       void (streamRun as unknown as { cancel?: () => Promise<void> }).cancel?.();
     }
+  }
+
+  /**
+   * Open a live shell session over the SDK's WebSocket API. This is the only
+   * path that supports stdin, PTY resizing, and process-tree signals; `exec()`
+   * remains the one-way streaming path used by the agent's bash tool.
+   */
+  async openSession(options: SessionOptions): Promise<SessionHandle> {
+    if (!this.box) throw new Error("sandbox not started");
+    if (!options.cmd && !options.argv) {
+      throw new Error("session requires cmd or argv");
+    }
+
+    const cwd = options.cwd ? this.resolvePath(options.cwd) : WORKSPACE;
+    const env = options.env
+      ? Object.entries(options.env).map(([k, v]) => `${k}=${v}`)
+      : undefined;
+    const tty = options.tty ?? true;
+    const stdoutDecoder = new TextDecoder();
+    const stderrDecoder = new TextDecoder();
+    const emit = (stream: "stdout" | "stderr", data: Uint8Array): void => {
+      const decoder = stream === "stdout" ? stdoutDecoder : stderrDecoder;
+      const text = decoder.decode(data, { stream: true });
+      if (text.length > 0) options.onOutput?.({ stream, data: text });
+    };
+    const flush = (): void => {
+      const out = stdoutDecoder.decode();
+      const err = stderrDecoder.decode();
+      if (out.length > 0) options.onOutput?.({ stream: "stdout", data: out });
+      if (err.length > 0) options.onOutput?.({ stream: "stderr", data: err });
+    };
+
+    const session = await this.box.exec.session({
+      ...(options.argv ? { argv: options.argv } : { cmd: options.cmd }),
+      cwd,
+      tty,
+      ...(env && env.length > 0 ? { env } : {}),
+      ...(tty && options.rows ? { rows: options.rows } : {}),
+      ...(tty && options.cols ? { cols: options.cols } : {}),
+      onStdout: (data) => emit("stdout", data),
+      onStderr: (data) => emit("stderr", data),
+    });
+
+    return {
+      pid: session.pid,
+      execId: session.execId,
+      write: (data) => session.write(data),
+      endStdin: () => session.endStdin(),
+      resize: (rows, cols) => session.resize(rows, cols),
+      kill: (signal?: SessionSignal) => session.kill(signal),
+      terminate: (graceMs?: number) => session.terminate(graceMs),
+      wait: async () => {
+        try {
+          return await session.wait();
+        } finally {
+          flush();
+        }
+      },
+      close: () => {
+        flush();
+        session.close();
+      },
+    };
   }
 
   async readFile(path: string, range?: ReadRange): Promise<string> {

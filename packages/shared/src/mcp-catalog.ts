@@ -34,7 +34,7 @@ export const MCP_CATALOG_CATEGORY_LABELS: Record<McpCatalogCategory, string> = {
 
 /** OAuth config for entries whose `authModes` include `"oauth"`. */
 export interface McpOAuthConfig {
-  /** Stable provider key used to derive env names, e.g. `github`. */
+  /** Stable provider key used to derive env names, e.g. `vercel`. */
   provider: string;
   authorizationUrl: string;
   tokenUrl: string;
