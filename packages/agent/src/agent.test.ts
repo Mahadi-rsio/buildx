@@ -78,6 +78,20 @@ before(async () => {
         return;
       }
 
+      if (userText === "vercel-free-tier-blocked") {
+        res.writeHead(403, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            error: {
+              message:
+                "Free tier users do not have access to this model. Upgrade to paid credits at https://vercel.com for unrestricted access.",
+              type: "no_providers_available",
+            },
+          }),
+        );
+        return;
+      }
+
       res.writeHead(200, {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
@@ -735,6 +749,31 @@ test("LiteLLM's wrapped tool_use_failed error becomes actionable", async () => {
     assert.equal(result.status, "failed");
     assert.match(result.error ?? "", /tried to call a tool Buildx does not provide/);
     assert.match(result.error ?? "", /Settings/);
+  } finally {
+    await sandbox.destroy();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("Vercel free-tier model restriction becomes an actionable message", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "buildx-agent-free-tier-"));
+  const sandbox = new TestSandbox({ rootDir: dir });
+  await sandbox.start();
+  try {
+    const result = await runTask({
+      task: "vercel-free-tier-blocked",
+      sandbox,
+      model: "deepseek/deepseek-v4-flash-0731",
+      apiKey: "test",
+      baseURL,
+      maxSteps: 2,
+      onEvent: () => {},
+    });
+
+    assert.equal(result.status, "failed");
+    assert.match(result.error ?? "", /restricted to paid Vercel AI Gateway credits/);
+    assert.match(result.error ?? "", /`auto`/);
+    assert.match(result.error ?? "", /vercel\.com/);
   } finally {
     await sandbox.destroy();
     await rm(dir, { recursive: true, force: true });
