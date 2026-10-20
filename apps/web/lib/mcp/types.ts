@@ -6,6 +6,8 @@ export interface McpServerView {
   name: string;
   transport: "streamable_http";
   url: string;
+  /** Marketplace catalog id this server was installed from, when applicable. */
+  catalogId: string | null;
   enabled: boolean;
   allowPrivate: boolean;
   hasHeaders: boolean;

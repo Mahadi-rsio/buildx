@@ -3,6 +3,20 @@ import { z } from "zod";
 /** Model → context-window metadata used to render live context stats. */
 export { getModelContextWindow } from "./model-context";
 
+/** MCP Marketplace catalog types + pure search/filter helpers. */
+export {
+  MCP_CATALOG_CATEGORIES,
+  MCP_CATALOG_CATEGORY_LABELS,
+  findCatalogEntry,
+  isConnectable,
+  searchCatalog,
+  type McpAuthMode,
+  type McpCatalogCategory,
+  type McpCatalogEntry,
+  type McpCatalogQuery,
+  type McpOAuthConfig,
+} from "./mcp-catalog";
+
 /** Default model id when `AGENT_MODEL` is unset. */
 export const DEFAULT_MODEL = "auto";
 

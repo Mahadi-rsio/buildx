@@ -14,6 +14,7 @@ export function toMcpServerView(row: McpServerRow): McpServerView {
     name: row.name,
     transport: row.transport,
     url: row.url,
+    catalogId: row.catalogId,
     enabled: row.enabled,
     allowPrivate: row.allowPrivate && privateHostsAllowed(),
     hasHeaders: Boolean(row.headersEncrypted),

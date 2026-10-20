@@ -493,6 +493,8 @@ export const mcpServers = pgTable(
       .notNull()
       .default("streamable_http"),
     url: text("url").notNull(),
+    /** Marketplace catalog id this server was installed from, if any. */
+    catalogId: text("catalog_id"),
     /** AES-256-GCM JSON blob of request headers, or null when unauthenticated. */
     headersEncrypted: text("headers_encrypted"),
     enabled: boolean("enabled").default(true).notNull(),
