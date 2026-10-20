@@ -2,8 +2,8 @@
  * Model → context-window metadata used to render live context stats.
  *
  * This is a normalized substring catalog of token windows from vendor model
- * cards. Model ids reach Buildx through LiteLLM (`litellm/<id>`), the Vercel AI
- * Gateway (`<provider>/<id>`), or the `auto` alias, so we strip known provider
+ * cards. Model ids reach Buildx through LiteLLM (`litellm/<id>`), OpenRouter
+ * (`<provider>/<id>`), or the `auto` alias, so we strip known provider
  * prefixes and match the remaining id. There is deliberately no catch-all
  * fallback: an unknown model reports no limit rather than a guessed one.
  */

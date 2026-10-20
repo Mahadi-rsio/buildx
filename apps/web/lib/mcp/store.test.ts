@@ -56,6 +56,7 @@ test("MCP servers CRUD round-trips and views never expose credentials", { skip: 
       userId,
       name: "Linear",
       url: "https://mcp.linear.app/mcp",
+      catalogId: "linear",
       headersEncrypted: "v1:iv:tag:data", // corrupt on purpose — see crypto tests
       enabled: true,
     })
@@ -68,6 +69,7 @@ test("MCP servers CRUD round-trips and views never expose credentials", { skip: 
 
   const view = toMcpServerView(listed[0]);
   assert.equal(view.name, "Linear");
+  assert.equal(view.catalogId, "linear");
   assert.equal(view.hasHeaders, true);
   assert.equal(view.lastStatus, "unknown");
   // The view must never carry the ciphertext (only a presence flag).

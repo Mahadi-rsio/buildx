@@ -7,7 +7,7 @@ export interface ModelOption {
   name: string;
   description?: string;
   provider?: string;
-  /** Provider group id (`litellm` | `vercel`) for sectioning the picker. */
+  /** Provider group id (`litellm` | `openrouter`) for sectioning the picker. */
   providerId?: string;
 }
 

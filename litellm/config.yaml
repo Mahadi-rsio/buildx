@@ -24,9 +24,8 @@ model_list:
   # runs.
   - model_name: auto
     litellm_params:
-      model: openai/openai/gpt-4o-mini
-      api_base: https://ai-gateway.vercel.sh/v1
-      api_key: os.environ/VERCEL_AI_GATEWAY_API_KEY
+      model: openrouter/openai/gpt-4o-mini
+      api_key: os.environ/OPENROUTER_API_KEY
       order: 1
   - model_name: auto
     litellm_params:

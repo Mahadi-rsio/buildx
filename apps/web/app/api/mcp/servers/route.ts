@@ -88,6 +88,7 @@ export async function POST(request: Request): Promise<Response> {
         headersEncrypted: headers ? encryptJson(headers) : null,
         enabled: input.enabled ?? true,
         allowPrivate: input.allowPrivate ?? false,
+        catalogId: input.catalogId ?? null,
       })
       .returning();
     return Response.json({ server: toMcpServerView(row) }, { status: 201 });

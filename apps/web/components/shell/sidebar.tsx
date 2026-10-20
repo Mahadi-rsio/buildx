@@ -11,7 +11,6 @@ import {
   Plug,
   Plus,
   Search,
-  Settings2,
   Trash2,
   Pencil,
 } from "lucide-react";
@@ -136,7 +135,7 @@ function SidebarBody({
   const { prefs, rename, togglePin, hide } = useConversationPrefs();
   const [query, setQuery] = useState("");
   const [renaming, setRenaming] = useState<RunListItem | null>(null);
-  const { setSettingsOpen, setUsageOpen } = useShell();
+  const { setUsageOpen } = useShell();
 
   const { pinned, groups } = useMemo(
     () => prepareRunList(runs, prefs, query),
@@ -291,7 +290,7 @@ function SidebarBody({
       </ScrollArea>
 
       <div className="border-t border-border/80 p-2">
-        <div className="grid grid-cols-3 gap-1.5">
+        <div className="grid grid-cols-2 gap-1.5">
           <Button
             type="button"
             variant="ghost"
@@ -321,19 +320,6 @@ function SidebarBody({
           >
             <BarChart3 className="size-3.5" />
             <span>Usage</span>
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="xs"
-            className="flex items-center justify-center gap-1.5 py-2 text-xs text-muted-foreground hover:text-foreground"
-            onClick={() => {
-              setSettingsOpen(true);
-              onNavigate?.();
-            }}
-          >
-            <Settings2 className="size-3.5" />
-            <span>Settings</span>
           </Button>
         </div>
       </div>

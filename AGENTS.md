@@ -41,10 +41,10 @@ test spins up an in-process OpenAI-compatible SSE server, so no API key is neede
 
 ## Running the dashboard
 
-- `apps/web` reads `LITELLM_API_KEY`, `LITELLM_BASE_URL`, `VERCEL_AI_GATEWAY_API_KEY`,
-  `AGENT_MODEL`, `AGENT_MAX_STEPS` from the environment / `.env.local` (copy
-  `.env.example`). LiteLLM exposes only `auto`; the picker lists `auto` plus the
-  full Vercel AI Gateway catalog when configured.
+- `apps/web` reads `LITELLM_API_KEY`, `LITELLM_BASE_URL`, `OPENROUTER_API_KEY`,
+  `OPENROUTER_BASE_URL`, `AGENT_MODEL`, `AGENT_MAX_STEPS` from the environment /
+  `.env.local` (copy `.env.example`). LiteLLM exposes only `auto`; the picker
+  lists `auto` plus the full OpenRouter catalog when configured.
 - Every run uses the user's persistent Upstash Box workspace; the file panel
   reads it through `WorkspaceSource`. There is no local scratch directory.
 - `POST /api/runs` returns `400` when no key is set, so the UI can explain why.

@@ -205,10 +205,10 @@ function describeProviderError(error: unknown, model: string | undefined): strin
     ? "The router picked an upstream with unreliable tool calling. Retry the run or pick a concrete model in Settings."
     : "The model invented a tool Buildx does not provide. Pick a model with reliable tool calling in Settings.";
 
-  // Vercel AI Gateway free tier rejects paid-only catalog models with a 403
-  // `no_providers_available`; point the user at a free-tier route instead.
+  // Some routers reject paid-only catalog models with a 403; point the user at
+  // the default route or their provider account instead.
   if (/free tier users do not have access to this model/i.test(haystack)) {
-    return "This model is restricted to paid Vercel AI Gateway credits (no_providers_available). Use the default `auto` model for free-tier routing or add credits at vercel.com.";
+    return "This model is restricted to paid credits on the configured provider. Use the default `auto` model or add credits to your OpenRouter account.";
   }
 
   // LiteLLM currently wraps Groq's `tool_use_failed` error in a Python

@@ -1,4 +1,4 @@
-import type { McpCatalogEntry } from "@buildx/shared";
+import { isConnectable, type McpCatalogEntry } from "@buildx/shared";
 
 /**
  * Curated MCP Marketplace catalog. Every remote endpoint was probe-verified
@@ -20,6 +20,7 @@ export const MCP_CATALOG: readonly McpCatalogEntry[] = [
     category: "knowledge",
     tags: ["docs", "libraries", "references"],
     icon: "📚",
+    logo: "/logos/mcp/context7.png",
     officialUrl: "https://context7.com",
     registryName: "io.github.upstash/context7",
     endpoint: "https://mcp.context7.com/mcp",
@@ -38,6 +39,7 @@ export const MCP_CATALOG: readonly McpCatalogEntry[] = [
     category: "search",
     tags: ["web", "search", "research"],
     icon: "🔎",
+    logo: "/logos/mcp/exa.png",
     officialUrl: "https://exa.ai",
     registryName: "com.exa/mcp",
     endpoint: "https://mcp.exa.ai/mcp",
@@ -56,6 +58,7 @@ export const MCP_CATALOG: readonly McpCatalogEntry[] = [
     category: "search",
     tags: ["web", "scraping", "crawl"],
     icon: "🔥",
+    logo: "/logos/mcp/firecrawl.png",
     officialUrl: "https://firecrawl.dev",
     registryName: "com.firecrawl/mcp",
     endpoint: "https://mcp.firecrawl.dev/mcp",
@@ -75,6 +78,7 @@ export const MCP_CATALOG: readonly McpCatalogEntry[] = [
     category: "code",
     tags: ["github", "repos", "pull-requests", "issues"],
     icon: "🐙",
+    logo: "/logos/mcp/github.png",
     officialUrl: "https://github.com/github/github-mcp-server",
     registryName: "com.github/mcp",
     endpoint: "https://api.githubcopilot.com/mcp/",
@@ -101,6 +105,7 @@ export const MCP_CATALOG: readonly McpCatalogEntry[] = [
     category: "dev-tools",
     tags: ["vercel", "deployments", "infra"],
     icon: "▲",
+    logo: "/logos/mcp/vercel.png",
     officialUrl: "https://vercel.com/docs/integrations/mcp",
     endpoint: "https://mcp.vercel.app/mcp",
     authModes: ["oauth", "api-key"],
@@ -125,6 +130,7 @@ export const MCP_CATALOG: readonly McpCatalogEntry[] = [
     category: "data",
     tags: ["database", "postgres", "supabase"],
     icon: "⚡",
+    logo: "/logos/mcp/supabase.png",
     officialUrl: "https://supabase.com/docs/guides/mcp",
     registryName: "io.supabase/mcp",
     endpoint: "https://mcp.supabase.com/mcp",
@@ -144,6 +150,7 @@ export const MCP_CATALOG: readonly McpCatalogEntry[] = [
     category: "finance",
     tags: ["payments", "billing", "stripe"],
     icon: "💳",
+    logo: "/logos/mcp/stripe.png",
     officialUrl: "https://docs.stripe.com/agents/mcp",
     registryName: "com.stripe/mcp",
     endpoint: "https://mcp.stripe.com",
@@ -163,6 +170,7 @@ export const MCP_CATALOG: readonly McpCatalogEntry[] = [
     category: "productivity",
     tags: ["notes", "docs", "notion"],
     icon: "🗒️",
+    logo: "/logos/mcp/notion.png",
     officialUrl: "https://www.notion.com/help/mcp",
     endpoint: "https://mcp.notion.com/mcp",
     authModes: ["api-key"],
@@ -181,6 +189,7 @@ export const MCP_CATALOG: readonly McpCatalogEntry[] = [
     category: "productivity",
     tags: ["issues", "project-management", "linear"],
     icon: "📐",
+    logo: "/logos/mcp/linear.png",
     officialUrl: "https://linear.app/docs/mcp",
     registryName: "app.linear/mcp",
     endpoint: "https://mcp.linear.app/mcp",
@@ -200,6 +209,7 @@ export const MCP_CATALOG: readonly McpCatalogEntry[] = [
     category: "observability",
     tags: ["errors", "monitoring", "tracing"],
     icon: "🐞",
+    logo: "/logos/mcp/sentry.png",
     officialUrl: "https://docs.sentry.io/product/integrations/mcp/",
     endpoint: "https://mcp.sentry.dev/mcp",
     authModes: ["api-key"],
@@ -247,4 +257,25 @@ export const MCP_CATALOG: readonly McpCatalogEntry[] = [
 
 export function getCatalogEntry(id: string): McpCatalogEntry | undefined {
   return MCP_CATALOG.find((entry) => entry.id === id);
+}
+
+/** Connectable entries ordered by popularity, for the MCP page's hero grid. */
+export function popularCatalog(limit = 6): McpCatalogEntry[] {
+  return MCP_CATALOG.filter(isConnectable)
+    .sort((a, b) => b.popularity - a.popularity)
+    .slice(0, limit);
+}
+
+/**
+ * Auth headers for an install from `entry`. Keyless entries return `{}`; API-key
+ * entries use the catalog's declared header + optional prefix (e.g. Exa's
+ * `x-api-key`, Firecrawl's `Authorization: Bearer …`).
+ */
+export function catalogAuthHeaders(
+  entry: McpCatalogEntry,
+  apiKey?: string,
+): Record<string, string> {
+  const key = (apiKey ?? "").trim();
+  if (!key || !entry.apiKeyHeader) return {};
+  return { [entry.apiKeyHeader]: `${entry.apiKeyPrefix ?? ""}${key}` };
 }

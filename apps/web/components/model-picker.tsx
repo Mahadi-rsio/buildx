@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Check, ChevronDown, RotateCcw, Search, Settings2, Sparkles } from "lucide-react";
+import { Check, ChevronDown, RotateCcw, Search, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -21,7 +21,6 @@ export function ModelPicker({
   disabled,
   className,
   align = "start",
-  onOpenSettings,
 }: {
   /** Explicit override; empty string means "use the server default". */
   value: string;
@@ -29,7 +28,6 @@ export function ModelPicker({
   disabled?: boolean;
   className?: string;
   align?: "start" | "end";
-  onOpenSettings?: () => void;
 }) {
   const { models, defaultModel, loading } = useModels();
   const [query, setQuery] = useState("");
@@ -60,7 +58,7 @@ export function ModelPicker({
 
   const visible = filtered.slice(0, MAX_RESULTS);
 
-  // Group the visible models by provider (LiteLLM / Vercel / ...) so the
+  // Group the visible models by provider (LiteLLM / OpenRouter / ...) so the
   // dropdown reads as distinct catalogs.
   const groups = (() => {
     const map = new Map<string, { id: string; label: string; models: ModelOption[] }>();
@@ -204,10 +202,9 @@ export function ModelPicker({
           ) : null}
         </div>
 
-        <DropdownMenuSeparator className="my-1 bg-border/60" />
-
-        <div className="space-y-0.5">
-          {selected ? (
+        {selected ? (
+          <>
+            <DropdownMenuSeparator className="my-1 bg-border/60" />
             <DropdownMenuItem
               onClick={() => selectModel("")}
               className="cursor-pointer gap-2 rounded-lg px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground"
@@ -215,17 +212,8 @@ export function ModelPicker({
               <RotateCcw className="size-3.5" />
               <span>Reset to server default</span>
             </DropdownMenuItem>
-          ) : null}
-          {onOpenSettings ? (
-            <DropdownMenuItem
-              onClick={onOpenSettings}
-              className="cursor-pointer gap-2 rounded-lg px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground"
-            >
-              <Settings2 className="size-3.5" />
-              <span>Environment &amp; settings…</span>
-            </DropdownMenuItem>
-          ) : null}
-        </div>
+          </>
+        ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
   );

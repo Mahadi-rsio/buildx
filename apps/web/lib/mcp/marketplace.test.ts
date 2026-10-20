@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { McpCatalogEntry, McpOAuthConfig } from "@buildx/shared";
-import { getCatalogEntry, MCP_CATALOG } from "./catalog";
+import {
+  catalogAuthHeaders,
+  getCatalogEntry,
+  MCP_CATALOG,
+  popularCatalog,
+} from "./catalog";
 import {
   buildAuthorizationUrl,
   codeChallenge,
@@ -190,4 +195,34 @@ test("catalog: every remote entry has a verified-looking endpoint and auth", () 
       assert.ok(entry.oauth, `${entry.id} oauth mode has a config`);
     }
   }
+});
+
+test("catalog: popular grid surfaces the requested first-party servers", () => {
+  const popular = popularCatalog(6).map((entry) => entry.id);
+  for (const id of ["context7", "vercel", "exa", "firecrawl"]) {
+    assert.ok(popular.includes(id), `${id} is in the popular grid`);
+  }
+  assert.ok(
+    popular.every((id) => !getCatalogEntry(id)?.requiresLocal),
+    "popular grid never includes local-only servers",
+  );
+});
+
+test("catalogAuthHeaders: keyless entries send nothing", () => {
+  const context7 = getCatalogEntry("context7");
+  assert.ok(context7);
+  assert.deepEqual(catalogAuthHeaders(context7, "ignored"), {});
+});
+
+test("catalogAuthHeaders: respects each provider's header and prefix", () => {
+  const exa = getCatalogEntry("exa");
+  const firecrawl = getCatalogEntry("firecrawl");
+  assert.ok(exa && firecrawl);
+  assert.deepEqual(catalogAuthHeaders(exa, " exa-key "), {
+    "x-api-key": "exa-key",
+  });
+  assert.deepEqual(catalogAuthHeaders(firecrawl, "fc-key"), {
+    Authorization: "Bearer fc-key",
+  });
+  assert.deepEqual(catalogAuthHeaders(exa, "   "), {});
 });

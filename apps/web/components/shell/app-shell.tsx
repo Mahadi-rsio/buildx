@@ -4,7 +4,6 @@ import { type ReactNode } from "react";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { TopBar } from "@/components/shell/top-bar";
 import { Sidebar, SidebarDrawer } from "@/components/shell/sidebar";
-import { SettingsDialog } from "@/components/shell/settings-dialog";
 import { UsageDialog } from "@/components/shell/usage-dialog";
 import { ShellProvider, useShell } from "@/components/shell/shell-context";
 
@@ -22,14 +21,13 @@ function ShellLayout({ children }: { children: ReactNode }) {
       {isMobile ? (
         <SidebarDrawer open={sidebarOpen} onOpenChange={setSidebarOpen} />
       ) : null}
-      <SettingsDialog />
       <UsageDialog />
     </div>
   );
 }
 
 /**
- * App chrome: top bar, conversation sidebar, settings/usage dialogs.
+ * App chrome: top bar, conversation sidebar, usage dialog.
  * Push run info into the top bar with `useShellMeta(...)` from the page.
  */
 export function AppShell({ children }: { children: ReactNode }) {

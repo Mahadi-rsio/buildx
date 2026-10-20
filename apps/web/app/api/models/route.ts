@@ -6,51 +6,51 @@ export interface ModelOption {
   id: string;
   name: string;
   description?: string;
-  /** Human label for the provider (LiteLLM / Vercel). */
+  /** Human label for the provider (LiteLLM / OpenRouter). */
   provider?: string;
   /** Provider id used by the UI to group models into sections. */
   providerId?: ModelProviderId | string;
 }
 
 /**
- * Fallback catalog for the Vercel AI Gateway when its `/models` endpoint
- * cannot be reached. The live endpoint normally returns the full catalog.
+ * Fallback catalog for OpenRouter when its `/models` endpoint cannot be
+ * reached. The live endpoint normally returns the full catalog.
  */
-const VERCEL_FALLBACK_MODELS: ModelOption[] = [
+const OPENROUTER_FALLBACK_MODELS: ModelOption[] = [
   {
-    id: "anthropic/claude-3-7-sonnet-20250219",
+    id: "anthropic/claude-3.7-sonnet",
     name: "Claude 3.7 Sonnet",
     description: "Extended-thinking software engineering model",
-    provider: "Vercel",
-    providerId: "vercel",
+    provider: "OpenRouter",
+    providerId: "openrouter",
   },
   {
     id: "openai/gpt-4o",
     name: "GPT-4o",
     description: "High-intelligence flagship multimodal model",
-    provider: "Vercel",
-    providerId: "vercel",
+    provider: "OpenRouter",
+    providerId: "openrouter",
   },
   {
     id: "openai/gpt-4o-mini",
     name: "GPT-4o Mini",
     description: "Fast, cost-efficient everyday model",
-    provider: "Vercel",
-    providerId: "vercel",
+    provider: "OpenRouter",
+    providerId: "openrouter",
   },
   {
     id: "google/gemini-2.0-flash-001",
     name: "Gemini 2.0 Flash",
     description: "Fast multimodal model from Google",
-    provider: "Vercel",
-    providerId: "vercel",
+    provider: "OpenRouter",
+    providerId: "openrouter",
   },
   {
     id: "deepseek/deepseek-chat",
     name: "DeepSeek Chat (V3)",
     description: "Fast general intelligence & coding",
-    provider: "Vercel",
-    providerId: "vercel",
+    provider: "OpenRouter",
+    providerId: "openrouter",
   },
 ];
 
@@ -69,15 +69,14 @@ interface RemoteModel {
   id: string;
   name?: string;
   description?: string;
-  type?: string;
   tags?: string[];
 }
 
 const CATALOG_TTL_MS = 5 * 60_000;
 let catalogCache: { expiresAt: number; models: ModelOption[] } | null = null;
 
-/** Best-effort `/models` fetch from the Vercel AI Gateway (cached in-process). */
-async function fetchVercelCatalog(
+/** Best-effort `/models` fetch from OpenRouter (cached in-process). */
+async function fetchOpenRouterCatalog(
   baseURL: string,
   apiKey: string,
 ): Promise<ModelOption[]> {
@@ -85,13 +84,13 @@ async function fetchVercelCatalog(
     return catalogCache.models;
   }
 
-  const targetUrl = `${baseURL.replace(/\/+$/, "")}/models`;
+  const targetUrl = `${baseURL.replace(/\/+$/, "")}/models?output_modalities=text`;
   const cacheFallback = (): ModelOption[] => {
     catalogCache = {
       expiresAt: Date.now() + CATALOG_TTL_MS,
-      models: VERCEL_FALLBACK_MODELS,
+      models: OPENROUTER_FALLBACK_MODELS,
     };
-    return VERCEL_FALLBACK_MODELS;
+    return OPENROUTER_FALLBACK_MODELS;
   };
 
   let res: Response;
@@ -101,7 +100,7 @@ async function fetchVercelCatalog(
       signal: AbortSignal.timeout(8000),
     });
   } catch {
-    // Cache the failure so an unreachable gateway does not add an 8s timeout
+    // Cache the failure so an unreachable provider does not add an 8s timeout
     // to every picker mount until the next TTL window.
     return cacheFallback();
   }
@@ -117,8 +116,7 @@ async function fetchVercelCatalog(
       (model) =>
         typeof model.id === "string" &&
         model.id.trim().length > 0 &&
-        !CHAT_UNSUPPORTED.test(model.id) &&
-        (model.type === undefined || model.type === "language"),
+        !CHAT_UNSUPPORTED.test(model.id),
     )
     .map((model) => ({
       id: model.id.trim(),
@@ -127,8 +125,8 @@ async function fetchVercelCatalog(
         model.description?.trim().slice(0, 160) ||
         model.tags?.slice(0, 3).join(" · ") ||
         model.id,
-      provider: "Vercel",
-      providerId: "vercel",
+      provider: "OpenRouter",
+      providerId: "openrouter",
     }))
     .sort((a, b) => a.id.localeCompare(b.id));
 
@@ -138,7 +136,7 @@ async function fetchVercelCatalog(
 
 export async function GET(): Promise<Response> {
   const env = envStatus();
-  const vercel = providerEndpoint("vercel");
+  const openrouter = providerEndpoint("openrouter");
   const litellmEnabled = env.providers.some(
     (provider) => provider.id === "litellm" && provider.hasApiKey,
   );
@@ -155,7 +153,7 @@ export async function GET(): Promise<Response> {
   let defaultModel = env.model;
 
   // LiteLLM exposes a single model to the app: `auto`. The proxy fans out to
-  // the configured upstreams; picking a concrete upstream is a Vercel model.
+  // the configured upstreams; picking a concrete upstream is an OpenRouter model.
   if (litellmEnabled) {
     push({
       id: "auto",
@@ -167,17 +165,24 @@ export async function GET(): Promise<Response> {
     defaultModel = "auto";
   }
 
-  // Full Vercel AI Gateway catalog (all chat/language models).
-  if (vercel.baseURL && vercel.apiKey) {
-    let vercelModels: ModelOption[] = [];
+  // Full OpenRouter catalog (text-output chat/language models).
+  if (openrouter.baseURL && openrouter.apiKey) {
+    let openrouterModels: ModelOption[] = [];
     try {
-      vercelModels = await fetchVercelCatalog(vercel.baseURL, vercel.apiKey);
+      openrouterModels = await fetchOpenRouterCatalog(
+        openrouter.baseURL,
+        openrouter.apiKey,
+      );
     } catch {
       // Unreachable or unauthenticated — fall through to the fallback catalog.
     }
-    if (vercelModels.length === 0) vercelModels = VERCEL_FALLBACK_MODELS;
-    for (const model of vercelModels) push(model);
-    if (!litellmEnabled && vercelModels[0]) defaultModel = vercelModels[0].id;
+    if (openrouterModels.length === 0) {
+      openrouterModels = OPENROUTER_FALLBACK_MODELS;
+    }
+    for (const model of openrouterModels) push(model);
+    if (!litellmEnabled && openrouterModels[0]) {
+      defaultModel = openrouterModels[0].id;
+    }
   }
 
   return Response.json({ default: defaultModel, models });

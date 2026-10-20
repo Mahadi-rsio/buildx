@@ -127,7 +127,7 @@ See [`.env.example`](.env.example) for the full annotated list.
 | `LITELLM_API_KEY` | ✅ | App-scoped LiteLLM virtual key |
 | `BETTER_AUTH_SECRET` | ✅ | Auth secret — `openssl rand -base64 32` |
 | `LITELLM_BASE_URL` | | LiteLLM proxy base URL, default `http://localhost:4000/v1` |
-| `VERCEL_AI_GATEWAY_API_KEY` | | Enables the full Vercel AI Gateway catalog in the picker |
+| `OPENROUTER_API_KEY` | | Enables the full OpenRouter catalog in the picker |
 | `AGENT_MODEL` | | Model ID, default `auto` (LiteLLM) |
 | `AGENT_MAX_STEPS` | | Max agent loop steps, default `40` |
 

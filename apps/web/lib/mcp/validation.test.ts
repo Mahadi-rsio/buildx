@@ -52,6 +52,29 @@ test("mcpServerCreateSchema requires an absolute http(s) URL", () => {
   assert.deepEqual(parsed.headers, { "X-Api-Key": "secret" });
 });
 
+test("mcpServerCreateSchema accepts and trims a catalog id", () => {
+  const parsed = mcpServerCreateSchema.parse({
+    name: "Context7",
+    url: "https://mcp.context7.com/mcp",
+    catalogId: "  context7  ",
+  });
+  assert.equal(parsed.catalogId, "context7");
+  assert.equal(
+    mcpServerCreateSchema.parse({
+      name: "Custom",
+      url: "https://mcp.example.com/mcp",
+    }).catalogId,
+    undefined,
+  );
+  assert.throws(() =>
+    mcpServerCreateSchema.parse({
+      name: "Custom",
+      url: "https://mcp.example.com/mcp",
+      catalogId: " ".repeat(2),
+    }),
+  );
+});
+
 test("mcpServerCreateSchema rejects bad URLs", () => {
   assert.throws(() => mcpServerCreateSchema.parse({ name: "x", url: "ftp://x" }));
   assert.throws(() => mcpServerCreateSchema.parse({ name: "x", url: "not a url" }));

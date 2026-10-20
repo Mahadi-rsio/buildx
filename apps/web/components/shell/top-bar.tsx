@@ -1,12 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import {
-  BarChart3,
-  PanelLeft,
-  PanelRight,
-  Settings2,
-} from "lucide-react";
+import { BarChart3, PanelLeft, PanelRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ModelPicker } from "@/components/model-picker";
 import { ThemeToggle } from "@/components/shell/theme-toggle";
@@ -21,7 +16,6 @@ export function TopBar() {
     collapsed,
     toggleCollapsed,
     setSidebarOpen,
-    setSettingsOpen,
     setUsageOpen,
     modelOverride,
     setModelOverride,
@@ -104,7 +98,6 @@ export function TopBar() {
           onChange={setModelOverride}
           align="end"
           className="hidden min-[420px]:flex sm:max-w-52"
-          onOpenSettings={() => setSettingsOpen(true)}
         />
         <ThemeToggle />
         <Button
@@ -115,15 +108,6 @@ export function TopBar() {
           onClick={() => setUsageOpen(true)}
         >
           <BarChart3 className="size-4" />
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-touch"
-          aria-label="Settings"
-          onClick={() => setSettingsOpen(true)}
-        >
-          <Settings2 className="size-4" />
         </Button>
         <Button
           type="button"

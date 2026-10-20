@@ -17,6 +17,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import { getCatalogEntry } from "@/lib/mcp/catalog";
 import type { McpServerView, McpToolInfo } from "@/lib/mcp/types";
 import { cn } from "@/lib/utils";
 
@@ -54,6 +55,9 @@ export function ServerCard({
   onEdit: () => void;
   onDelete: () => void;
 }) {
+  const catalogEntry = server.catalogId
+    ? getCatalogEntry(server.catalogId)
+    : undefined;
   const [toolsOpen, setToolsOpen] = useState(false);
   const [tools, setTools] = useState<McpToolInfo[] | null>(null);
   const [toolsLoading, setToolsLoading] = useState(false);
@@ -116,6 +120,18 @@ export function ServerCard({
       <div className="flex items-center gap-2">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
+            {catalogEntry?.logo ? (
+              <img
+                src={catalogEntry.logo}
+                alt=""
+                aria-hidden
+                className="size-4 shrink-0 object-contain"
+              />
+            ) : catalogEntry ? (
+              <span aria-hidden className="text-sm">
+                {catalogEntry.icon}
+              </span>
+            ) : null}
             <span className="truncate font-mono text-[13px] text-foreground">
               {server.name}
             </span>

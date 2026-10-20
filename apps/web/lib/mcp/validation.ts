@@ -50,6 +50,8 @@ export const mcpServerCreateSchema = z.object({
   headers: headersSchema.optional(),
   enabled: z.boolean().optional(),
   allowPrivate: z.boolean().optional(),
+  /** Marketplace catalog id, when installed from a curated entry. */
+  catalogId: z.string().trim().min(1).max(80).optional(),
 });
 
 export const mcpServerUpdateSchema = z

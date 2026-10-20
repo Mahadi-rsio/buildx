@@ -174,7 +174,7 @@ export async function startRun(run: StoredRun): Promise<void> {
     const message =
       provider === "litellm"
         ? "LITELLM_API_KEY is not set for the selected model. Add it to .env.local and restart the dev server."
-        : "VERCEL_AI_GATEWAY_API_KEY is not set for the selected model. Add it to .env.local and restart the dev server.";
+        : "OPENROUTER_API_KEY is not set for the selected model. Add it to .env.local and restart the dev server.";
     await appendEvent(run, { type: "error", data: { message }, ts: Date.now() });
     await closeRun(run, "failed", message);
     return;

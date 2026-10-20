@@ -49,8 +49,10 @@ export interface McpCatalogEntry {
   description: string;
   category: McpCatalogCategory;
   tags: string[];
-  /** Small inline SVG/emoji glyph rendered by the marketplace card. */
+  /** Small inline SVG/emoji glyph rendered when no logo is available. */
   icon: string;
+  /** Public path to the vendor logo asset, e.g. `/logos/mcp/context7.png`. */
+  logo?: string;
   /** Vendor docs / home page. */
   officialUrl: string;
   /** Official MCP Registry entry (qualified name), when published. */

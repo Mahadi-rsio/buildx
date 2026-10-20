@@ -50,8 +50,6 @@ interface ShellContextValue {
   panelVisible: boolean;
   panelTab: PanelTab;
   setPanelTab: (tab: PanelTab) => void;
-  settingsOpen: boolean;
-  setSettingsOpen: (open: boolean) => void;
   usageOpen: boolean;
   setUsageOpen: (open: boolean) => void;
   modelOverride: string;
@@ -98,7 +96,6 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [panelTouched, setPanelTouched] = useState(false);
   const [panelTab, setPanelTab] = useState<PanelTab>("files");
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [usageOpen, setUsageOpen] = useState(false);
   const [meta, setMetaState] = useState<ShellMeta>(IDLE_META);
   const [ready, setReady] = useState(false);
@@ -174,8 +171,6 @@ export function ShellProvider({ children }: { children: ReactNode }) {
       panelVisible,
       panelTab,
       setPanelTab,
-      settingsOpen,
-      setSettingsOpen,
       usageOpen,
       setUsageOpen,
       modelOverride: prefs.modelOverride,
@@ -194,7 +189,6 @@ export function ShellProvider({ children }: { children: ReactNode }) {
       panelTouched,
       panelVisible,
       panelTab,
-      settingsOpen,
       usageOpen,
       setModelOverride,
     ],
