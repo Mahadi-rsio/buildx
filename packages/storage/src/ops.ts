@@ -17,6 +17,8 @@ export const MAX_PRESIGN_SECONDS = 15 * 60;
 export const DEFAULT_PRESIGN_SECONDS = 10 * 60;
 /** Hard cap on a single workspace backup archive (plan phase 5). */
 export const MAX_BACKUP_BYTES = 200 * 1024 * 1024;
+/** Hard cap for immutable skill artifacts read/written by the app. */
+export const MAX_OBJECT_BYTES = 20 * 1024 * 1024;
 
 export interface PresignOptions {
   /** Lifetime in seconds; clamped to [1, MAX_PRESIGN_SECONDS]. */
@@ -56,6 +58,17 @@ export interface RotateResult {
 export interface Storage {
   presignPut(key: string, options?: PresignOptions): Promise<string>;
   presignGet(key: string, options?: PresignOptions): Promise<string>;
+  /** Write a bounded immutable object (used for content-addressed skill blobs). */
+  putObject(
+    key: string,
+    body: Uint8Array,
+    options?: { contentType?: string; bucket?: string },
+  ): Promise<void>;
+  /** Read a bounded object; returns null when it does not exist. */
+  getObject(
+    key: string,
+    options?: { maxBytes?: number; bucket?: string },
+  ): Promise<Uint8Array | null>;
   head(key: string, bucket?: string): Promise<ObjectInfo | null>;
   copy(sourceKey: string, destKey: string, bucket?: string): Promise<void>;
   delete(key: string, bucket?: string): Promise<void>;
@@ -152,6 +165,55 @@ export function createStorage(
         }),
         { expiresIn: clampExpiry(options.expiresIn) },
       );
+    },
+
+    async putObject(key, body, options = {}) {
+      if (body.byteLength > MAX_OBJECT_BYTES) {
+        throw new Error(`object exceeds ${MAX_OBJECT_BYTES} bytes`);
+      }
+      await internal.send(
+        new PutObjectCommand({
+          Bucket: options.bucket ?? defaultBucket,
+          Key: key,
+          Body: body,
+          ContentLength: body.byteLength,
+          ...(options.contentType ? { ContentType: options.contentType } : {}),
+        }),
+      );
+    },
+
+    async getObject(key, options = {}) {
+      const maxBytes = options.maxBytes ?? MAX_OBJECT_BYTES;
+      let result;
+      try {
+        result = await internal.send(
+          new GetObjectCommand({
+            Bucket: options.bucket ?? defaultBucket,
+            Key: key,
+          }),
+        );
+      } catch (error) {
+        if (isNotFound(error)) return null;
+        throw error;
+      }
+      if (!result.Body) return new Uint8Array();
+      const declared = result.ContentLength ?? 0;
+      if (declared > maxBytes) throw new Error(`object exceeds ${maxBytes} bytes`);
+      const stream = result.Body as unknown as AsyncIterable<Uint8Array>;
+      const chunks: Uint8Array[] = [];
+      let total = 0;
+      for await (const chunk of stream) {
+        total += chunk.byteLength;
+        if (total > maxBytes) throw new Error(`object exceeds ${maxBytes} bytes`);
+        chunks.push(chunk);
+      }
+      const out = new Uint8Array(total);
+      let offset = 0;
+      for (const chunk of chunks) {
+        out.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      return out;
     },
 
     head: (key, bucket = defaultBucket) => head(key, bucket),

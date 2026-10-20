@@ -26,6 +26,18 @@ export interface BoxSandboxOptions {
   size?: BoxSize;
   initCommand?: string;
   baseUrl?: string;
+  /**
+   * Keep the box running when idle instead of allowing Upstash to auto-pause.
+   * Defaults to false: ordinary workspaces should pause when nobody is using
+   * them so idle time is not billed as active CPU.
+   */
+  keepAlive?: boolean;
+  /**
+   * Snapshot to restore from when no box with `name` exists. This is only used
+   * after an explicit, lease-protected retention step; a missing snapshot must
+   * fail closed rather than silently create an empty workspace.
+   */
+  restoreSnapshotId?: string;
   /** Pre-attached Box instance (for testing or restore). */
   box?: Box;
 }
@@ -62,6 +74,8 @@ export class BoxSandbox implements Sandbox {
   private size: BoxSize;
   private initCommand: string;
   private baseUrl: string | undefined;
+  private keepAlive: boolean;
+  private restoreSnapshotId: string | undefined;
   private box: Box | null = null;
 
   constructor(options: BoxSandboxOptions) {
@@ -71,6 +85,8 @@ export class BoxSandbox implements Sandbox {
     this.size = options.size ?? "small";
     this.initCommand = options.initCommand ?? "";
     this.baseUrl = options.baseUrl;
+    this.keepAlive = options.keepAlive ?? false;
+    this.restoreSnapshotId = options.restoreSnapshotId;
     this.id = this.name;
     this.box = options.box ?? null;
   }
@@ -88,30 +104,89 @@ export class BoxSandbox implements Sandbox {
     }
 
     const promise = (async (): Promise<Box> => {
+      let box: Box;
       try {
-        return await Box.getByName(this.name, {
+        box = await Box.getByName(this.name, {
           apiKey: this.apiKey,
           baseUrl: this.baseUrl,
         });
       } catch (error) {
-        if (isNotFound(error)) {
-          return await Box.create({
-            name: this.name,
-            runtime: this.runtime,
-            size: this.size,
-            initCommand: this.initCommand,
-            apiKey: this.apiKey,
-            baseUrl: this.baseUrl,
-          });
-        }
-        throw error;
+        if (!isNotFound(error)) throw error;
+        box = await this.createOrReconnect();
       }
+      await this.resumeIfPaused(box);
+      return box;
     })();
     pendingStarts.set(this.name, promise);
     try {
       this.box = await promise;
     } finally {
       pendingStarts.delete(this.name);
+    }
+  }
+
+  /**
+   * Create a box, restoring from a snapshot when retention metadata exists.
+   * `getByName` → `create` is not atomic across server instances: if another
+   * instance won the race, `create` can fail. Reconnect to the winner instead
+   * of surfacing a spurious failure (and never overwrite their workspace).
+   */
+  private async createOrReconnect(): Promise<Box> {
+    if (this.restoreSnapshotId) {
+      try {
+        return await Box.fromSnapshot(this.restoreSnapshotId, {
+          name: this.name,
+          runtime: this.runtime,
+          size: this.size,
+          initCommand: this.initCommand,
+          keepAlive: this.keepAlive,
+          apiKey: this.apiKey,
+          baseUrl: this.baseUrl,
+        });
+      } catch (error) {
+        // A concurrent restore may have already recreated the named box.
+        try {
+          return await Box.getByName(this.name, {
+            apiKey: this.apiKey,
+            baseUrl: this.baseUrl,
+          });
+        } catch {
+          throw error;
+        }
+      }
+    }
+
+    try {
+      return await Box.create({
+        name: this.name,
+        runtime: this.runtime,
+        size: this.size,
+        initCommand: this.initCommand,
+        keepAlive: this.keepAlive,
+        apiKey: this.apiKey,
+        baseUrl: this.baseUrl,
+      });
+    } catch (error) {
+      try {
+        return await Box.getByName(this.name, {
+          apiKey: this.apiKey,
+          baseUrl: this.baseUrl,
+        });
+      } catch {
+        throw error;
+      }
+    }
+  }
+
+  /** Resume a paused box before the first operation. Running boxes are left as-is. */
+  private async resumeIfPaused(box: Box): Promise<void> {
+    try {
+      const { status } = await box.getStatus();
+      if (/paused|stopped|idle/i.test(status)) await box.resume();
+    } catch {
+      // Status probing is best-effort: a box that is already running (or an
+      // older API that omits status) should not block the run. The following
+      // operation will surface any real backend error.
     }
   }
 
@@ -154,6 +229,26 @@ export class BoxSandbox implements Sandbox {
     if (!this.box) return;
     await this.box.delete();
     this.box = null;
+  }
+
+  /** Current Upstash status (running/paused/...), or null before start. */
+  async status(): Promise<string | null> {
+    if (!this.box) return null;
+    return (await this.box.getStatus()).status;
+  }
+
+  /**
+   * Snapshot the workspace. Snapshots are independent of the box lifecycle, so
+   * retention callers must persist the returned id before deleting the box.
+   */
+  async snapshot(name: string): Promise<string> {
+    if (!this.box) throw new Error("sandbox not started");
+    return (await this.box.snapshot({ name })).id;
+  }
+
+  /** Explicitly pause the box (idempotent best-effort). */
+  async pause(): Promise<void> {
+    await this.suspend();
   }
 
   async *exec(cmd: string, opts?: ExecOptions): AsyncIterable<ExecChunk> {

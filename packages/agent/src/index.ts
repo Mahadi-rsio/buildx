@@ -27,6 +27,11 @@ import {
 } from "./mcp";
 import { buildSystemPrompt } from "./prompt";
 import { buildTools } from "./tools";
+import {
+  buildSkillsSection,
+  createSkillTools,
+  type SkillRuntime,
+} from "./skills";
 
 export { buildSystemPrompt } from "./prompt";
 export { buildTools, type AgentTools } from "./tools";
@@ -36,6 +41,33 @@ export {
   estimateMessageTokens,
   estimateRequestTokens,
 } from "./context-budget";
+export {
+  assertSafeSkillUrl,
+  buildSkillsSection,
+  computeSkillDigest,
+  createSkillRuntime,
+  createSkillTools,
+  discoverArchiveSkill,
+  discoverDirectSkill,
+  discoverGitHubSkill,
+  discoverSkill,
+  parseSkillMarkdown,
+  parseSkillSource,
+  safeSkillPath,
+  SkillSecurityError,
+  SkillValidationError,
+  skillRuntimeFromPackages,
+  skillSourceFromPackage,
+  validateSkillDescription,
+  validateSkillName,
+  type DiscoverSkillOptions,
+  type LoadedSkill,
+  type ParsedSkillSource,
+  type SkillMetadata,
+  type SkillPackage,
+  type SkillRuntime,
+  type SkillSource,
+} from "./skills";
 export {
   assertSafeMcpUrl,
   buildMcpTools,
@@ -76,6 +108,11 @@ export interface CreateAgentOptions {
   /** MCP tools already discovered for this run, merged with workspace tools. */
   mcpTools?: ToolSet;
   /**
+   * Installed skills for this run. Only compact metadata enters the system
+   * prompt; full instructions are loaded on demand through `load_skill`.
+   */
+  skills?: SkillRuntime;
+  /**
    * Compact the conversation once it exceeds this token budget. Enabled by
    * default at 75k tokens so long runs never overflow the model window.
    */
@@ -108,6 +145,7 @@ function buildToolSet(options: CreateAgentOptions): {
     ...workspaceTools,
     ...(budget ? { [SUMMARIZE_TOOL_NAME]: budget.summarizeTool } : {}),
     ...(options.mcpTools ?? {}),
+    ...(options.skills ? createSkillTools(options.skills) : {}),
   };
   return { tools, budget };
 }
@@ -123,7 +161,13 @@ export function createAgent(options: CreateAgentOptions) {
     baseURL: options.baseURL ?? process.env.OPENAI_BASE_URL,
   });
   const { tools, budget } = buildToolSet(options);
-  const instructions = options.instructions ?? buildSystemPrompt();
+  const baseInstructions = options.instructions ?? buildSystemPrompt();
+  const skillsSection = options.skills
+    ? buildSkillsSection(options.skills.list())
+    : "";
+  const instructions = skillsSection
+    ? `${baseInstructions}\n\n${skillsSection}`
+    : baseInstructions;
 
   return new ToolLoopAgent({
     model: provider.chat(options.model ?? DEFAULT_MODEL),

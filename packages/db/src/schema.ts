@@ -579,6 +579,75 @@ export const usageLedger = pgTable(
   (table) => [index("usage_ledger_userId_idx").on(table.userId)],
 );
 
+/* ── Agent Skills catalog + installations ──────────────────────────────────
+ * Skill artifacts are immutable, content-addressed blobs in object storage
+ * (`artifactKey`). Catalog rows are global and keyed by digest; installations
+ * are owned per user or per project and never cross those scopes.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+export type SkillInstallState = "installing" | "installed" | "failed" | "removed";
+
+export const skills = pgTable(
+  "skills",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    name: text("name").notNull(),
+    description: text("description").notNull(),
+    source: text("source").notNull(),
+    sourceKind: text("source_kind").$type<"github" | "url" | "archive">().notNull(),
+    /** Pinned commit SHA or `sha256:<digest>` for direct URLs. */
+    resolvedRef: text("resolved_ref").notNull(),
+    /** SHA-256 over the canonical file set; doubles as the artifact identity. */
+    digest: text("digest").notNull(),
+    /** Immutable object-storage key. Never overwritten for the same digest. */
+    artifactKey: text("artifact_key").notNull(),
+    fileCount: integer("file_count").notNull().default(0),
+    totalBytes: bigint("total_bytes", { mode: "number" }).notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("skills_digest_idx").on(table.digest),
+    index("skills_name_idx").on(table.name),
+  ],
+);
+
+export const skillInstallations = pgTable(
+  "skill_installations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    /** Null for user-scoped installations; set for project-scoped installs. */
+    projectId: uuid("project_id").references(() => projects.id, {
+      onDelete: "cascade",
+    }),
+    skillId: uuid("skill_id")
+      .notNull()
+      .references(() => skills.id, { onDelete: "cascade" }),
+    /** Denormalized for the (scope, name) uniqueness/in-place update rule. */
+    name: text("name").notNull(),
+    /** `user:<id>` or `project:<id>` — enforces ownership at the DB level. */
+    scopeKey: text("scope_key").notNull(),
+    state: text("state").$type<SkillInstallState>().notNull().default("installing"),
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .$onUpdate(() => new Date())
+      .notNull(),
+  },
+  (table) => [
+    uniqueIndex("skill_installations_scope_name_idx").on(table.scopeKey, table.name),
+    index("skill_installations_userId_idx").on(table.userId),
+    index("skill_installations_projectId_idx").on(table.projectId),
+  ],
+);
+
 /** One open row per running machine; its duration is billed as CPU-seconds. */
 export const usageSessions = pgTable(
   "usage_sessions",

@@ -131,3 +131,41 @@ test("LazyBoxSandbox onDestroy pauses instead of deleting", async () => {
 
   assert.deepStrictEqual(pauses, ["suspend"]);
 });
+test("LazyBoxSandbox retries after a failed first resolution", async () => {
+  let attempts = 0;
+  const sandbox = new LazyBoxSandbox({
+    resolve: async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("transient box outage");
+      const box = makeBox();
+      await box.start();
+      return box;
+    },
+  });
+
+  await assert.rejects(sandbox.writeFile("a.txt", "one"), /transient box outage/);
+  await sandbox.writeFile("a.txt", "two");
+
+  assert.strictEqual(attempts, 2);
+});
+
+test("LazyBoxSandbox shares one attempt across concurrent callers", async () => {
+  let attempts = 0;
+  const sandbox = new LazyBoxSandbox({
+    resolve: async () => {
+      attempts += 1;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      const box = makeBox();
+      await box.start();
+      return box;
+    },
+  });
+
+  await Promise.all([
+    sandbox.writeFile("a.txt", "one"),
+    sandbox.writeFile("b.txt", "two"),
+    sandbox.readFile("a.txt"),
+  ]);
+
+  assert.strictEqual(attempts, 1);
+});

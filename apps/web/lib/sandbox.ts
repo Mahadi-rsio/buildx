@@ -80,6 +80,9 @@ function boxOptions(userId: string): BoxSandboxOptions {
     baseUrl: settings.baseUrl,
     runtime: (settings.runtime as BoxSandboxOptions["runtime"]) || "node",
     size: (settings.size as BoxSandboxOptions["size"]) || "small",
+    // Never keep an ordinary workspace running while idle: Upstash auto-pauses
+    // it and active-CPU billing stops. Runs pause it explicitly on teardown.
+    keepAlive: false,
   };
 }
 

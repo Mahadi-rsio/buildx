@@ -113,3 +113,16 @@ test("rotate reports a miss for a missing key", { skip: skipReason }, async () =
     prevKey: `${key("does-not-exist.txt")}.prev`,
   });
 });
+
+test("putObject/getObject round-trips a bounded skill artifact", { skip: skipReason }, async () => {
+  const target = key("skill/manifest.json");
+  const body = new TextEncoder().encode('{"name":"demo"}');
+  await storage!.putObject(target, body, { contentType: "application/json" });
+  const loaded = await storage!.getObject(target);
+  assert.deepEqual(loaded, body);
+  await assert.rejects(
+    storage!.getObject(target, { maxBytes: 2 }),
+    /exceeds 2 bytes/,
+  );
+  assert.equal(await storage!.getObject(key("missing.json")), null);
+});

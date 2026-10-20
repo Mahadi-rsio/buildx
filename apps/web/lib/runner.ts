@@ -19,6 +19,7 @@ import {
 import { cancelRemoteBoxExecution, createSandbox } from "./sandbox";
 import { getQuotaService } from "./quota";
 import { loadEnabledMcpServerConfigs } from "./mcp/store";
+import { loadSkillRuntime } from "./skills/store";
 
 function guardSandbox(sandbox: Sandbox, run: StoredRun): Sandbox {
   const checkOwnership = async (): Promise<void> => {
@@ -192,6 +193,16 @@ export async function startRun(run: StoredRun): Promise<void> {
     },
   );
 
+  // Skills are read from the catalog/object storage, never from a Box. A
+  // missing skill store must not block the run.
+  const skills = await loadSkillRuntime(run.userId).catch((error: unknown) => {
+    console.error(
+      `[buildx-worker] failed to load skills for run ${run.id}`,
+      error,
+    );
+    return undefined;
+  });
+
   const rawSandbox = createSandbox({ userId: run.userId });
   const sandbox = guardSandbox(rawSandbox, run);
   try {
@@ -216,6 +227,7 @@ export async function startRun(run: StoredRun): Promise<void> {
       },
       abortSignal: run.runtime.controller.signal,
       mcpServers,
+      skills,
       // Reserve one unit before every agent step, including each tool-loop
       // iteration. Provider retries are disabled; LiteLLM's `order` failover
       // may try another upstream after a 429/5xx within the same reservation.

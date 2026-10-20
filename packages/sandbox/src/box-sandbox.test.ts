@@ -521,3 +521,53 @@ test("BoxSandbox.resolve returns clean path", async () => {
 
 // Silence TS: ExecChunk is a local type used in assertions above.
 type ExecChunk = { stream: "stdout" | "stderr"; data: string };
+test("BoxSandbox.restoreSnapshotId restores instead of creating an empty box", async () => {
+  const originalGet = Box.getByName;
+  const originalFrom = Box.fromSnapshot;
+  const calls: Array<{ snapshot: string; name?: string }> = [];
+  const box = makeMockBox();
+  try {
+    Box.getByName = async () => {
+      throw new BoxError("box not found", 404);
+    };
+    Box.fromSnapshot = (async (snapshot: string, config?: { name?: string }) => {
+      calls.push({ snapshot, name: config?.name });
+      return box;
+    }) as typeof Box.fromSnapshot;
+
+    const sandbox = new BoxSandbox({
+      name: "restored-box",
+      apiKey: "dummy-key",
+      restoreSnapshotId: "snap-123",
+    });
+    await sandbox.start();
+    assert.deepEqual(calls, [{ snapshot: "snap-123", name: "restored-box" }]);
+  } finally {
+    Box.getByName = originalGet;
+    Box.fromSnapshot = originalFrom;
+  }
+});
+
+test("BoxSandbox reconnects when a concurrent create wins the race", async () => {
+  const originalGet = Box.getByName;
+  const originalCreate = Box.create;
+  const box = makeMockBox();
+  let gets = 0;
+  try {
+    Box.getByName = async () => {
+      gets += 1;
+      if (gets === 1) throw new BoxError("box not found", 404);
+      return box;
+    };
+    Box.create = (async () => {
+      throw new Error("box name already exists");
+    }) as typeof Box.create;
+
+    const sandbox = new BoxSandbox({ name: "raced-box", apiKey: "dummy-key" });
+    await sandbox.start();
+    assert.equal(gets, 2);
+  } finally {
+    Box.getByName = originalGet;
+    Box.create = originalCreate;
+  }
+});

@@ -37,9 +37,16 @@ export class LazyBoxSandbox implements Sandbox {
 
   private box(): Promise<BoxSandbox> {
     if (!this.resolving) {
-      this.resolving = this.resolveBox().then(async (box) => {
+      const attempt = this.resolveBox().then(async (box) => {
         await box.start();
         return box;
+      });
+      // A transient provider failure must not poison the sandbox forever:
+      // clear the cached promise so the next operation retries. Concurrent
+      // callers still share this attempt.
+      this.resolving = attempt.catch((error: unknown) => {
+        this.resolving = undefined;
+        throw error;
       });
     }
     return this.resolving;
