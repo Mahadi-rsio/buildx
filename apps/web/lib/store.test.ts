@@ -137,9 +137,11 @@ test("run, events and stats round-trip through Postgres", { skip: skipReason }, 
     model: "gpt-4o-mini",
     maxSteps: 5,
     contextWindowTokens: 200_000,
+    skillNames: ["pdf", "test-driven-development"],
   });
   assert.equal(run.status, "queued");
   assert.equal(run.contextWindowTokens, 200_000);
+  assert.deepEqual(run.skillNames, ["pdf", "test-driven-development"]);
 
   const claimed = await claimNextQueuedRun(db!, { leaseId: "lease-1" });
   assert.equal(claimed?.id, run.id, "enqueue-only row is claimable");
@@ -175,6 +177,7 @@ test("run, events and stats round-trip through Postgres", { skip: skipReason }, 
   assert.equal(row.stepCount, 2);
   assert.equal(row.inputTokens, 10);
   assert.equal(row.contextWindowTokens, 200_000);
+  assert.deepEqual(row.skillNames, ["pdf", "test-driven-development"]);
   assert.equal(row.startedAt instanceof Date, true);
   assert.equal(row.endedAt instanceof Date, true);
   assert.equal(row.leaseId, null, "finalize releases the lease");
@@ -194,6 +197,10 @@ test("run, events and stats round-trip through Postgres", { skip: skipReason }, 
   assert.equal(refreshed?.status, "completed");
   assert.equal(refreshed?.events.length, 2);
   assert.equal(refreshed?.contextWindowTokens, 200_000);
+  assert.deepEqual(refreshed?.skillNames, [
+    "pdf",
+    "test-driven-development",
+  ]);
 });
 
 test("idempotencyKey replays the original run", { skip: skipReason }, async () => {

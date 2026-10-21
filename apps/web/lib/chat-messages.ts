@@ -28,6 +28,12 @@ export interface ChatMessage {
   usage?: TokenUsage;
   /** Earlier turn replayed from the conversation; not the current run. */
   historical?: boolean;
+  /** Skills attached to this turn. */
+  skillNames?: string[];
+  /** Whether attached skills have been preloaded into the model context. */
+  skillsReady?: boolean;
+  /** Attached skills are still being preloaded. */
+  skillsLoading?: boolean;
 }
 
 /** Build a chat-shaped view from a run task + append-only events. */
@@ -40,6 +46,12 @@ export function buildChatMessages(args: {
   usage?: RunTaskUsage;
   /** Earlier turns of the conversation, rendered before this run. */
   history?: ConversationTurn[];
+  /** Skills attached to this run. */
+  skillNames?: string[];
+  /** Whether every attached skill is present in the model context. */
+  skillsReady?: boolean;
+  /** The run is still preloading attached skills. */
+  skillsLoading?: boolean;
 }): ChatMessage[] {
   const items = toStreamItems(args.events);
   const assistantBlocks: ChatBlock[] = [];
@@ -126,6 +138,9 @@ export function buildChatMessages(args: {
     id: `${args.runId}-user`,
     role: "user",
     createdAt: args.createdAt,
+    skillNames: args.skillNames?.length ? args.skillNames : undefined,
+    skillsReady: args.skillsReady,
+    skillsLoading: args.skillsLoading,
     blocks: [
       {
         id: `${args.runId}-user-text`,

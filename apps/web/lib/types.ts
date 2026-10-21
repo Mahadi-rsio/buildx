@@ -47,6 +47,8 @@ export interface RunSummary {
   maxSteps: number;
   /** Context window selected for this run (compaction + utilization). */
   contextWindowTokens: ContextWindowTokens;
+  /** Installed skills attached to this run and preloaded into its context. */
+  skillNames?: string[];
   /** Id of the sandbox workspace backing this run (equal to the run id here). */
   workspaceId: string;
   createdAt: number;

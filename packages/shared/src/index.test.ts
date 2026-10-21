@@ -13,6 +13,32 @@ test("createRunSchema rejects an empty task", () => {
   assert.throws(() => createRunSchema.parse({ task: "" }));
 });
 
+test("createRunSchema accepts valid skill names", () => {
+  const parsed = createRunSchema.parse({
+    task: "x",
+    skillNames: ["test-driven-development", "pdf2"],
+  });
+  assert.deepEqual(parsed.skillNames, ["test-driven-development", "pdf2"]);
+});
+
+test("createRunSchema rejects malformed skill names", () => {
+  assert.throws(() =>
+    createRunSchema.parse({ task: "x", skillNames: ["Not Valid"] }),
+  );
+  assert.throws(() =>
+    createRunSchema.parse({ task: "x", skillNames: ["-leading"] }),
+  );
+});
+
+test("createRunSchema caps the number of selected skills", () => {
+  assert.throws(() =>
+    createRunSchema.parse({
+      task: "x",
+      skillNames: Array.from({ length: 21 }, (_, i) => `skill-${i}`),
+    }),
+  );
+});
+
 test("createRunSchema accepts supported context windows only", () => {
   assert.equal(
     createRunSchema.parse({ task: "x", contextWindow: 200_000 }).contextWindow,

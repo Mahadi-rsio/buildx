@@ -4,6 +4,7 @@ import {
   createSkillRuntime,
   discoverSkill,
   SkillValidationError,
+  type SkillDiscoveryCache,
   type SkillPackage,
   type SkillRuntime,
   type SkillSource,
@@ -153,13 +154,28 @@ export async function installSkillFromSource(input: {
   source: string;
   projectId?: string | null;
   path?: string;
+  /** Defaults to the historical replace-in-place behavior. */
+  overwrite?: boolean;
+  /** Reused across a batch so one source is fetched only once. */
+  cache?: SkillDiscoveryCache;
 }): Promise<SkillInstallationView> {
   const db = getDb();
   const scope = scopeFor(input.projectId);
   if (scope.kind === "project") {
     await assertProjectOwner(db, input.userId, scope.projectId);
   }
-  const pkg = await discoverSkill(input.source, { path: input.path });
+  const pkg = await discoverSkill(input.source, {
+    path: input.path,
+    cache: input.cache,
+  });
+  if (input.overwrite === false) {
+    const rows = await listInstalledSkills(db, { userId: input.userId, scope });
+    if (rows.some((row) => row.skill.name === pkg.metadata.name)) {
+      throw new SkillValidationError(
+        `Skill "${pkg.metadata.name}" is already installed. Enable replace to overwrite it.`,
+      );
+    }
+  }
   const artifactKey = artifactKeyFor(pkg.digest);
   const existing = await storage().head(artifactKey).catch(() => null);
   if (!existing) {
@@ -189,6 +205,57 @@ export async function installSkillFromSource(input: {
   const installed = rows.find((row) => row.skill.name === pkg.metadata.name);
   if (!installed) throw new Error("skill installation did not persist");
   return toView(installed, scope);
+}
+
+export interface SkillBatchInstallResult {
+  path: string;
+  skill?: SkillInstallationView;
+  error?: string;
+}
+
+/**
+ * Install several skill directories from one source. Failures are isolated so a
+ * single bad path cannot hide the skills that did install successfully.
+ */
+export async function installSkillsFromSource(input: {
+  userId: string;
+  source: string;
+  projectId?: string | null;
+  paths: string[];
+  overwrite?: boolean;
+}): Promise<SkillBatchInstallResult[]> {
+  const paths = [...new Set(input.paths.map((path) => path.trim()))];
+  if (paths.length === 0) {
+    throw new SkillValidationError("Select at least one skill to install.");
+  }
+  const cache: SkillDiscoveryCache = {};
+  const results: SkillBatchInstallResult[] = [];
+  for (const path of paths) {
+    if (!path && paths.length > 1) {
+      results.push({
+        path,
+        error: "The repository root can only be installed on its own.",
+      });
+      continue;
+    }
+    try {
+      const skill = await installSkillFromSource({
+        userId: input.userId,
+        source: input.source,
+        projectId: input.projectId,
+        path: path || undefined,
+        overwrite: input.overwrite,
+        cache,
+      });
+      results.push({ path, skill });
+    } catch (error) {
+      results.push({
+        path,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return results;
 }
 
 export interface SkillInstallationDetail {

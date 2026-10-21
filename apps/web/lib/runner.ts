@@ -228,6 +228,7 @@ export async function startRun(run: StoredRun): Promise<void> {
       abortSignal: run.runtime.controller.signal,
       mcpServers,
       skills,
+      selectedSkills: run.skillNames,
       // Reserve one unit before every agent step, including each tool-loop
       // iteration. Provider retries are disabled; LiteLLM's `order` failover
       // may try another upstream after a 429/5xx within the same reservation.

@@ -6,6 +6,7 @@ import { ChatEmptyState } from "@/components/chat/empty-state";
 import { PanelSplit } from "@/components/shell/panel-split";
 import { useShell, useShellMeta } from "@/components/shell/shell-context";
 import { useCreateRun } from "@/hooks/use-create-run";
+import { useSkills } from "@/hooks/use-skills";
 import { newConversationId } from "@/lib/conversation-id";
 import { enqueueConversationEvent } from "@/lib/conversation-sync";
 
@@ -13,8 +14,10 @@ export default function NewChatPage() {
   useShellMeta({ status: "idle" });
 
   const { createRun, submitting, error } = useCreateRun();
+  const { skills, loading: skillsLoading } = useSkills();
   const { modelOverride, setModelOverride, contextWindowTokens } = useShell();
   const [draft, setDraft] = useState("");
+  const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
   const conversationIdRef = useRef<string | null>(null);
 
   async function send() {
@@ -37,9 +40,13 @@ export default function NewChatPage() {
       task,
       model: modelOverride.trim() || undefined,
       contextWindow: contextWindowTokens,
+      skillNames: selectedSkills,
       conversationId,
     });
-    if (created) setDraft("");
+    if (created) {
+      setDraft("");
+      setSelectedSkills([]);
+    }
   }
 
   return (
@@ -52,6 +59,10 @@ export default function NewChatPage() {
           onSubmit={() => void send()}
           model={modelOverride}
           onModelChange={setModelOverride}
+          skills={skills ?? []}
+          skillsLoading={skillsLoading}
+          selectedSkills={selectedSkills}
+          onSelectedSkillsChange={setSelectedSkills}
           submitting={submitting}
           error={error}
           hint="Each message starts a new run in a fresh workspace"

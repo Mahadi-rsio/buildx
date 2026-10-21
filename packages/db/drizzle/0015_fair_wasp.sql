@@ -1,0 +1,1 @@
+ALTER TABLE "runs" ADD COLUMN "skill_names" jsonb;

@@ -248,6 +248,21 @@ export const createRunSchema = z.object({
   conversationId: z.string().uuid().optional(),
   /** Prior conversation turns; the agent replays them before the new task. */
   history: z.array(conversationTurnSchema).max(100).optional(),
+  /** Installed skills to preload into this run's model context. */
+  skillNames: z
+    .array(
+      z
+        .string()
+        .trim()
+        .min(1)
+        .max(64)
+        .regex(
+          /^[a-z0-9]+(?:-[a-z0-9]+)*$/,
+          "invalid skill name",
+        ),
+    )
+    .max(20)
+    .optional(),
   /** Requested context window for compaction and live utilization stats. */
   contextWindow: z
     .number()

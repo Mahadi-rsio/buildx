@@ -17,6 +17,11 @@ export interface SkillView {
   totalBytes: number;
 }
 
+export interface InstallResult {
+  skills: SkillView[];
+  failures: Array<{ path: string; message: string }>;
+}
+
 interface SkillsResponse {
   skills?: SkillView[];
   error?: string;
@@ -111,22 +116,33 @@ export function useSkills() {
   async function install(input: {
     source: string;
     path?: string;
-  }): Promise<void> {
+    paths?: string[];
+    overwrite?: boolean;
+  }): Promise<InstallResult> {
     const response = await fetch("/api/skills", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         source: input.source,
         path: input.path || undefined,
+        paths: input.paths?.length ? input.paths : undefined,
+        overwrite: input.overwrite,
       }),
     });
     const data = (await response.json().catch(() => ({}))) as {
       error?: string;
       message?: string;
+      skill?: SkillView;
+      skills?: SkillView[];
+      failures?: Array<{ path: string; message: string }>;
     };
     if (!response.ok) throw new Error(errorFor(response, data));
     cachedCount = null;
     await refresh();
+    return {
+      skills: data.skills ?? (data.skill ? [data.skill] : []),
+      failures: Array.isArray(data.failures) ? data.failures : [],
+    };
   }
 
   async function uninstall(id: string): Promise<void> {

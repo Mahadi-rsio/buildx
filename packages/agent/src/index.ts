@@ -28,6 +28,7 @@ import {
 import { buildSystemPrompt } from "./prompt";
 import { buildTools } from "./tools";
 import {
+  buildSelectedSkillsSection,
   buildSkillsSection,
   createSkillTools,
   type SkillRuntime,
@@ -43,6 +44,7 @@ export {
 } from "./context-budget";
 export {
   assertSafeSkillUrl,
+  buildSelectedSkillsSection,
   buildSkillsSection,
   computeSkillDigest,
   createSkillRuntime,
@@ -64,8 +66,11 @@ export {
   type DiscoverSkillOptions,
   type LoadedSkill,
   type ParsedSkillSource,
+  type SkillCandidate,
+  type SkillDiscoveryCache,
   type SkillMetadata,
   type SkillPackage,
+  type SelectedSkillsSection,
   type SkillPreview,
   type SkillRuntime,
   type SkillSource,
@@ -204,6 +209,8 @@ export interface RunTaskOptions extends CreateAgentOptions {
   mcpServers?: McpServerConfig[];
   /** Approval gate for MCP tools the server marks destructive. */
   approveMcpTool?: BuildMcpToolsOptions["approve"];
+  /** Skills the user attached; their full instructions are preloaded. */
+  selectedSkills?: string[];
 }
 
 export interface RunTaskUsage {
@@ -286,6 +293,45 @@ export async function runTask(options: RunTaskOptions): Promise<RunTaskResult> {
 
   await emit({ type: "status", data: { status: "running" }, ts: ts() });
 
+  // Attached skills are loaded up front instead of waiting for the model to call
+  // `load_skill`. The append-only tool events make the loading visible in the UI.
+  let instructions = options.instructions;
+  if (options.skills && options.selectedSkills?.length) {
+    try {
+      const selected = await buildSelectedSkillsSection(
+        options.skills,
+        options.selectedSkills,
+      );
+      if (selected.section) {
+        instructions = `${instructions ?? buildSystemPrompt()}\n\n${selected.section}`;
+      }
+      if (selected.missing.length > 0) {
+        console.warn(
+          `[skills] selected skills unavailable: ${selected.missing.join(", ")}`,
+        );
+      }
+      for (const name of selected.loaded) {
+        const toolCallId = `selected-skill:${name}`;
+        await emit({
+          type: "tool_call",
+          data: { toolCallId, toolName: "load_skill", input: { name } },
+          ts: ts(),
+        });
+        await emit({
+          type: "tool_result",
+          data: {
+            toolCallId,
+            toolName: "load_skill",
+            output: { skill: name, preloaded: true },
+          },
+          ts: ts(),
+        });
+      }
+    } catch (error) {
+      console.warn(`[skills] failed to preload selected skills: ${toText(error)}`);
+    }
+  }
+
   // Connect each enabled MCP server. One unreachable server must not abort the
   // run, so failures are logged and the remaining servers still contribute
   // tools. Connections are closed when the run finishes.
@@ -309,6 +355,7 @@ export async function runTask(options: RunTaskOptions): Promise<RunTaskResult> {
 
   const agent = createAgent({
     ...options,
+    instructions,
     mcpTools,
     contextBudget: {
       ...(options.contextBudget ?? {}),

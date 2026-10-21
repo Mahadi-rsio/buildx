@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { AlertTriangle, BookOpen, Loader2, Plus } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { InstallSkillDialog } from "@/components/skills/install-skill-dialog";
 import { SkillCard } from "@/components/skills/skill-card";
@@ -22,6 +23,16 @@ export function SkillsPage() {
 
   const shownError = actionError ?? error;
   const isMigrated = !shownError?.toLowerCase().includes("migration");
+  const groups = useMemo(() => {
+    const bySource = new Map<string, SkillView[]>();
+    for (const skill of skills ?? []) {
+      const group = bySource.get(skill.source) ?? [];
+      group.push(skill);
+      bySource.set(skill.source, group);
+    }
+    return [...bySource.entries()].sort(([a], [b]) => a.localeCompare(b));
+  }, [skills]);
+  const activeCount = (skills ?? []).filter((skill) => skill.enabled).length;
 
   async function handleToggle(skill: SkillView) {
     setBusyId(skill.id);
@@ -80,10 +91,17 @@ export function SkillsPage() {
         </Alert>
       ) : null}
 
-      <section className="space-y-2">
-        <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          Installed
-        </h2>
+      <section className="space-y-3">
+        <div className="flex items-center gap-2">
+          <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            Installed
+          </h2>
+          {skills?.length ? (
+            <span className="text-2xs text-[var(--text-faint)]">
+              {activeCount} active · {skills.length} total
+            </span>
+          ) : null}
+        </div>
         {loading && skills === null ? (
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <Loader2 className="size-3.5 animate-spin motion-reduce:animate-none" />
@@ -98,18 +116,45 @@ export function SkillsPage() {
             </p>
           </div>
         ) : (
-          <ul className="space-y-2">
-            {(skills ?? []).map((skill) => (
-              <SkillCard
-                key={skill.id}
-                skill={skill}
-                busy={busyId === skill.id}
-                onToggle={() => void handleToggle(skill)}
-                onView={() => setDetail(skill)}
-                onDelete={() => handleDelete(skill)}
-              />
-            ))}
-          </ul>
+          <div className="space-y-4">
+            {groups.map(([source, group]) => {
+              const groupActive = group.filter((skill) => skill.enabled).length;
+              return (
+                <div key={source} className="space-y-2">
+                  <div className="flex min-w-0 items-center gap-2 px-1">
+                    <span
+                      className="truncate font-mono text-[11px] text-[var(--text-muted)]"
+                      title={source}
+                    >
+                      {source}
+                    </span>
+                    <Badge variant="outline" className="shrink-0 text-[10px]">
+                      {group[0]?.sourceKind === "github"
+                        ? "GitHub"
+                        : group[0]?.sourceKind === "url"
+                          ? "URL"
+                          : "Archive"}
+                    </Badge>
+                    <span className="ml-auto shrink-0 text-2xs text-[var(--text-faint)]">
+                      {groupActive}/{group.length} active
+                    </span>
+                  </div>
+                  <ul className="space-y-2">
+                    {group.map((skill) => (
+                      <SkillCard
+                        key={skill.id}
+                        skill={skill}
+                        busy={busyId === skill.id}
+                        onToggle={() => void handleToggle(skill)}
+                        onView={() => setDetail(skill)}
+                        onDelete={() => handleDelete(skill)}
+                      />
+                    ))}
+                  </ul>
+                </div>
+              );
+            })}
+          </div>
         )}
       </section>
 
@@ -117,6 +162,7 @@ export function SkillsPage() {
         open={installOpen}
         onOpenChange={setInstallOpen}
         onInstall={install}
+        installed={skills ?? []}
       />
 
       <SkillDetailSheet

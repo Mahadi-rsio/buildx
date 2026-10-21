@@ -56,6 +56,7 @@ export interface CreateRunInput {
   maxSteps: number;
   contextWindowTokens?: ContextWindowTokens;
   history?: ConversationTurn[];
+  skillNames?: string[];
   conversationId?: string;
   idempotencyKey?: string;
   correlationId?: string;
@@ -216,6 +217,7 @@ export async function createRunForUser(
           status: "queued",
           task: input.task,
           history: input.history?.length ? input.history : null,
+          skillNames: input.skillNames?.length ? input.skillNames : null,
           workspaceName:
             input.user.name?.trim() ||
             input.user.email.split("@")[0] ||

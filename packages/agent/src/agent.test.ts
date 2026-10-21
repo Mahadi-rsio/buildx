@@ -14,6 +14,7 @@ import { after, before, test } from "node:test";
 import { TestSandbox } from "./test-sandbox";
 import type { RunEvent } from "@buildx/shared";
 import { runTask } from "./index";
+import { skillRuntimeFromPackages } from "./skills";
 import { buildTools } from "./tools";
 
 type ChatRequest = {
@@ -525,6 +526,57 @@ test("runTask executes a tool call, writes a file, and streams events", async ()
     assert.ok(last && last.type === "status");
     if (last?.type === "status") {
       assert.equal(last.data.status, "completed");
+    }
+  } finally {
+    await sandbox.destroy();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("runTask preloads selected skills and emits load events", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "buildx-agent-skills-"));
+  const sandbox = new TestSandbox({ rootDir: dir });
+  await sandbox.start();
+  const skills = skillRuntimeFromPackages([
+    {
+      metadata: { name: "pdf", description: "Work with PDFs." },
+      instructions: "# pdf\nFollow these steps safely.",
+      files: { "SKILL.md": "irrelevant", "references/guide.md": "Guide body" },
+      source: "acme/skills",
+      sourceKind: "github",
+      resolvedRef: "a".repeat(40),
+      digest: "x",
+    },
+  ]);
+  const events: RunEvent[] = [];
+
+  try {
+    const result = await runTask({
+      task: "Create hello.txt",
+      sandbox,
+      skills,
+      selectedSkills: ["pdf", "missing"],
+      model: "gpt-4o-mini",
+      apiKey: "test-key",
+      baseURL,
+      onEvent: (event) => {
+        events.push({ ...event, id: events.length + 1, runId: "run-skills" });
+      },
+    });
+
+    assert.equal(result.status, "completed");
+    const calls = events.filter(
+      (event) => event.type === "tool_call" && event.data.toolCallId.startsWith("selected-skill:"),
+    );
+    assert.equal(calls.length, 1);
+    const results = events.filter(
+      (event) =>
+        event.type === "tool_result" &&
+        event.data.toolCallId === "selected-skill:pdf",
+    );
+    assert.equal(results.length, 1);
+    if (results[0]?.type === "tool_result") {
+      assert.deepEqual(results[0].data.output, { skill: "pdf", preloaded: true });
     }
   } finally {
     await sandbox.destroy();

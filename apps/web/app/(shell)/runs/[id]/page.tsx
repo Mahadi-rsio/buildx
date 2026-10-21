@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { X } from "lucide-react";
+import { BookOpen, X } from "lucide-react";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -20,6 +20,7 @@ import { useShell, useShellMeta } from "@/components/shell/shell-context";
 import type { WorkspaceData } from "@/components/shell/right-panel";
 import { useCreateRun } from "@/hooks/use-create-run";
 import { useRunStream } from "@/hooks/use-run-stream";
+import { useSkills } from "@/hooks/use-skills";
 import { useWorkspaceDiff } from "@/hooks/use-workspace-diff";
 import { useWorkspaceFiles } from "@/hooks/use-workspace-files";
 import { buildChatMessages, type ChatMessage } from "@/lib/chat-messages";
@@ -48,6 +49,7 @@ interface QueuedTurn {
   task: string;
   model?: string;
   contextWindow: ContextWindowTokens;
+  skillNames?: string[];
 }
 
 function isQueuedTurn(value: unknown): value is QueuedTurn {
@@ -58,7 +60,10 @@ function isQueuedTurn(value: unknown): value is QueuedTurn {
     typeof item.task === "string" &&
     item.task.trim().length > 0 &&
     (item.model === undefined || typeof item.model === "string") &&
-    isContextWindowTokens(item.contextWindow)
+    isContextWindowTokens(item.contextWindow) &&
+    (item.skillNames === undefined ||
+      (Array.isArray(item.skillNames) &&
+        item.skillNames.every((name) => typeof name === "string")))
   );
 }
 
@@ -90,6 +95,7 @@ export default function RunPage() {
   const { run, events, streamError, notFound, loading, stop } =
     useRunStream(runId);
   const { createRun, submitting, error: createError } = useCreateRun();
+  const { skills, loading: skillsLoading } = useSkills();
   const {
     modelOverride,
     setModelOverride,
@@ -97,6 +103,7 @@ export default function RunPage() {
     panelVisible,
   } = useShell();
   const [draft, setDraft] = useState("");
+  const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
   const [queue, setQueue] = useState<QueuedTurn[]>([]);
   const [queuePaused, setQueuePaused] = useState(false);
   const dispatchInFlightRef = useRef(false);
@@ -121,6 +128,24 @@ export default function RunPage() {
   });
 
   const running = run !== null && !isTerminalStatus(run.status);
+
+  const preloadedSkills = useMemo(() => {
+    const names = new Set<string>();
+    for (const event of events) {
+      if (event.type !== "tool_result") continue;
+      const output = event.data.output;
+      if (output === null || typeof output !== "object") continue;
+      const record = output as Record<string, unknown>;
+      if (record.preloaded === true && typeof record.skill === "string") {
+        names.add(record.skill);
+      }
+    }
+    return names;
+  }, [events]);
+  const skillsReady =
+    run?.skillNames?.length
+      ? run.skillNames.every((name) => preloadedSkills.has(name))
+      : false;
 
   const files = useWorkspaceFiles(
     run?.workspaceId ?? runId,
@@ -168,9 +193,13 @@ export default function RunPage() {
             status: run.status,
             usage: run.stats?.usage,
             history: run.history,
+            skillNames: run.skillNames,
+            skillsReady,
+            skillsLoading:
+              running && Boolean(run.skillNames?.length) && !skillsReady,
           })
         : [],
-    [runId, run, events],
+    [runId, run, events, running, skillsReady],
   );
 
   const conversationIdRef = useRef<string>(
@@ -230,6 +259,7 @@ export default function RunPage() {
           task: next.task,
           model: next.model,
           contextWindow: next.contextWindow,
+          skillNames: next.skillNames,
           history: toHistory(messages),
           conversationId: run.conversationId ?? conversationIdRef.current,
         });
@@ -281,10 +311,12 @@ export default function RunPage() {
           task,
           model: modelOverride.trim() || undefined,
           contextWindow: contextWindowTokens,
+          skillNames: selectedSkills.length > 0 ? selectedSkills : undefined,
         },
       ]);
       setQueuePaused(false);
       setDraft("");
+      setSelectedSkills([]);
       return;
     }
 
@@ -303,10 +335,14 @@ export default function RunPage() {
       task,
       model: modelOverride.trim() || undefined,
       contextWindow: contextWindowTokens,
+      skillNames: selectedSkills.length > 0 ? selectedSkills : undefined,
       history: toHistory(messages),
       conversationId,
     });
-    if (created) setDraft("");
+    if (created) {
+      setDraft("");
+      setSelectedSkills([]);
+    }
   }
 
   if (notFound) {
@@ -371,6 +407,7 @@ export default function RunPage() {
                     task: run.task,
                     model: modelOverride.trim() || undefined,
                     contextWindow: run.contextWindowTokens,
+                    skillNames: run.skillNames,
                     history: run.history,
                     conversationId: run.conversationId,
                   });
@@ -413,6 +450,15 @@ export default function RunPage() {
                     <span className="mt-0.5 font-mono text-2xs text-[var(--text-faint)]">
                       {item.contextWindow / 1000}k
                     </span>
+                    {item.skillNames?.length ? (
+                      <span
+                        className="mt-0.5 inline-flex shrink-0 items-center gap-0.5 text-2xs text-[var(--text-faint)]"
+                        title={`Skills: ${item.skillNames.join(", ")}`}
+                      >
+                        <BookOpen className="size-2.5" />
+                        {item.skillNames.length}
+                      </span>
+                    ) : null}
                     <span className="min-w-0 flex-1 truncate text-xs text-[var(--text-muted)]">
                       {item.task}
                     </span>
@@ -442,6 +488,10 @@ export default function RunPage() {
           onStop={running ? () => void stop() : undefined}
           model={modelOverride}
           onModelChange={setModelOverride}
+          skills={skills ?? []}
+          skillsLoading={skillsLoading}
+          selectedSkills={selectedSkills}
+          onSelectedSkillsChange={setSelectedSkills}
           submitting={submitting}
           streaming={running}
           error={createError}

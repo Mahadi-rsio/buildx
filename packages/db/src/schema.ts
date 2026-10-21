@@ -276,6 +276,8 @@ export const runs = pgTable(
     /** Earlier conversation turns replayed before `task` so follow-up messages
      *  keep their context across runs. */
     history: jsonb("history").$type<ConversationTurn[]>(),
+    /** Installed skills the user attached; preloaded into the model context. */
+    skillNames: jsonb("skill_names").$type<string[]>(),
     /** Human label for the sandbox workspace backing this run. */
     workspaceName: text("workspace_name"),
     maxSteps: integer("max_steps").notNull().default(40),

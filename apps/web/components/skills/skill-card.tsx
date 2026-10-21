@@ -72,9 +72,29 @@ export function SkillCard({
             <Badge variant="secondary" className="text-[10px]">
               {skill.scope}
             </Badge>
+            <Badge
+              variant={skill.enabled ? "secondary" : "outline"}
+              className="text-[10px]"
+            >
+              <span
+                className={cn(
+                  "size-1.5 rounded-full",
+                  skill.enabled
+                    ? "bg-[var(--ansi-green)]"
+                    : "bg-[var(--text-faint)]",
+                )}
+              />
+              {skill.enabled ? "Active" : "Off"}
+            </Badge>
           </div>
           <p className="mt-0.5 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
             {skill.description}
+          </p>
+          <p
+            className="mt-0.5 truncate font-mono text-[10px] text-[var(--text-faint)]"
+            title={skill.source}
+          >
+            {skill.source}
           </p>
           <p
             className="mt-1 truncate font-mono text-[10px] text-[var(--text-faint)]"

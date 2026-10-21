@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { deflateRawSync } from "node:zlib";
 import { test } from "node:test";
 import {
+  buildSelectedSkillsSection,
   buildSkillsSection,
   createSkillRuntime,
   createSkillTools,
@@ -220,7 +221,55 @@ test("imports a selected skill from a multi-skill GitHub repository", async () =
   assert.ok(calls.every((url) => url.includes(`/${sha}/`) || url.includes("api.github.com")));
 });
 
-test("previews multi-skill GitHub repositories without downloading blobs", async () => {
+test("reuses GitHub tree and archive downloads across a batch", async () => {
+  const sha = "d".repeat(40);
+  const tree = [
+    { path: "pdf/SKILL.md", mode: "100644", type: "blob", sha: "1", size: 100 },
+    { path: "slides/SKILL.md", mode: "100644", type: "blob", sha: "2", size: 100 },
+  ];
+  const calls: string[] = [];
+  const mockFetch = async (url: string): Promise<Response> => {
+    calls.push(url);
+    if (url.endsWith("/repos/acme/skills")) return response(JSON.stringify({ default_branch: "main" }));
+    if (url.includes("/commits/main")) return response(JSON.stringify({ sha }));
+    if (url.includes(`/git/trees/${sha}`)) return response(JSON.stringify({ tree, truncated: false }));
+    if (url.endsWith("/pdf/SKILL.md")) return response(skillMd("pdf", "Work with PDFs."));
+    if (url.endsWith("/slides/SKILL.md")) return response(skillMd("slides", "Build decks."));
+    throw new Error(`unexpected URL ${url}`);
+  };
+
+  const cache = {};
+  await discoverSkill("acme/skills", { fetch: mockFetch, resolveHost: publicResolve, path: "pdf", cache });
+  await discoverSkill("acme/skills", { fetch: mockFetch, resolveHost: publicResolve, path: "slides", cache });
+  assert.equal(calls.filter((url) => url.endsWith("/repos/acme/skills")).length, 1);
+  assert.equal(calls.filter((url) => url.includes(`/git/trees/${sha}`)).length, 1);
+
+  const archive = makeZip([
+    zipEntry("pdf/SKILL.md", skillMd("pdf", "Work with PDFs.")),
+    zipEntry("slides/SKILL.md", skillMd("slides", "Build decks.")),
+  ]);
+  let downloads = 0;
+  const archiveFetch = async (): Promise<Response> => {
+    downloads += 1;
+    return response(archive);
+  };
+  const archiveCache = {};
+  await discoverSkill("https://example.com/bundle.zip", {
+    fetch: archiveFetch,
+    resolveHost: publicResolve,
+    path: "pdf",
+    cache: archiveCache,
+  });
+  await discoverSkill("https://example.com/bundle.zip", {
+    fetch: archiveFetch,
+    resolveHost: publicResolve,
+    path: "slides",
+    cache: archiveCache,
+  });
+  assert.equal(downloads, 1);
+});
+
+test("previews multi-skill GitHub repositories with candidate metadata", async () => {
   const sha = "b".repeat(40);
   const tree = [
     { path: "pdf/SKILL.md", mode: "100644", type: "blob", sha: "1", size: 100 },
@@ -234,6 +283,7 @@ test("previews multi-skill GitHub repositories without downloading blobs", async
     if (url.includes("/commits/main")) return response(JSON.stringify({ sha }));
     if (url.includes(`/git/trees/${sha}`)) return response(JSON.stringify({ tree, truncated: false }));
     if (url.endsWith("/pdf/SKILL.md")) return response(skillMd("pdf", "Work with PDFs."));
+    if (url.endsWith("/slides/SKILL.md")) return response(skillMd("slides", "Build slide decks."));
     if (url.endsWith("/pdf/references/guide.md")) return response("# Guide\nRead me.");
     throw new Error(`unexpected URL ${url}`);
   };
@@ -244,7 +294,15 @@ test("previews multi-skill GitHub repositories without downloading blobs", async
   });
   assert.deepEqual(preview.candidates, ["pdf", "slides"]);
   assert.equal(preview.skill, undefined);
-  assert.ok(calls.every((url) => url.includes("api.github.com")));
+  assert.deepEqual(
+    preview.skills.map(({ path, name, description, valid }) => ({ path, name, description, valid })),
+    [
+      { path: "pdf", name: "pdf", description: "Work with PDFs.", valid: true },
+      { path: "slides", name: "slides", description: "Build slide decks.", valid: true },
+    ],
+  );
+  assert.ok(calls.every((url) => url.includes("api.github.com") || url.endsWith("SKILL.md")));
+  assert.ok(!calls.some((url) => url.endsWith("/pdf/references/guide.md")));
 
   const selected = await previewSkill("acme/skills", {
     fetch: mockFetch,
@@ -253,7 +311,71 @@ test("previews multi-skill GitHub repositories without downloading blobs", async
   });
   assert.deepEqual(selected.candidates, ["pdf", "slides"]);
   assert.equal(selected.skill?.metadata.name, "pdf");
+  assert.match(selected.skill?.instructions ?? "", /Follow these steps safely/);
+  assert.deepEqual(Object.keys(selected.skill?.files ?? {}), ["references/guide.md", "SKILL.md"]);
   assert.ok(calls.some((url) => url.includes("raw.githubusercontent.com")));
+});
+
+test("previews single-skill sources with metadata ready for auto-selection", async () => {
+  const sha = "c".repeat(40);
+  const tree = [
+    { path: "review/SKILL.md", mode: "100644", type: "blob", sha: "1", size: 100 },
+  ];
+  const mockFetch = async (url: string): Promise<Response> => {
+    if (url.endsWith("/repos/acme/one")) return response(JSON.stringify({ default_branch: "main" }));
+    if (url.includes("/commits/main")) return response(JSON.stringify({ sha }));
+    if (url.includes(`/git/trees/${sha}`)) return response(JSON.stringify({ tree, truncated: false }));
+    if (url.endsWith("/review/SKILL.md")) return response(skillMd("review", "Review changes."));
+    throw new Error(`unexpected URL ${url}`);
+  };
+
+  const preview = await previewSkill("acme/one", {
+    fetch: mockFetch,
+    resolveHost: publicResolve,
+  });
+  assert.equal(preview.skills.length, 1);
+  assert.equal(preview.skills[0].path, "review");
+  assert.equal(preview.skills[0].name, "review");
+  assert.equal(preview.skills[0].valid, true);
+  assert.equal(preview.skill?.metadata.name, "review");
+});
+
+test("previews multi-skill archives and rejects unknown selected paths", async () => {
+  const archive = makeZip([
+    zipEntry("pdf/SKILL.md", skillMd("pdf", "Work with PDFs.")),
+    zipEntry("pdf/references/guide.md", "# Guide"),
+    zipEntry("slides/SKILL.md", skillMd("slides", "Build decks.")),
+  ]);
+  const options = {
+    fetch: async () => response(archive),
+    resolveHost: publicResolve,
+  };
+
+  const preview = await previewSkill("https://example.com/bundle.zip", options);
+  assert.deepEqual(preview.candidates, ["pdf", "slides"]);
+  assert.deepEqual(
+    preview.skills.map(({ path, name, valid }) => ({ path, name, valid })),
+    [
+      { path: "pdf", name: "pdf", valid: true },
+      { path: "slides", name: "slides", valid: true },
+    ],
+  );
+  await assert.rejects(
+    previewSkill("https://example.com/bundle.zip", { ...options, path: "missing" }),
+    /does not contain a skill/,
+  );
+});
+
+test("preview surfaces source retrieval failures", async () => {
+  await assert.rejects(
+    previewSkill("acme/skills", {
+      fetch: async () => {
+        throw new Error("network down");
+      },
+      resolveHost: publicResolve,
+    }),
+    /network down/,
+  );
 });
 
 test("loads full skill instructions only when requested", async () => {
@@ -289,6 +411,37 @@ test("loads full skill instructions only when requested", async () => {
     tools.read_skill_file!.execute!({ name: "pdf", path: "../secret" }, {} as never),
     SkillSecurityError,
   );
+});
+
+test("preloads selected skills and reports missing ones", async () => {
+  const content = skillMd("pdf", "Work with PDFs.");
+  const digest = createHash("sha256").update(content).digest("hex");
+  const runtime = skillRuntimeFromPackages([
+    {
+      metadata: { name: "pdf", description: "Work with PDFs." },
+      instructions: "# pdf\nFollow these steps safely.",
+      files: { "SKILL.md": content, "references/guide.md": "Guide body" },
+      source: "acme/skills",
+      sourceKind: "github",
+      resolvedRef: "a".repeat(40),
+      digest,
+    },
+  ]);
+
+  const selected = await buildSelectedSkillsSection(runtime, [
+    "pdf",
+    "pdf",
+    "missing",
+  ]);
+  assert.deepEqual(selected.loaded, ["pdf"]);
+  assert.deepEqual(selected.missing, ["missing"]);
+  assert.match(selected.section, /User-selected skills/);
+  assert.match(selected.section, /Follow these steps safely/);
+  assert.match(selected.section, /untrusted-skill-content/);
+  assert.match(selected.section, /references\/guide\.md/);
+
+  const empty = await buildSelectedSkillsSection(runtime, []);
+  assert.deepEqual(empty, { section: "", loaded: [], missing: [] });
 });
 
 test("duplicate skill names are rejected", () => {

@@ -49,12 +49,12 @@ function DialogContent({
       <DialogOverlay />
       <DialogPrimitive.Viewport
         data-slot="dialog-viewport"
-        className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto p-4"
+        className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto overscroll-contain p-3 pt-[max(0.75rem,env(safe-area-inset-top))] pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:p-4"
       >
         <DialogPrimitive.Popup
           data-slot="dialog-content"
           className={cn(
-            "fixed top-1/2 left-1/2 z-50 grid w-full max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl border border-border bg-popover p-5 text-popover-foreground shadow-lg duration-150 data-ending-style:opacity-0 data-ending-style:translate-x-[-50%] data-ending-style:translate-y-[-50%] data-starting-style:opacity-0 data-starting-style:translate-x-[-50%] data-starting-style:translate-y-[-50%]",
+            "fixed top-1/2 left-1/2 z-50 grid max-h-[calc(100dvh-1.5rem)] w-[calc(100vw-1.5rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 overflow-y-auto overscroll-contain rounded-xl border border-border bg-popover p-4 text-popover-foreground shadow-lg duration-150 sm:max-h-[calc(100dvh-2rem)] sm:p-5 data-ending-style:opacity-0 data-ending-style:translate-x-[-50%] data-ending-style:translate-y-[-50%] data-starting-style:opacity-0 data-starting-style:translate-x-[-50%] data-starting-style:translate-y-[-50%]",
             className
           )}
           {...props}

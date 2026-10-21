@@ -18,6 +18,7 @@ export function useCreateRun() {
       model?: string;
       contextWindow?: ContextWindowTokens;
       history?: ConversationTurn[];
+      skillNames?: string[];
       conversationId?: string;
     }) => {
       const trimmed = args.task.trim();
@@ -34,6 +35,7 @@ export function useCreateRun() {
             model: args.model?.trim() || undefined,
             contextWindow: args.contextWindow,
             history: args.history?.length ? args.history : undefined,
+            skillNames: args.skillNames?.length ? args.skillNames : undefined,
             conversationId: args.conversationId,
           }),
         });

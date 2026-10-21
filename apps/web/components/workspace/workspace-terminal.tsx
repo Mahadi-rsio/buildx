@@ -2,15 +2,12 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
-  CornerDownLeft,
   Eraser,
   Play,
-  Send,
   Square,
   TerminalSquare,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { ansiToHtml } from "@/lib/ansi";
 import {
   pushTerminalHistory,
@@ -39,27 +36,34 @@ async function errorFromResponse(response: Response): Promise<string> {
   return `Terminal request failed (${response.status}).`;
 }
 
+/**
+ * A real PTY-backed terminal for the secondary workspace panel. The first
+ * submitted line starts a persistent shell session; subsequent lines are piped
+ * to that shell. There is no separate command/cwd form — the prompt lives in
+ * the terminal surface, and shell builtins (cd, export, …) persist.
+ */
 export function WorkspaceTerminal({ workspaceId }: { workspaceId: string }) {
-  const [command, setCommand] = useState("");
-  const [cwd, setCwd] = useState("");
+  const [input, setInput] = useState("");
   const [output, setOutput] = useState("");
   const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState<string | null>(null);
   const [exitCode, setExitCode] = useState<number | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [stdin, setStdin] = useState("");
   const [history, setHistory] = useState<string[]>(() =>
     readTerminalHistory(workspaceId),
   );
   const [showJump, setShowJump] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
+  const runSeqRef = useRef(0);
   const sessionRef = useRef<string | null>(null);
-  const outputRef = useRef<HTMLPreElement | null>(null);
+  const pendingCommandRef = useRef<string | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
   const paneRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
   const stickToBottomRef = useRef(true);
-  const commandRef = useRef<HTMLInputElement | null>(null);
+  const historyIndexRef = useRef(-1);
 
   useEffect(() => {
     return () => {
@@ -68,11 +72,11 @@ export function WorkspaceTerminal({ workspaceId }: { workspaceId: string }) {
   }, []);
 
   useEffect(() => {
-    const element = outputRef.current;
+    const element = scrollRef.current;
     if (element && stickToBottomRef.current) {
       element.scrollTop = element.scrollHeight;
     }
-  }, [output]);
+  }, [output, phase]);
 
   useEffect(() => {
     const pane = paneRef.current;
@@ -104,15 +108,45 @@ export function WorkspaceTerminal({ workspaceId }: { workspaceId: string }) {
     };
   }, [workspaceId]);
 
+  async function sendToSession(
+    id: string,
+    body: Record<string, unknown>,
+  ): Promise<void> {
+    try {
+      const response = await fetch(
+        `/api/workspaces/${encodeURIComponent(workspaceId)}/terminal/${encodeURIComponent(id)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+      );
+      if (!response.ok) {
+        setError(await errorFromResponse(response));
+      }
+    } catch (caught) {
+      setError(message(caught));
+    }
+  }
+
   function applyRecord(record: TerminalRecord) {
     switch (record.type) {
       case "start":
         setPhase("running");
         break;
-      case "session":
+      case "session": {
         sessionRef.current = record.id;
         setSessionId(record.id);
+        const pending = pendingCommandRef.current;
+        pendingCommandRef.current = null;
+        if (pending) {
+          void sendToSession(record.id, {
+            type: "stdin",
+            data: `${pending}\n`,
+          }).then(() => inputRef.current?.focus());
+        }
         break;
+      }
       case "stdout":
       case "stderr":
         setOutput((current) => current + record.data);
@@ -131,27 +165,26 @@ export function WorkspaceTerminal({ workspaceId }: { workspaceId: string }) {
     }
   }
 
-  async function start() {
-    const nextCommand = command.trim();
-    if (!nextCommand || phase === "starting" || phase === "running") return;
+  async function start(initialCommand?: string) {
+    if (phase === "starting" || phase === "running") return;
+    const pane = paneRef.current;
+    const size = pane
+      ? terminalCellSize(pane.clientWidth, pane.clientHeight)
+      : { cols: 80, rows: 24 };
 
+    abortRef.current?.abort();
+    const runId = ++runSeqRef.current;
     const controller = new AbortController();
     abortRef.current = controller;
     sessionRef.current = null;
+    pendingCommandRef.current = initialCommand ?? null;
     setSessionId(null);
     setPhase("starting");
     setError(null);
     setNotice(null);
     setExitCode(null);
     setOutput("");
-    setHistory((current) =>
-      pushTerminalHistory(workspaceId, nextCommand, current),
-    );
-
-    const pane = paneRef.current;
-    const size = pane
-      ? terminalCellSize(pane.clientWidth, pane.clientHeight)
-      : { cols: 80, rows: 24 };
+    historyIndexRef.current = -1;
 
     try {
       const response = await fetch(
@@ -160,11 +193,10 @@ export function WorkspaceTerminal({ workspaceId }: { workspaceId: string }) {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            command: nextCommand,
+            command: "bash",
             tty: true,
             rows: size.rows,
             cols: size.cols,
-            ...(cwd.trim() ? { cwd: cwd.trim() } : {}),
           }),
           signal: controller.signal,
         },
@@ -173,7 +205,6 @@ export function WorkspaceTerminal({ workspaceId }: { workspaceId: string }) {
         throw new Error(await errorFromResponse(response));
       }
 
-      setPhase("running");
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
@@ -198,42 +229,44 @@ export function WorkspaceTerminal({ workspaceId }: { workspaceId: string }) {
         setPhase("error");
       }
     } finally {
-      abortRef.current = null;
-      sessionRef.current = null;
-      setSessionId(null);
-    }
-  }
-
-  async function sendSession(body: Record<string, unknown>) {
-    const id = sessionRef.current;
-    if (!id) return;
-    try {
-      const response = await fetch(
-        `/api/workspaces/${encodeURIComponent(workspaceId)}/terminal/${encodeURIComponent(id)}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        },
-      );
-      if (!response.ok) {
-        setError(await errorFromResponse(response));
+      if (runSeqRef.current === runId) {
+        abortRef.current = null;
+        sessionRef.current = null;
+        pendingCommandRef.current = null;
+        setSessionId(null);
       }
-    } catch (caught) {
-      setError(message(caught));
     }
   }
 
-  async function sendInput(event: FormEvent) {
+  async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!sessionRef.current) return;
-    const data = stdin;
-    setStdin("");
-    await sendSession({ type: "stdin", data: `${data}\n` });
-    commandRef.current?.focus();
+    const line = input;
+    setInput("");
+    historyIndexRef.current = -1;
+    if (!line.trim()) return;
+
+    setHistory((current) =>
+      pushTerminalHistory(workspaceId, line.trim(), current),
+    );
+
+    const id = sessionRef.current;
+    if (id) {
+      stickToBottomRef.current = true;
+      await sendToSession(id, { type: "stdin", data: `${line}\n` });
+      inputRef.current?.focus();
+      return;
+    }
+    if (phase === "starting") return;
+    if (phase === "running") {
+      pendingCommandRef.current = line;
+      return;
+    }
+    await start(line);
+    inputRef.current?.focus();
   }
 
   async function stop() {
+    runSeqRef.current += 1;
     const id = sessionRef.current;
     if (id) {
       await fetch(
@@ -243,26 +276,45 @@ export function WorkspaceTerminal({ workspaceId }: { workspaceId: string }) {
     }
     abortRef.current?.abort();
     sessionRef.current = null;
+    pendingCommandRef.current = null;
     setSessionId(null);
     setPhase("idle");
   }
 
-  const running = phase === "starting" || phase === "running";
+  function recallHistory(direction: -1 | 1) {
+    if (history.length === 0) return;
+    const nextIndex =
+      direction === -1
+        ? historyIndexRef.current === -1
+          ? 0
+          : Math.min(history.length - 1, historyIndexRef.current + 1)
+        : historyIndexRef.current <= 0
+          ? -1
+          : historyIndexRef.current - 1;
+    historyIndexRef.current = nextIndex;
+    setInput(nextIndex === -1 ? "" : history[nextIndex]);
+  }
+
+  const showPrompt = phase !== "starting";
+  const prompt = phase === "starting" ? "starting shell…" : "$";
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 items-center gap-1.5 border-b border-border bg-sidebar/60 px-2 py-1.5">
         <TerminalSquare className="size-3.5 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate font-mono text-secondary text-foreground/85">
-          {sessionId ? `session/${sessionId.slice(0, 8)}` : "box terminal"}
+          {sessionId ? `bash · session/${sessionId.slice(0, 8)}` : "workspace terminal"}
         </span>
         <span
           className={cn(
             "shrink-0 rounded px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide",
-            phase === "running" && "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
-            phase === "starting" && "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+            phase === "running" &&
+              "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+            phase === "starting" &&
+              "bg-amber-500/10 text-amber-600 dark:text-amber-400",
             phase === "error" && "bg-destructive/10 text-destructive",
-            (phase === "idle" || phase === "done") && "bg-muted/60 text-muted-foreground",
+            (phase === "idle" || phase === "done") &&
+              "bg-muted/60 text-muted-foreground",
           )}
         >
           {phase}
@@ -272,120 +324,163 @@ export function WorkspaceTerminal({ workspaceId }: { workspaceId: string }) {
             exit {exitCode}
           </span>
         ) : null}
-      </div>
-
-      <div className="grid shrink-0 gap-1.5 border-b border-border px-2 py-1.5">
-        <div className="flex items-center gap-1.5">
-          <span className="font-mono text-[11px] text-[var(--text-faint)]">$</span>
-          <Input
-            ref={commandRef}
-            value={command}
-            onChange={(event) => setCommand(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                void start();
-              }
-            }}
-            list="buildx-terminal-history"
-            placeholder="npm test"
-            spellCheck={false}
-            disabled={running}
-            className="h-7 min-w-0 flex-1 font-mono text-xs"
-            aria-label="Terminal command"
-          />
-          <datalist id="buildx-terminal-history">
-            {history.map((entry) => (
-              <option key={entry} value={entry} />
-            ))}
-          </datalist>
-          {running ? (
-            <Button
-              type="button"
-              size="icon-xs"
-              variant="destructive"
-              aria-label="Stop terminal session"
-              title="Stop session"
-              onClick={() => void stop()}
-            >
-              <Square className="size-3" />
-            </Button>
-          ) : (
-            <Button
-              type="button"
-              size="icon-xs"
-              aria-label="Run terminal command"
-              title="Run command"
-              disabled={command.trim().length === 0}
-              onClick={() => void start()}
-            >
-              <Play className="size-3" />
-            </Button>
-          )}
-        </div>
-        <div className="flex items-center gap-1.5">
-          <span className="font-mono text-[11px] text-[var(--text-faint)]">cwd</span>
-          <Input
-            value={cwd}
-            onChange={(event) => setCwd(event.target.value)}
-            placeholder="workspace root"
-            spellCheck={false}
-            disabled={running}
-            className="h-6 min-w-0 flex-1 font-mono text-[11px]"
-            aria-label="Working directory"
-          />
+        {phase === "running" || phase === "starting" ? (
+          <Button
+            type="button"
+            size="icon-xs"
+            variant="destructive"
+            aria-label="Stop terminal session"
+            title="Stop session"
+            onClick={() => void stop()}
+          >
+            <Square className="size-3" />
+          </Button>
+        ) : (
           <Button
             type="button"
             size="icon-xs"
             variant="ghost"
-            aria-label="Clear terminal output"
-            title="Clear output"
-            onClick={() => {
-              setOutput("");
-              setNotice(null);
-              setError(null);
-              setExitCode(null);
-            }}
+            aria-label="Start a new shell session"
+            title="Start shell"
+            onClick={() => void start()}
           >
-            <Eraser className="size-3" />
+            <Play className="size-3" />
           </Button>
-        </div>
+        )}
+        <Button
+          type="button"
+          size="icon-xs"
+          variant="ghost"
+          aria-label="Clear terminal output"
+          title="Clear output"
+          onClick={() => {
+            setOutput("");
+            setNotice(null);
+            setError(null);
+            setExitCode(null);
+            inputRef.current?.focus();
+          }}
+        >
+          <Eraser className="size-3" />
+        </Button>
       </div>
 
       <div
         ref={paneRef}
         className="relative min-h-0 flex-1 overflow-hidden bg-[var(--surface)]"
       >
-        <pre
-          ref={outputRef}
+        <div
+          ref={scrollRef}
           onScroll={(event) => {
             const element = event.currentTarget;
             const nearBottom =
-              element.scrollHeight - element.scrollTop - element.clientHeight < 40;
+              element.scrollHeight - element.scrollTop - element.clientHeight <
+              40;
             stickToBottomRef.current = nearBottom;
-            setShowJump(!nearBottom && element.scrollHeight > element.clientHeight);
+            setShowJump(
+              !nearBottom && element.scrollHeight > element.clientHeight,
+            );
           }}
-          className="h-full overflow-auto whitespace-pre-wrap break-words p-2.5 font-mono text-[11px] leading-[18px] text-[var(--text)]"
-          aria-live="polite"
-          aria-label="Terminal output"
+          onClick={() => inputRef.current?.focus()}
+          className="h-full touch-pan-y overflow-y-auto overscroll-contain p-2.5 font-mono text-[11px] leading-[18px] text-[var(--text)] [scrollbar-width:thin]"
         >
           {output ? (
-            <span dangerouslySetInnerHTML={{ __html: ansiToHtml(output) }} />
+            <pre
+              className="m-0 whitespace-pre-wrap break-words font-mono"
+              aria-live="polite"
+              aria-label="Terminal output"
+            >
+              <span dangerouslySetInnerHTML={{ __html: ansiToHtml(output) }} />
+            </pre>
           ) : (
-            <span className="text-muted-foreground">
-              {phase === "starting"
-                ? "Starting a live session in your workspace…"
-                : "Run a command in your Upstash Box. TTY sessions merge stderr into stdout."}
-            </span>
+            <div className="space-y-1 text-muted-foreground">
+              <p>
+                {phase === "starting"
+                  ? "Starting a live shell in your workspace…"
+                  : "Interactive shell in your Upstash Box."}
+              </p>
+              <p className="text-[10px] text-[var(--text-faint)]">
+                Type a command below and press Enter. The shell keeps state
+                between commands.
+              </p>
+            </div>
           )}
-        </pre>
+
+          {showPrompt ? (
+            <form
+              onSubmit={(event) => void submit(event)}
+              className="mt-1 flex items-center gap-1.5"
+            >
+              <span
+                className={cn(
+                  "shrink-0 select-none font-mono text-[var(--ansi-green)]",
+                  !input && "term-cursor",
+                )}
+                aria-hidden="true"
+              >
+                {prompt}
+              </span>
+              <input
+                ref={inputRef}
+                value={input}
+                onChange={(event) => setInput(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "ArrowUp") {
+                    event.preventDefault();
+                    recallHistory(-1);
+                  } else if (event.key === "ArrowDown") {
+                    event.preventDefault();
+                    recallHistory(1);
+                  } else if (event.key === "c" && event.ctrlKey) {
+                    event.preventDefault();
+                    setInput("");
+                    const id = sessionRef.current;
+                    if (id) {
+                      void sendToSession(id, {
+                        type: "signal",
+                        signal: "INT",
+                      });
+                    }
+                  } else if (event.key === "l" && event.ctrlKey) {
+                    event.preventDefault();
+                    setInput("");
+                    setOutput("");
+                    setNotice(null);
+                    setError(null);
+                  }
+                }}
+                onFocus={() => {
+                  stickToBottomRef.current = true;
+                  const element = scrollRef.current;
+                  if (element) element.scrollTop = element.scrollHeight;
+                }}
+                spellCheck={false}
+                autoComplete="off"
+                autoCapitalize="off"
+                autoCorrect="off"
+                aria-label="Terminal input"
+                className="min-w-0 flex-1 border-0 bg-transparent p-0 font-mono text-[11px] leading-[18px] text-[var(--text)] caret-[var(--text)] outline-none placeholder:text-[var(--text-faint)]"
+              />
+              {phase === "running" ? (
+                <button
+                  type="submit"
+                  className="shrink-0 rounded border border-border px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-muted-foreground transition hover:text-foreground"
+                  aria-label="Send command"
+                >
+                  enter
+                </button>
+              ) : null}
+            </form>
+          ) : null}
+        </div>
+
         {showJump && output ? (
           <button
             type="button"
             onClick={() => {
               stickToBottomRef.current = true;
               setShowJump(false);
-              const element = outputRef.current;
+              const element = scrollRef.current;
               if (element) element.scrollTop = element.scrollHeight;
             }}
             className="absolute bottom-2 right-2 rounded-md border border-border bg-background/90 px-2 py-1 font-mono text-[10px] text-muted-foreground shadow-sm hover:text-foreground"
@@ -394,42 +489,6 @@ export function WorkspaceTerminal({ workspaceId }: { workspaceId: string }) {
           </button>
         ) : null}
       </div>
-
-      {sessionId ? (
-        <form
-          onSubmit={(event) => void sendInput(event)}
-          className="flex shrink-0 items-center gap-1.5 border-t border-border px-2 py-1.5"
-        >
-          <CornerDownLeft className="size-3 shrink-0 text-[var(--text-faint)]" />
-          <Input
-            value={stdin}
-            onChange={(event) => setStdin(event.target.value)}
-            placeholder="send input / answer a prompt"
-            spellCheck={false}
-            className="h-7 min-w-0 flex-1 font-mono text-xs"
-            aria-label="Terminal input"
-          />
-          <Button
-            type="button"
-            size="icon-xs"
-            variant="outline"
-            aria-label="Send Ctrl-C"
-            title="Send Ctrl-C (SIGINT)"
-            onClick={() => void sendSession({ type: "signal", signal: "INT" })}
-          >
-            ^C
-          </Button>
-          <Button
-            type="submit"
-            size="icon-xs"
-            variant="secondary"
-            aria-label="Send input"
-            title="Send input"
-          >
-            <Send className="size-3" />
-          </Button>
-        </form>
-      ) : null}
 
       {error ? (
         <p className="shrink-0 border-t border-border bg-destructive/5 px-2.5 py-1.5 text-[11px] leading-relaxed text-destructive">

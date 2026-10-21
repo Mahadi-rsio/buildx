@@ -43,6 +43,7 @@ export async function POST(request: Request): Promise<Response> {
     });
     return Response.json({
       candidates: preview.candidates,
+      skills: preview.skills,
       ...(preview.skill
         ? {
             skill: {
@@ -53,6 +54,8 @@ export async function POST(request: Request): Promise<Response> {
               resolvedRef: preview.skill.resolvedRef,
               digest: preview.skill.digest,
               fileCount: Object.keys(preview.skill.files).length,
+              instructions: preview.skill.instructions,
+              files: Object.keys(preview.skill.files).sort(),
             },
           }
         : {}),

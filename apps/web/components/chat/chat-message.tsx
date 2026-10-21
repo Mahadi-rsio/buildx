@@ -2,6 +2,7 @@
 
 import { useState, type ReactNode } from "react";
 import {
+  BookOpen,
   Check,
   CheckCircle2,
   Circle,
@@ -284,6 +285,32 @@ export function ChatMessageView({
             {text}
           </p>
         </div>
+        {message.skillNames?.length ? (
+          <div className="mt-1.5 flex max-w-[85%] flex-wrap justify-end gap-1.5">
+            {message.skillNames.map((name) => (
+              <span
+                key={name}
+                title={
+                  message.skillsLoading
+                    ? `Loading ${name} into the model context`
+                    : message.skillsReady
+                      ? `${name} is loaded in the model context`
+                      : `${name} attached`
+                }
+                className="inline-flex h-5 items-center gap-1 rounded-full border border-[var(--border)] px-2 text-[10px] text-[var(--text-muted)]"
+              >
+                {message.skillsLoading ? (
+                  <Loader2 className="size-2.5 animate-spin motion-reduce:animate-none" />
+                ) : message.skillsReady ? (
+                  <Check className="size-2.5" />
+                ) : (
+                  <BookOpen className="size-2.5" />
+                )}
+                {name}
+              </span>
+            ))}
+          </div>
+        ) : null}
         <MessageActions text={text} onEdit={onEdit} />
       </div>
     );

@@ -78,6 +78,8 @@ export interface StoredRun {
   task: string;
   /** Earlier turns replayed before `task` to keep follow-up context. */
   history?: ConversationTurn[];
+  /** Installed skills attached to this run and preloaded into its context. */
+  skillNames?: string[];
   status: RunStatus;
   model: string;
   maxSteps: number;
@@ -146,6 +148,7 @@ function syncFromRow(run: StoredRun, row: RunRow): void {
   run.workspaceName = row.workspaceName ?? "workspace";
   run.task = row.task ?? "";
   run.history = row.history ?? undefined;
+  run.skillNames = row.skillNames ?? undefined;
   run.status = row.status;
   run.model = row.model ?? DEFAULT_MODEL;
   run.maxSteps = row.maxSteps;
@@ -195,6 +198,7 @@ export async function hydrateRun(
     workspaceName: row.workspaceName ?? "workspace",
     task: row.task ?? "",
     history: row.history ?? undefined,
+    skillNames: row.skillNames ?? undefined,
     status: row.status,
     model: row.model ?? DEFAULT_MODEL,
     maxSteps: row.maxSteps,
@@ -252,6 +256,7 @@ export interface CreateRunArgs {
   workspaceName: string;
   task: string;
   history?: ConversationTurn[];
+  skillNames?: string[];
   model: string;
   maxSteps: number;
   contextWindowTokens?: ContextWindowTokens;
@@ -308,6 +313,7 @@ export async function createRun(
         status: "queued",
         task: args.task,
         history: args.history?.length ? args.history : null,
+        skillNames: args.skillNames?.length ? args.skillNames : null,
         workspaceName: args.workspaceName,
         maxSteps: args.maxSteps,
         contextWindowTokens:
@@ -351,6 +357,7 @@ export async function createRun(
     workspaceName: row.workspaceName ?? "workspace",
     task: row.task ?? "",
     history: row.history ?? undefined,
+    skillNames: row.skillNames ?? undefined,
     status: "queued",
     model: row.model ?? DEFAULT_MODEL,
     maxSteps: row.maxSteps,
@@ -725,6 +732,7 @@ export function toRunSummary(run: StoredRun): RunSummary {
     id: run.id,
     conversationId: run.conversationId,
     task: run.task,
+    skillNames: run.skillNames,
     status: run.status,
     model: run.model,
     maxSteps: run.maxSteps,
