@@ -26,6 +26,10 @@ import {
   type McpServerConfig,
 } from "./mcp";
 import { buildSystemPrompt } from "./prompt";
+import {
+  buildGitHubTools,
+  type GitHubToolsOptions,
+} from "./github";
 import { buildTools } from "./tools";
 import {
   buildSelectedSkillsSection,
@@ -36,6 +40,14 @@ import {
 
 export { buildSystemPrompt } from "./prompt";
 export { buildTools, type AgentTools } from "./tools";
+export {
+  buildGitHubTools,
+  GitHubPublishError,
+  parseGitHubRemote,
+  parseRepositoryInput,
+  type GitHubToolAuth,
+  type GitHubToolsOptions,
+} from "./github";
 export {
   DEFAULT_CONTEXT_BUDGET_TOKENS,
   SUMMARIZE_TOOL_NAME,
@@ -114,6 +126,8 @@ export interface CreateAgentOptions {
   onBeforeModelStep?: (step: { stepNumber: number }) => void | Promise<void>;
   /** MCP tools already discovered for this run, merged with workspace tools. */
   mcpTools?: ToolSet;
+  /** GitHub publishing credentials; when omitted the GitHub tool is unavailable. */
+  github?: GitHubToolsOptions;
   /**
    * Installed skills for this run. Only compact metadata enters the system
    * prompt; full instructions are loaded on demand through `load_skill`.
@@ -152,6 +166,7 @@ function buildToolSet(options: CreateAgentOptions): {
     ...workspaceTools,
     ...(budget ? { [SUMMARIZE_TOOL_NAME]: budget.summarizeTool } : {}),
     ...(options.mcpTools ?? {}),
+    ...(options.github ? buildGitHubTools(options.sandbox, options.github) : {}),
     ...(options.skills ? createSkillTools(options.skills) : {}),
   };
   return { tools, budget };

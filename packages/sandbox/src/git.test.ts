@@ -12,11 +12,14 @@ import type {
   ProcId,
   ReadRange,
   Sandbox,
+  SessionHandle,
+  SessionOptions,
 } from "./index";
 import {
   GitError,
   validateBranchName,
   validateRepoFile,
+  validateRemoteName,
   validateRepoPath,
   validateRepositoryUrl,
   WorkspaceGit,
@@ -77,6 +80,49 @@ class LocalSandbox implements Sandbox {
     const full = this.resolve(path);
     await mkdir(dirname(full), { recursive: true });
     await writeFile(full, content, "utf8");
+  }
+
+  async openSession(options: SessionOptions): Promise<SessionHandle> {
+    if (!options.argv || options.argv.length === 0) {
+      throw new Error("test session requires argv");
+    }
+    const [program, ...args] = options.argv;
+    const child = spawn(program, args, {
+      cwd: this.resolve(options.cwd ?? "."),
+      env: { ...process.env, ...options.env },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    child.stdout?.on("data", (data: Buffer) => {
+      options.onOutput?.({ stream: "stdout", data: data.toString("utf8") });
+    });
+    child.stderr?.on("data", (data: Buffer) => {
+      options.onOutput?.({ stream: "stderr", data: data.toString("utf8") });
+    });
+    const exit = new Promise<number>((resolveExit, rejectExit) => {
+      child.on("error", rejectExit);
+      child.on("close", (code) => resolveExit(code ?? 1));
+    });
+    return {
+      pid: child.pid ?? 0,
+      execId: "local-session",
+      write(data) {
+        child.stdin?.write(data);
+      },
+      endStdin() {
+        child.stdin?.end();
+      },
+      resize() {},
+      kill(signal) {
+        child.kill(signal ? (`SIG${signal}` as NodeJS.Signals) : "SIGTERM");
+      },
+      terminate() {
+        child.kill("SIGKILL");
+      },
+      wait: () => exit,
+      close() {
+        if (child.exitCode === null) child.kill("SIGKILL");
+      },
+    };
   }
 
   async startBackground(_cmd: string): Promise<ProcId> {
@@ -426,6 +472,66 @@ test("clone builds a quoted command from an argv array with a fake sandbox", asy
   );
 });
 
+test("authenticated fetch refuses sandboxes without secure sessions", async () => {
+  const sandbox = new RecordingSandbox();
+  const git = new WorkspaceGit(sandbox);
+
+  await assert.rejects(
+    git.fetch({
+      path: ".",
+      branch: "main",
+      auth: { username: "octocat", token: "secret-token" },
+    }),
+    isGitError("command_failed"),
+  );
+  assert.ok(
+    sandbox.commands.every((cmd) => !cmd.includes("secret-token")),
+    "tokens never reach a shell command",
+  );
+});
+
+test("authenticated fetch and push keep the token out of session argv", async () => {
+  const sandbox = new SessionRecordingSandbox();
+  const git = new WorkspaceGit(sandbox);
+  const auth = { username: "octocat", token: "secret-token" };
+
+  await git.fetch({ path: ".", branch: "main", auth });
+  await git.push({ path: ".", branch: "feature", auth });
+
+  assert.equal(sandbox.sessions.length, 2);
+  for (const session of sandbox.sessions) {
+    assert.ok(session.argv);
+    assert.ok(
+      session.argv.every((arg) => !arg.includes("secret-token")),
+      "tokens never reach argv",
+    );
+    assert.match(session.argv.join(" "), /credential\.helper=/);
+    assert.equal(session.env?.BUILDX_GIT_TOKEN, "secret-token");
+    assert.equal(session.env?.BUILDX_GIT_USERNAME, "octocat");
+  }
+});
+
+test("authenticated session fetch and push work against a local remote", async () => {
+  const { root, sandbox, git } = await createRepo();
+  const remote = await mkdtemp(join(tmpdir(), "buildx-remote-"));
+  try {
+    gitCli(remote, ["init", "--bare", "-q"]);
+    await write(root, "README.md", "# Widgets\n");
+    gitCli(root, ["add", "README.md"]);
+    gitCli(root, ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "init"]);
+    gitCli(root, ["remote", "add", "origin", remote]);
+    gitCli(root, ["push", "-q", "origin", "main"]);
+
+    const auth = { username: "octocat", token: "secret-token" };
+    await git.fetch({ path: ".", branch: "main", auth });
+    await git.push({ path: ".", branch: "main", auth });
+    assert.equal(gitCli(remote, ["rev-parse", "main"]), gitCli(root, ["rev-parse", "main"]));
+  } finally {
+    await sandbox.destroy();
+    await rm(remote, { recursive: true, force: true });
+  }
+});
+
 test("clone never overwrites an existing path or repository", async () => {
   const { root, sandbox, git } = await createRepo();
   try {
@@ -528,5 +634,119 @@ class RecordingSandbox implements Sandbox {
   async restore(_id: CheckpointId): Promise<void> {}
   async previewUrl(port: number): Promise<string> {
     return `http://localhost:${port}`;
+  }
+}
+
+
+test("initialize, configure a remote, and commit workspace changes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "buildx-git-init-"));
+  const sandbox = new LocalSandbox(root);
+  try {
+    const git = new WorkspaceGit(sandbox);
+    const initialized = await git.initialize({ branch: "main" });
+    assert.equal(initialized.currentBranch, "main");
+    assert.equal(initialized.status.clean, true);
+
+    await assert.rejects(
+      () => git.initialize({ branch: "main" }),
+      isGitError("repository_exists"),
+    );
+
+    await git.setRemote({
+      url: "https://github.com/example/demo.git",
+      name: "origin",
+    });
+    assert.equal(
+      (await git.getRepository(".")).remoteUrl,
+      "https://github.com/example/demo.git",
+    );
+
+    await write(root, "README.md", "# Demo\n");
+    await write(root, "node_modules/pkg/index.js", "ignored\n");
+    await write(root, ".buildx/pr-drafts/draft.json", "{}\n");
+    await write(root, ".env", "SECRET=1\n");
+    await write(root, ".env.example", "SECRET=\n");
+    const committed = await git.stageAllAndCommit({
+      path: ".",
+      message: "Initial commit",
+    });
+    assert.equal(committed.commit.subject, "Initial commit");
+    assert.equal(committed.repo.status.clean, true);
+    assert.equal(committed.repo.commits.length, 1);
+    const tracked = gitCli(root, ["ls-files"]);
+    assert.equal(tracked, ".env.example\nREADME.md");
+
+    await assert.rejects(
+      () =>
+        git.stageAllAndCommit({
+          path: ".",
+          message: "Nothing changed",
+        }),
+      /no workspace changes/i,
+    );
+  } finally {
+    await sandbox.destroy();
+  }
+});
+
+test("joins an unrelated remote base with the ours strategy", async () => {
+  const root = await mkdtemp(join(tmpdir(), "buildx-git-merge-"));
+  const remoteRoot = await mkdtemp(join(tmpdir(), "buildx-git-remote-"));
+  const seedRoot = await mkdtemp(join(tmpdir(), "buildx-git-seed-"));
+  const sandbox = new LocalSandbox(root);
+  try {
+    gitCli(remoteRoot, ["init", "-q", "--bare", "-b", "main"]);
+    gitCli(seedRoot, ["clone", "-q", remoteRoot, "."]);
+    gitCli(seedRoot, ["config", "user.name", "Seed"]);
+    gitCli(seedRoot, ["config", "user.email", "seed@example.com"]);
+    await write(seedRoot, "README.md", "# Remote base\n");
+    gitCli(seedRoot, ["add", "README.md"]);
+    gitCli(seedRoot, ["commit", "-q", "-m", "Remote base"]);
+    gitCli(seedRoot, ["push", "-q", "origin", "main"]);
+
+    const git = new WorkspaceGit(sandbox);
+    await git.initialize({ branch: "feature" });
+    await write(root, "app.txt", "local app\n");
+    await git.stageAllAndCommit({ path: ".", message: "Local app" });
+    gitCli(root, ["remote", "add", "origin", remoteRoot]);
+    await git.fetch({ path: ".", remote: "origin", branch: "main" });
+    await git.mergeUnrelatedOurs({ path: ".", ref: "origin/main" });
+
+    const parents = gitCli(root, ["log", "-1", "--format=%P"]).split(" ");
+    assert.equal(parents.length, 2);
+    assert.equal(gitCli(root, ["show", "HEAD:app.txt"]), "local app");
+    assert.equal(gitCli(root, ["show", "HEAD:README.md"]), "# Remote base");
+  } finally {
+    await sandbox.destroy();
+    await rm(remoteRoot, { recursive: true, force: true });
+    await rm(seedRoot, { recursive: true, force: true });
+  }
+});
+
+test("validates remote names and repository URLs", () => {
+  assert.equal(validateRemoteName("origin"), "origin");
+  assert.throws(() => validateRemoteName("--force"), GitError);
+  assert.throws(() => validateRemoteName("origin; rm -rf /"), GitError);
+});
+
+
+class SessionRecordingSandbox extends RecordingSandbox {
+  sessions: SessionOptions[] = [];
+
+  async openSession(options: SessionOptions): Promise<SessionHandle> {
+    this.sessions.push(options);
+    return {
+      pid: 1,
+      execId: "session-1",
+      write() {},
+      endStdin() {},
+      resize() {},
+      kill() {},
+      terminate() {},
+      async wait() {
+        return 0;
+      },
+      close() {},
+    };
   }
 }

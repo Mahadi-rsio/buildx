@@ -527,6 +527,48 @@ export const mcpServers = pgTable(
   ],
 );
 
+/**
+ * Per-user GitHub App authorization. Tokens are AES-256-GCM encrypted by the
+ * web layer before they reach this table; plaintext tokens never live in the
+ * database or the sandbox.
+ */
+export const githubConnections = pgTable(
+  "github_connections",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: text("user_id")
+      .notNull()
+      .unique()
+      .references(() => user.id, { onDelete: "cascade" }),
+    githubUserId: text("github_user_id").notNull(),
+    login: text("login").notNull(),
+    name: text("name"),
+    avatarUrl: text("avatar_url"),
+    accessTokenEncrypted: text("access_token_encrypted").notNull(),
+    refreshTokenEncrypted: text("refresh_token_encrypted"),
+    accessTokenExpiresAt: timestamp("access_token_expires_at", {
+      withTimezone: true,
+    }),
+    refreshTokenExpiresAt: timestamp("refresh_token_expires_at", {
+      withTimezone: true,
+    }),
+    scope: text("scope"),
+    /** First installation seen at connect time; used for the Settings badge. */
+    installationId: text("installation_id"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .$onUpdate(() => new Date())
+      .notNull(),
+  },
+  (table) => [
+    index("github_connections_githubUserId_idx").on(table.githubUserId),
+    index("github_connections_installationId_idx").on(table.installationId),
+  ],
+);
+
 export const checkpoints = pgTable(
   "checkpoints",
   {

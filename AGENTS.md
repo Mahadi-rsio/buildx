@@ -15,11 +15,13 @@
     `hasCpuBudget`, `closeOpenUsageSessions`), `withAdvisoryLock`.
   - `packages/agent` — prompt, tools, `runTask` / `createAgent`. Bash streams
     `terminal` events tagged with the tool-call id so the UI can render output
-    inline; tests use the package-private `TestSandbox`.
+    inline; tests use the package-private `TestSandbox`. Explicit GitHub
+    publishing uses `github_create_pull_request`.
   - `apps/web` — Next.js 16 dashboard: run form + live event stream, and a REST/SSE API.
     - API: `GET /api/config`, `GET|POST /api/runs`, `GET /api/runs/:id`,
       `GET /api/runs/:id/stream?after=`, `POST /api/runs/:id/stop`,
-      `GET /api/workspaces/:id/files?path=`.
+      `GET /api/workspaces/:id/files?path=`, plus
+      `/api/github/{connect,callback,status,disconnect,webhook}`.
     - `lib/store.ts` keeps runs/events in memory on `globalThis` (no DB yet);
       `lib/runner.ts` runs `runTask` against the Upstash Box sandbox from
       `createSandbox` and appends every step.
@@ -30,7 +32,7 @@
 
 ```sh
 pnpm typecheck                      # pnpm -r typecheck
-pnpm test                           # pnpm -r test  (apps/web has no tests yet)
+pnpm test                           # pnpm -r test  (per-package node --test)
 pnpm lint                           # eslint .  (includes apps/web)
 pnpm build                          # pnpm -r build  (Next build)
 pnpm dev                            # next dev (apps/web)
@@ -42,8 +44,8 @@ test spins up an in-process OpenAI-compatible SSE server, so no API key is neede
 ## Running the dashboard
 
 - `apps/web` reads `LITELLM_API_KEY`, `LITELLM_BASE_URL`, `OPENROUTER_API_KEY`,
-  `OPENROUTER_BASE_URL`, `AGENT_MODEL`, `AGENT_MAX_STEPS` from the environment /
-  `.env.local` (copy `.env.example`). LiteLLM exposes only `auto`; the picker
+  `OPENROUTER_BASE_URL`, `AGENT_MODEL`, `AGENT_MAX_STEPS`, and the `GITHUB_*`
+  App credentials from the environment / `.env.local` (copy `.env.example`). LiteLLM exposes only `auto`; the picker
   lists `auto` plus the full OpenRouter catalog when configured.
 - Every run uses the user's persistent Upstash Box workspace; the file panel
   reads it through `WorkspaceSource`. There is no local scratch directory.
@@ -67,6 +69,8 @@ test spins up an in-process OpenAI-compatible SSE server, so no API key is neede
 - OpenAI-compatible endpoints use `createOpenAI({ apiKey, baseURL }).chat(modelId)` (Chat Completions), not the Responses API.
 - Next 16 route handlers take `{ params }: { params: Promise<{ id: string }> }` — **await `params`**. SSE responses are `ReadableStream`s; the stream route wraps each payload as `{ ts, data }` and closes on a terminal `status` event.
 - Env is validated by `loadEnv()` in `@buildx/shared`; blank strings are treated as unset so defaults apply.
+- GitHub publishing authenticates git through `Sandbox.openSession` (argv + env) so tokens never enter an `sh -c` command. Any `Sandbox` wrapper must forward `openSession`; the run guard in `apps/web/lib/runner.ts` does.
+- The GitHub App needs Contents + Pull requests write for PRs, plus Administration write for `createRepository`. It must be installed on the target account, and its callback URL must exactly match `GITHUB_REDIRECT_URI`.
 
 ## When implementing
 

@@ -49,5 +49,16 @@ export function buildSystemPrompt(): string {
     "  (`npm create vue`, `npm create vite`, `npx create-*`) must be run with flags that skip",
     "  prompts (`--yes`, `--default`, or an explicit template). Never run a command that waits for stdin.",
     "- A task is not done until build/test/lint pass, or you clearly explain why they cannot be run.",
+    "",
+    "GitHub publishing:",
+    "- Only use `github_create_pull_request` when the user explicitly asks to publish,",
+    "  push, or open a pull request. Never call it after ordinary coding tasks.",
+    "- It commits all workspace changes, pushes a branch, and opens a pull request by",
+    "  default. If the workspace has no remote, you must also pass `repository` and",
+    "  set `createRepository` to true; only do that when the user asked for a new repo.",
+    "- Never request, print, or handle GitHub tokens. If the tool says GitHub is not",
+    "  connected, tell the user to connect it in Settings instead of working around it.",
+    "- Report the pull request URL exactly as returned by the tool. Do not claim a PR",
+    "  exists unless the tool succeeded.",
   ].join("\n");
 }

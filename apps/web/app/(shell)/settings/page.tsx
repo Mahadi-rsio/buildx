@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowUpRight, MonitorCog, Palette, UserRound } from "lucide-react";
+import { ArrowUpRight, GitPullRequest, MonitorCog, Palette, UserRound } from "lucide-react";
+import { GitHubConnection } from "@/components/settings/github-connection";
 import { ThemeSwitch } from "@/components/shell/theme-switch";
 import { useShellMeta } from "@/components/shell/shell-context";
 import { useUser } from "@/hooks/use-user";
@@ -60,7 +61,7 @@ export default function SettingsPage() {
             Settings
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Appearance and account preferences for this browser.
+            Appearance, integrations, and account preferences for this browser.
           </p>
         </header>
 
@@ -77,6 +78,14 @@ export default function SettingsPage() {
                 System follows your device setting and updates automatically.
               </div>
             </div>
+          </Section>
+
+          <Section
+            title="GitHub"
+            description="Connect a GitHub App so the agent can publish projects and open pull requests when you ask."
+            icon={<GitPullRequest className="size-4" />}
+          >
+            <GitHubConnection />
           </Section>
 
           <Section

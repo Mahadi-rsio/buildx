@@ -19,6 +19,7 @@ import {
 import { cancelRemoteBoxExecution, createSandbox } from "./sandbox";
 import { getQuotaService } from "./quota";
 import { loadEnabledMcpServerConfigs } from "./mcp/store";
+import { getGitHubToolAuth } from "./github/auth";
 import { loadSkillRuntime } from "./skills/store";
 
 function guardSandbox(sandbox: Sandbox, run: StoredRun): Sandbox {
@@ -82,6 +83,13 @@ function guardSandbox(sandbox: Sandbox, run: StoredRun): Sandbox {
         yield chunk;
       }
       await checkOwnership();
+    },
+    async openSession(options) {
+      if (!sandbox.openSession) {
+        throw new Error("This sandbox does not support live sessions");
+      }
+      await checkOwnership();
+      return sandbox.openSession(options);
     },
     async readFile(path: string, range) {
       await checkOwnership();
@@ -228,6 +236,9 @@ export async function startRun(run: StoredRun): Promise<void> {
       abortSignal: run.runtime.controller.signal,
       mcpServers,
       skills,
+      github: {
+        getAuth: (owner) => getGitHubToolAuth(run.userId, owner),
+      },
       selectedSkills: run.skillNames,
       // Reserve one unit before every agent step, including each tool-loop
       // iteration. Provider retries are disabled; LiteLLM's `order` failover

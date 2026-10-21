@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 import { basename, dirname } from "node:path/posix";
-import type { ExecChunk, Sandbox } from "./index";
+import type {
+  ExecChunk,
+  Sandbox,
+  SessionHandle,
+} from "./index";
 
 /**
  * Local Git operations inside a workspace sandbox.
@@ -8,8 +12,10 @@ import type { ExecChunk, Sandbox } from "./index";
  * Every command is built from an argv array and POSIX single-quoted before it
  * reaches `Sandbox.exec` (`sh -c`). Untrusted values (repository URLs, branch
  * names, paths, commit messages) are validated first and never concatenated
- * into a shell string raw. This service is deliberately local-only: it never
- * pushes, creates remote pull requests, calls a forge API, or stores tokens.
+ * into a shell string raw. Local panel actions never push. Publishing uses the
+ * explicit `fetch` / `stageAllAndCommit` / `mergeUnrelatedOurs` / `push`
+ * methods and passes credentials through a command-scoped environment (or a
+ * non-shell session where the backend supports one) instead of argv.
  */
 
 export type GitErrorCode =
@@ -138,6 +144,8 @@ const COMMIT_LIMIT = 20;
 const FILE_LIMIT = 200;
 const EXIT_MARKER = "__BUILDX_GIT_EXIT__";
 const PR_DRAFT_DIR = ".buildx/pr-drafts";
+const GIT_CREDENTIAL_HELPER =
+  '!f() { echo username="$BUILDX_GIT_USERNAME"; echo password="$BUILDX_GIT_TOKEN"; }; f';
 
 /** True when a value contains ASCII control characters (including NUL). */
 function hasControlCharacters(value: string): boolean {
@@ -265,6 +273,29 @@ export function validateBranchName(value: string): string {
     }
   }
   return name;
+}
+
+/** Validate a git remote name (e.g. `origin`). */
+export function validateRemoteName(value: string): string {
+  const name = value.trim();
+  if (!name || name.length > 100 || name.startsWith("-")) {
+    throw new GitError("invalid_path", "Invalid git remote name.");
+  }
+  if (!/^[A-Za-z0-9._-]+$/.test(name)) {
+    throw new GitError("invalid_path", `Invalid git remote name: ${name}`);
+  }
+  return name;
+}
+
+/** Environment for one-shot HTTPS credentials; never included in git argv. */
+function credentialEnv(auth: GitAuth): Record<string, string> {
+  if (!auth.username || !auth.token) {
+    throw new GitError("invalid_path", "Git credentials are required.");
+  }
+  return {
+    BUILDX_GIT_USERNAME: auth.username,
+    BUILDX_GIT_TOKEN: auth.token,
+  };
 }
 
 /** Normalize + validate a workspace-relative repository path. */
@@ -428,6 +459,13 @@ interface CommandResult {
 interface RunOptions {
   cwd?: string;
   timeoutMs?: number;
+  env?: Record<string, string>;
+}
+
+/** Credentials used only for a single network command; never persisted. */
+export interface GitAuth {
+  username: string;
+  token: string;
 }
 
 interface NameStatusEntry {
@@ -490,6 +528,250 @@ export class WorkspaceGit {
       );
     }
     return { repoPath, repo: await this.getRepository(repoPath) };
+  }
+
+  /** Initialize a fresh repository at `path` on `branch` (default `main`). */
+  async initialize(input: {
+    path?: string;
+    branch?: string;
+  } = {}): Promise<GitRepositorySummary> {
+    const repoPath = validateRepoPath(input.path ?? ".", { allowRoot: true });
+    const branch = validateBranchName(input.branch ?? "main");
+    if (await this.isRepository(repoPath)) {
+      throw new GitError(
+        "repository_exists",
+        `${repoPath === "." ? "The workspace root" : repoPath} is already a git repository.`,
+      );
+    }
+    if (repoPath !== ".") await this.ensureDirectory(repoPath);
+    const result = await this.runGit(["init", "-b", branch], {
+      cwd: repoPath,
+    });
+    if (result.code !== 0) {
+      throw new GitError(
+        "command_failed",
+        `Could not initialize ${repoPath}: ${describe(result)}`,
+      );
+    }
+    await this.ensureBuildxExcludes(repoPath);
+    return this.getRepository(repoPath);
+  }
+
+  /** Add or replace a named remote with a credential-free HTTPS URL. */
+  async setRemote(input: {
+    path?: string;
+    name?: string;
+    url: string;
+  }): Promise<void> {
+    const repoPath = await this.requireRepository(input.path ?? ".");
+    const name = validateRemoteName(input.name ?? "origin");
+    const url = validateRepositoryUrl(input.url);
+    const existing = await this.runGit(["remote", "get-url", name], {
+      cwd: repoPath,
+    });
+    const result = await this.runGit(
+      existing.code === 0
+        ? ["remote", "set-url", name, url]
+        : ["remote", "add", name, url],
+      { cwd: repoPath },
+    );
+    if (result.code !== 0) {
+      throw new GitError(
+        "command_failed",
+        `Could not configure remote ${name}: ${describe(result)}`,
+      );
+    }
+  }
+
+  /** Fetch a remote (optionally one branch) with one-shot credentials. */
+  async fetch(input: {
+    path: string;
+    remote?: string;
+    branch?: string;
+    auth?: GitAuth;
+  }): Promise<void> {
+    const repoPath = await this.requireRepository(input.path);
+    const remote = validateRemoteName(input.remote ?? "origin");
+    const branch = input.branch ? validateBranchName(input.branch) : undefined;
+    const args = [
+      "fetch",
+      "--prune",
+      remote,
+      ...(branch ? [branch] : []),
+    ];
+    const options = {
+      cwd: repoPath,
+      timeoutMs: CLONE_TIMEOUT_MS,
+    };
+    const result = input.auth
+      ? await this.runNetworkGit(args, options, input.auth)
+      : await this.runGit(args, options);
+    if (result.code !== 0) {
+      throw new GitError(
+        "command_failed",
+        `Could not fetch ${remote}: ${describe(result)}`,
+      );
+    }
+  }
+
+  /**
+   * Stage every workspace change and commit it. Repositories initialized by
+   * BuildX also ignore bookkeeping and dependency/build folders locally. Used
+   * by the publish tool, not the local Git panel.
+   */
+  async stageAllAndCommit(input: {
+    path: string;
+    message: string;
+  }): Promise<StageCommitResult> {
+    const repoPath = await this.requireRepository(input.path);
+    const message = input.message.trim();
+    if (!message) {
+      throw new GitError("invalid_path", "A commit message is required.");
+    }
+    if (message.length > 500 || message.includes("\0")) {
+      throw new GitError("invalid_path", "Commit message is invalid or too long.");
+    }
+
+    // New repositories get `.git/info/exclude` entries for generated folders;
+    // existing repositories keep their own .gitignore choices.
+    const add = await this.runGit(["add", "-A", "--", "."], {
+      cwd: repoPath,
+    });
+    if (add.code !== 0) {
+      throw new GitError(
+        "invalid_path",
+        `Could not stage workspace files: ${describe(add)}`,
+      );
+    }
+
+    const commit = await this.runGit(
+      [
+        "-c",
+        "user.name=BuildX",
+        "-c",
+        "user.email=buildx@users.noreply.github.com",
+        "commit",
+        "-m",
+        message,
+      ],
+      { cwd: repoPath },
+    );
+    if (commit.code !== 0) {
+      const text = describe(commit);
+      throw new GitError(
+        "command_failed",
+        /nothing to commit|no changes added|nothing added to commit/i.test(text)
+          ? "There are no workspace changes to commit."
+          : `Commit failed: ${text}`,
+      );
+    }
+
+    const hash = await this.runGit(["rev-parse", "HEAD"], { cwd: repoPath });
+    const subject = await this.runGit(
+      ["log", "-1", "--format=%s", "HEAD"],
+      { cwd: repoPath },
+    );
+    return {
+      commit: {
+        hash: hash.stdout.trim(),
+        subject: subject.stdout.trim(),
+      },
+      repo: await this.getRepository(repoPath),
+    };
+  }
+
+  /**
+   * Join unrelated histories, preferring local files on conflicts and keeping
+   * the remote base as a parent. Used when publishing a new project on top of a
+   * repository created with an initial commit.
+   */
+  async mergeUnrelatedOurs(input: {
+    path: string;
+    ref: string;
+  }): Promise<void> {
+    const repoPath = await this.requireRepository(input.path);
+    const ref = validateBranchName(input.ref);
+    const result = await this.runGit(
+      [
+        "-c",
+        "user.name=BuildX",
+        "-c",
+        "user.email=buildx@users.noreply.github.com",
+        "merge",
+        "--allow-unrelated-histories",
+        "-X",
+        "ours",
+        "--no-edit",
+        ref,
+      ],
+      { cwd: repoPath },
+    );
+    if (result.code !== 0) {
+      throw new GitError(
+        "command_failed",
+        `Could not join ${ref} with the workspace history: ${describe(result)}`,
+      );
+    }
+  }
+
+  /**
+   * Push a branch with credentials supplied through the process environment.
+   * The token never appears in argv, command text, or git config.
+   */
+  async push(input: {
+    path: string;
+    remote?: string;
+    branch: string;
+    auth: GitAuth;
+  }): Promise<{ remote: string; branch: string }> {
+    const repoPath = await this.requireRepository(input.path);
+    const remote = validateRemoteName(input.remote ?? "origin");
+    const branch = validateBranchName(input.branch);
+    const result = await this.runNetworkGit(
+      ["push", "--set-upstream", remote, branch],
+      {
+        cwd: repoPath,
+        timeoutMs: CLONE_TIMEOUT_MS,
+      },
+      input.auth,
+    );
+    if (result.code !== 0) {
+      throw new GitError(
+        "command_failed",
+        `Could not push ${branch} to ${remote}: ${describe(result)}`,
+      );
+    }
+    return { remote, branch };
+  }
+
+  /** Hide BuildX bookkeeping and generated dependency/build folders locally. */
+  private async ensureBuildxExcludes(repoPath: string): Promise<void> {
+    const file =
+      repoPath === "."
+        ? ".git/info/exclude"
+        : `${repoPath}/.git/info/exclude`;
+    let existing: string;
+    try {
+      existing = await this.sandbox.readFile(file);
+    } catch {
+      existing = "";
+    }
+    const marker = "# BuildX local-only artifacts";
+    if (existing.includes(marker)) return;
+    const patterns = [
+      marker,
+      ".buildx/",
+      "node_modules/",
+      ".next/",
+      "dist/",
+      "build/",
+      "coverage/",
+      ".env",
+      ".env.*",
+      "!.env.example",
+    ];
+    const content = `${existing.replace(/\s*$/, "")}\n${patterns.join("\n")}\n`;
+    await this.sandbox.writeFile(file, content);
   }
 
   /** True when `path` (workspace-relative) is inside a git work tree. */
@@ -1053,6 +1335,106 @@ export class WorkspaceGit {
 
   private async runGit(args: string[], options: RunOptions = {}): Promise<CommandResult> {
     const result = await this.run(["git", ...args], options);
+    this.assertGitAvailable(result);
+    return result;
+  }
+
+  /**
+   * Run an authenticated network command. The token travels in the backend's
+   * environment field for a non-shell session, never in a `sh -c` command.
+   * Sandboxes without session support cannot authenticate safely.
+   */
+  private async runNetworkGit(
+    args: string[],
+    options: RunOptions,
+    auth: GitAuth,
+  ): Promise<CommandResult> {
+    if (!this.sandbox.openSession) {
+      throw new GitError(
+        "command_failed",
+        "This sandbox backend cannot run authenticated Git commands safely.",
+      );
+    }
+    const result = await this.runGitInSession(args, options, auth);
+    this.assertGitAvailable(result);
+    return result;
+  }
+
+  private async runGitInSession(
+    args: string[],
+    options: RunOptions,
+    auth: GitAuth,
+  ): Promise<CommandResult> {
+    const openSession = this.sandbox.openSession;
+    if (!openSession) {
+      throw new GitError("command_failed", "Sandbox sessions are unavailable.");
+    }
+    let stdout = "";
+    let stderr = "";
+    let handle: SessionHandle | undefined;
+    let timedOut = false;
+    try {
+      handle = await openSession.call(this.sandbox, {
+        argv: [
+          "git",
+          "-c",
+          `credential.helper=${GIT_CREDENTIAL_HELPER}`,
+          ...args,
+        ],
+        ...(options.cwd ? { cwd: options.cwd } : {}),
+        tty: false,
+        env: {
+          GIT_TERMINAL_PROMPT: "0",
+          GIT_ASKPASS: "true",
+          ...credentialEnv(auth),
+        },
+        onOutput: (chunk) => {
+          if (chunk.stream === "stderr") stderr += chunk.data;
+          else stdout += chunk.data;
+        },
+      });
+      const timeoutMs = options.timeoutMs ?? NORMAL_TIMEOUT_MS;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        try {
+          handle?.kill("KILL");
+        } catch {
+          // The session may have exited between the timer firing and the kill.
+        }
+      }, timeoutMs);
+      let code: number;
+      try {
+        code = await handle.wait();
+      } finally {
+        clearTimeout(timer);
+      }
+      if (timedOut) {
+        throw new GitError(
+          "timeout",
+          `git command timed out after ${timeoutMs}ms.`,
+        );
+      }
+      return { code, stdout, stderr };
+    } catch (error) {
+      if (error instanceof GitError) throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      if (/timed? ?out/i.test(message)) {
+        throw new GitError(
+          "timeout",
+          `git command timed out after ${options.timeoutMs ?? NORMAL_TIMEOUT_MS}ms.`,
+        );
+      }
+      throw error;
+    } finally {
+      try {
+        handle?.close();
+      } catch {
+        // Closing an already-finished session is harmless.
+      }
+    }
+  }
+
+  private assertGitAvailable(result: CommandResult): void {
     if (
       result.code === 127 ||
       /git: (command )?not found|command not found: git/i.test(describe(result))
@@ -1062,7 +1444,6 @@ export class WorkspaceGit {
         "git is not installed in this workspace sandbox.",
       );
     }
-    return result;
   }
 
   private async run(argv: string[], options: RunOptions = {}): Promise<CommandResult> {
@@ -1073,8 +1454,13 @@ export class WorkspaceGit {
       for await (const chunk of this.sandbox.exec(script, {
         cwd: options.cwd,
         timeoutMs: options.timeoutMs ?? NORMAL_TIMEOUT_MS,
-        // Public URLs only; never block waiting for interactive credentials.
-        env: { GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "true" },
+        // Never block waiting for interactive credentials. A publish command
+        // supplies its own one-shot helper variables through `options.env`.
+        env: {
+          GIT_TERMINAL_PROMPT: "0",
+          GIT_ASKPASS: "true",
+          ...options.env,
+        },
       })) {
         const data = (chunk as ExecChunk).data;
         if (chunk.stream === "stderr") stderr += data;
