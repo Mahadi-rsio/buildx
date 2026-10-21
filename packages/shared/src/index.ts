@@ -124,10 +124,48 @@ export interface TodoPayload {
   todos: TodoItem[];
 }
 
+export interface ApprovalOption {
+  id: string;
+  label: string;
+}
+
 export interface ApprovalPayload {
   toolCallId: string;
-  command: string;
-  status: "pending" | "approved" | "denied";
+  /** Shell/command approval (legacy) or short label for the request. */
+  command?: string;
+  /** Structured ask_user question shown in chat. */
+  question?: string;
+  /** Optional multiple-choice answers for ask_user. */
+  options?: ApprovalOption[];
+  /** User's chosen option id or free-text answer. */
+  answer?: string;
+  status: "pending" | "approved" | "denied" | "answered";
+}
+
+/** Durable agent checkpoint persisted on stop / ask_user pause. */
+export interface AgentCheckpoint {
+  version: 1;
+  /** Conversation turns to replay on resume (includes tool summaries). */
+  history: ConversationTurn[];
+  /** Completed agent steps before the interruption. */
+  completedSteps: number;
+  /** In-progress todo list when interrupted. */
+  todos?: TodoItem[];
+  /** Tool call that was running or awaiting the user, if any. */
+  interruptedTool?: {
+    toolCallId: string;
+    toolName: string;
+    input: unknown;
+    /** True when effects may already have landed on disk/git. */
+    maybeApplied?: boolean;
+  };
+  /** Local task branch created for this run, when the workspace is a git repo. */
+  taskBranch?: string;
+  /** Selected GitHub repository full name, when the session targeted one. */
+  repository?: string;
+  /** Pending ask_user approval id, when paused for input. */
+  pendingApprovalId?: string;
+  updatedAt: number;
 }
 
 export interface ErrorPayload {
@@ -269,6 +307,15 @@ export const createRunSchema = z.object({
     .int()
     .refine(isContextWindowTokens, "unsupported context window")
     .optional(),
+  /** GitHub `owner/repo` selected on the dashboard for this session. */
+  repository: z
+    .string()
+    .trim()
+    .regex(/^[\w.-]+\/[\w.-]+$/, "invalid repository")
+    .max(200)
+    .optional(),
+  /** Client-generated id for optimistic message reconciliation. */
+  clientMessageId: z.string().min(1).max(128).optional(),
 });
 export type CreateRunRequest = z.infer<typeof createRunSchema>;
 

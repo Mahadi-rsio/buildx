@@ -4,15 +4,18 @@ import { useEffect, useState } from "react";
 import {
   ArrowRightLeft,
   Check,
+  CloudCog,
   GitBranch,
   GitCommitHorizontal,
   GitPullRequest,
   Loader2,
+  LogIn,
   Plus,
   RefreshCw,
   Save,
 } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,6 +26,26 @@ import type {
   PullRequestDraft,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
+
+interface GitHubRepositoriesResponse {
+  connected: boolean;
+  configured: boolean;
+  installUrl: string | null;
+  account?: {
+    login: string;
+    name: string | null;
+    avatarUrl: string | null;
+    installationId: string;
+  } | null;
+  repositories?: Array<{
+    name: string;
+    fullName: string;
+    private: boolean;
+    defaultBranch: string;
+  }>;
+  error?: string;
+  message?: string;
+}
 
 interface GitListResponse {
   ready: boolean;
@@ -142,6 +165,52 @@ export function WorkspaceGit({ workspaceId }: { workspaceId: string }) {
   const [prDescription, setPrDescription] = useState("");
   const [draftError, setDraftError] = useState<ApiFailure | null>(null);
 
+  const [github, setGithub] = useState<GitHubRepositoriesResponse | null>(null);
+  const [githubLoading, setGithubLoading] = useState(true);
+  const [githubRefreshing, setGithubRefreshing] = useState(false);
+  const [githubNotice, setGithubNotice] = useState<
+    { ok: boolean; message: string } | null
+  >(null);
+
+  async function loadGitHub() {
+    try {
+      const response = await fetch("/api/github/repositories", {
+        cache: "no-store",
+      });
+      if (!response.ok) {
+        const failure = await readFailure(response);
+        setGithub({
+          connected: false,
+          configured: false,
+          installUrl: null,
+          error: failure.error,
+          message: failure.message,
+        });
+        return;
+      }
+      setGithub((await response.json()) as GitHubRepositoriesResponse);
+    } catch (caught) {
+      setGithub({
+        connected: false,
+        configured: false,
+        installUrl: null,
+        message: message(caught),
+      });
+    } finally {
+      setGithubLoading(false);
+    }
+  }
+
+  function refreshGitHub() {
+    setGithubRefreshing(true);
+    void loadGitHub().finally(() => setGithubRefreshing(false));
+  }
+
+  function connectGitHub() {
+    const returnTo = `${window.location.pathname}${window.location.search}`;
+    window.location.href = `/api/github/connect?returnTo=${encodeURIComponent(returnTo)}`;
+  }
+
   async function loadRepositories(select?: string) {
     setLoading(true);
     try {
@@ -222,6 +291,49 @@ export function WorkspaceGit({ workspaceId }: { workspaceId: string }) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [repoPath, workspaceId]);
+
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      await Promise.resolve();
+      if (!alive) return;
+      await loadGitHub();
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [workspaceId]);
+
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      await Promise.resolve();
+      if (!alive) return;
+      const params = new URLSearchParams(window.location.search);
+      const githubResult = params.get("github");
+      if (githubResult === "connected") {
+        setGithubNotice({ ok: true, message: "GitHub connected." });
+      } else if (githubResult === "error") {
+        setGithubNotice({
+          ok: false,
+          message: params.get("message") ?? "GitHub connection failed.",
+        });
+      } else {
+        return;
+      }
+      params.delete("github");
+      params.delete("message");
+      const suffix = params.toString();
+      window.history.replaceState(
+        {},
+        "",
+        `${window.location.pathname}${suffix ? `?${suffix}` : ""}`,
+      );
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -473,6 +585,125 @@ export function WorkspaceGit({ workspaceId }: { workspaceId: string }) {
           This workspace has no box yet. Start a run before using Git.
         </p>
       ) : null}
+
+      <Section title="GitHub" icon={<CloudCog className="size-3" />}>
+        {githubNotice ? (
+          <Alert
+            variant={githubNotice.ok ? "default" : "destructive"}
+            className="px-2 py-1.5"
+          >
+            <AlertDescription className="text-[11px] leading-relaxed">
+              {githubNotice.message}
+            </AlertDescription>
+          </Alert>
+        ) : null}
+
+        {githubLoading && !github ? (
+          <p className="flex items-center gap-1 text-[11px] text-muted-foreground">
+            <Loader2 className="size-3 animate-spin" />
+            Checking GitHub…
+          </p>
+        ) : !github ? (
+          <p className="text-[11px] text-muted-foreground">
+            GitHub status unavailable.
+          </p>
+        ) : github.connected ? (
+          <>
+            <div className="flex items-center gap-1.5">
+              <Avatar className="size-6">
+                {github.account?.avatarUrl ? (
+                  <AvatarImage
+                    src={github.account.avatarUrl}
+                    alt={github.account?.login ?? "GitHub"}
+                  />
+                ) : null}
+                <AvatarFallback className="size-6 text-[10px]">
+                  {github.account?.login?.slice(0, 2).toUpperCase() ?? "GH"}
+                </AvatarFallback>
+              </Avatar>
+              <div className="min-w-0 flex-1">
+                <p className="truncate font-mono text-[11px]">
+                  {github.account?.name || github.account?.login}
+                </p>
+                <p className="truncate text-[10px] text-muted-foreground">
+                  @{github.account?.login}
+                </p>
+              </div>
+              <Button
+                type="button"
+                size="icon-xs"
+                variant="ghost"
+                aria-label="Refresh GitHub connection"
+                title="Refresh"
+                disabled={githubRefreshing}
+                onClick={refreshGitHub}
+              >
+                <RefreshCw
+                  className={cn("size-3", githubRefreshing && "animate-spin")}
+                />
+              </Button>
+            </div>
+            {github.repositories && github.repositories.length > 0 ? (
+              <select
+                value={github.repositories[0].fullName}
+                onChange={(event) => {
+                  const fullName = event.target.value;
+                  const repository = github.repositories?.find(
+                    (entry) => entry.fullName === fullName,
+                  );
+                  if (repository && !cloneUrl.trim()) {
+                    setCloneUrl(`https://github.com/${repository.fullName}.git`);
+                  }
+                }}
+                className="h-7 min-w-0 flex-1 rounded-lg border border-input bg-transparent px-2 font-mono text-[11px] outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30"
+                aria-label="Installation repository"
+              >
+                {github.repositories.map((repository) => (
+                  <option key={repository.fullName} value={repository.fullName}>
+                    {repository.fullName}
+                    {repository.private ? " · private" : ""}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                No repositories on this installation yet. Grant repository access
+                from the GitHub App page, then refresh.
+              </p>
+            )}
+            <p className="text-[10px] leading-relaxed text-muted-foreground">
+              Used by the publish tool and private clones. The connection stays
+              server-side; no token is stored in this browser.
+            </p>
+          </>
+        ) : (
+          <>
+            {github.error || github.message ? (
+              <Alert variant="destructive" className="px-2 py-1.5">
+                <AlertDescription className="text-[11px] leading-relaxed">
+                  {github.message ?? "The GitHub connection is unavailable."}
+                </AlertDescription>
+              </Alert>
+            ) : null}
+            {github.configured ? (
+              <Button
+                type="button"
+                size="xs"
+                variant="outline"
+                onClick={connectGitHub}
+              >
+                <LogIn className="size-3" />
+                Connect GitHub
+              </Button>
+            ) : (
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                GitHub is not configured. Set GITHUB_APP_ID,
+                GITHUB_APP_PRIVATE_KEY and GITHUB_APP_SLUG, then reload.
+              </p>
+            )}
+          </>
+        )}
+      </Section>
 
       <Section title="Clone a repository" icon={<GitBranch className="size-3" />}>
         <Input

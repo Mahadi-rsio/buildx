@@ -226,6 +226,56 @@ export async function requeueRun(
 }
 
 /**
+ * Pause a running run while waiting for ask_user / approval. Releases the lease
+ * so another claim cannot race, but keeps the row non-terminal.
+ */
+export async function pauseWaitingInput(
+  db: Db,
+  input: { runId: string; leaseId: string; fencingToken?: number },
+): Promise<boolean> {
+  const guarded = and(
+    eq(runs.id, input.runId),
+    eq(runs.leaseId, input.leaseId),
+    eq(runs.status, "running"),
+    isNull(runs.cancelledAt),
+    input.fencingToken !== undefined
+      ? eq(runs.fencingToken, input.fencingToken)
+      : sql`true`,
+  );
+  const rows = await db
+    .update(runs)
+    .set({
+      status: "waiting_input",
+      leaseId: null,
+      leaseExpiresAt: null,
+      updatedAt: sql`now()`,
+    })
+    .where(guarded)
+    .returning({ id: runs.id });
+  return rows.length === 1;
+}
+
+/**
+ * Re-queue a run that was paused for user input so the worker can resume it.
+ */
+export async function resumeWaitingRun(
+  db: Db,
+  input: { runId: string },
+): Promise<boolean> {
+  const rows = await db
+    .update(runs)
+    .set({
+      status: "queued",
+      endedAt: null,
+      error: null,
+      updatedAt: sql`now()`,
+    })
+    .where(and(eq(runs.id, input.runId), eq(runs.status, "waiting_input")))
+    .returning({ id: runs.id });
+  return rows.length === 1;
+}
+
+/**
  * Persist a cancellation request. Only succeeds while the run is still
  * non-terminal and not already cancelled; the executing worker observes the
  * flag and stops the machine. Returns whether the flag was newly set.

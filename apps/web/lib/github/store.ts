@@ -1,6 +1,5 @@
 import { eq, getDb, githubConnections, or } from "@buildx/db";
 import { githubConfig, githubInstallUrl } from "./config";
-import { decryptToken, encryptToken } from "./crypto";
 
 export type GitHubConnectionRow = typeof githubConnections.$inferSelect;
 
@@ -25,18 +24,14 @@ export async function findGitHubConnection(
   return row;
 }
 
+/** Associate a verified GitHub App installation with a BuildX user. */
 export async function saveGitHubConnection(input: {
   userId: string;
   githubUserId: string;
   login: string;
   name: string | null;
   avatarUrl: string | null;
-  accessToken: string;
-  refreshToken?: string | null;
-  accessTokenExpiresAt?: Date | null;
-  refreshTokenExpiresAt?: Date | null;
-  scope?: string | null;
-  installationId?: string | null;
+  installationId: string;
 }): Promise<GitHubConnectionRow> {
   const values = {
     userId: input.userId,
@@ -44,14 +39,12 @@ export async function saveGitHubConnection(input: {
     login: input.login,
     name: input.name,
     avatarUrl: input.avatarUrl,
-    accessTokenEncrypted: encryptToken(input.accessToken),
-    refreshTokenEncrypted: input.refreshToken
-      ? encryptToken(input.refreshToken)
-      : null,
-    accessTokenExpiresAt: input.accessTokenExpiresAt ?? null,
-    refreshTokenExpiresAt: input.refreshTokenExpiresAt ?? null,
-    scope: input.scope ?? null,
-    installationId: input.installationId ?? null,
+    accessTokenEncrypted: null,
+    refreshTokenEncrypted: null,
+    accessTokenExpiresAt: null,
+    refreshTokenExpiresAt: null,
+    scope: null,
+    installationId: input.installationId,
     updatedAt: new Date(),
   };
   const [row] = await getDb()
@@ -64,46 +57,17 @@ export async function saveGitHubConnection(input: {
         login: values.login,
         name: values.name,
         avatarUrl: values.avatarUrl,
-        accessTokenEncrypted: values.accessTokenEncrypted,
-        refreshTokenEncrypted: values.refreshTokenEncrypted,
-        accessTokenExpiresAt: values.accessTokenExpiresAt,
-        refreshTokenExpiresAt: values.refreshTokenExpiresAt,
-        scope: values.scope,
+        accessTokenEncrypted: null,
+        refreshTokenEncrypted: null,
+        accessTokenExpiresAt: null,
+        refreshTokenExpiresAt: null,
+        scope: null,
         installationId: values.installationId,
         updatedAt: values.updatedAt,
       },
     })
     .returning();
   return row;
-}
-
-export async function updateGitHubTokens(
-  userId: string,
-  input: {
-    accessToken: string;
-    refreshToken?: string | null;
-    accessTokenExpiresAt?: Date | null;
-    refreshTokenExpiresAt?: Date | null;
-    scope?: string | null;
-  },
-): Promise<void> {
-  await getDb()
-    .update(githubConnections)
-    .set({
-      accessTokenEncrypted: encryptToken(input.accessToken),
-      ...(input.refreshToken !== undefined
-        ? {
-            refreshTokenEncrypted: input.refreshToken
-              ? encryptToken(input.refreshToken)
-              : null,
-          }
-        : {}),
-      accessTokenExpiresAt: input.accessTokenExpiresAt ?? null,
-      refreshTokenExpiresAt: input.refreshTokenExpiresAt ?? null,
-      scope: input.scope ?? null,
-      updatedAt: new Date(),
-    })
-    .where(eq(githubConnections.userId, userId));
 }
 
 export async function updateGitHubInstallation(
@@ -128,29 +92,19 @@ export async function deleteGitHubConnection(userId: string): Promise<void> {
     .where(eq(githubConnections.userId, userId));
 }
 
-export function readAccessToken(row: GitHubConnectionRow): string {
-  return decryptToken(row.accessTokenEncrypted);
-}
-
-export function readRefreshToken(row: GitHubConnectionRow): string | null {
-  return row.refreshTokenEncrypted
-    ? decryptToken(row.refreshTokenEncrypted)
-    : null;
-}
-
 export function toGitHubConnectionView(
   row: GitHubConnectionRow | undefined,
 ): GitHubConnectionView {
   const config = githubConfig();
-  const connected = Boolean(row);
+  const connected = Boolean(row && row.installationId);
   return {
-    configured: config.oauthConfigured,
+    configured: config.appConfigured,
     connected,
     login: row?.login ?? null,
     name: row?.name ?? null,
     avatarUrl: row?.avatarUrl ?? null,
     installationId: row?.installationId ?? null,
-    installUrl: connected ? (githubInstallUrl(config.appSlug) ?? null) : null,
+    installUrl: githubInstallUrl(config.appSlug) ?? null,
     connectedAt: row?.createdAt.toISOString() ?? null,
   };
 }

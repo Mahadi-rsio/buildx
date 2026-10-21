@@ -113,6 +113,20 @@
       "when": 1792580202274,
       "tag": "0016_stale_turbo",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1792596783503,
+      "tag": "0017_github_connection_token_nullable",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1792600000000,
+      "tag": "0018_agent_checkpoint_ask_user",
+      "breakpoints": true
     }
   ]
 }

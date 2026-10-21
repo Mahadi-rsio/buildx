@@ -3,10 +3,15 @@ import { createHmac, createVerify, generateKeyPairSync } from "node:crypto";
 import { test } from "node:test";
 import {
   createAppJwt,
-  exchangeOAuthCode,
+  createInstallationToken,
+  getInstallation,
+  GitHubApiError,
+  listInstallationRepositories,
   normalizePrivateKey,
 } from "./client";
+import { githubAppStatus, githubConfig, githubInstallUrl } from "./config";
 import { decryptToken, encryptToken } from "./crypto";
+import { createSignedState, sanitizeReturnTo, verifySignedState } from "./state";
 import { installationChange, verifyGitHubSignature } from "./webhook";
 
 const ENV_KEYS = [
@@ -14,9 +19,8 @@ const ENV_KEYS = [
   "GITHUB_ENCRYPTION_KEY",
   "GITHUB_APP_ID",
   "GITHUB_APP_PRIVATE_KEY",
-  "GITHUB_CLIENT_ID",
-  "GITHUB_CLIENT_SECRET",
-  "GITHUB_REDIRECT_URI",
+  "GITHUB_APP_SLUG",
+  "GITHUB_WEBHOOK_SECRET",
 ];
 
 function withEnv(values: Record<string, string | undefined>): () => void {
@@ -124,11 +128,101 @@ test("creates a GitHub App JWT signed by the configured private key", () => {
   }
 });
 
-test("exchanges an OAuth code using the configured client credentials", async () => {
+test("reads App configuration and reports missing settings", () => {
   const restore = withEnv({
-    GITHUB_CLIENT_ID: "Iv23li56drjF94DNgYtS",
-    GITHUB_CLIENT_SECRET: "client-secret",
-    GITHUB_REDIRECT_URI: "http://localhost:3000/api/github/callback",
+    GITHUB_APP_ID: "5409576",
+    GITHUB_APP_PRIVATE_KEY: "key",
+    GITHUB_APP_SLUG: "buildx",
+  });
+  try {
+    assert.deepEqual(githubConfig(), {
+      appId: "5409576",
+      privateKey: "key",
+      webhookSecret: undefined,
+      appSlug: "buildx",
+      appConfigured: true,
+      installConfigured: true,
+    });
+    assert.deepEqual(githubAppStatus(), {
+      configured: true,
+      missing: [],
+    });
+    assert.equal(
+      githubInstallUrl("buildx"),
+      "https://github.com/apps/buildx/installations/new",
+    );
+  } finally {
+    restore();
+  }
+});
+
+test("reports which App settings are still missing", () => {
+  const restore = withEnv({
+    GITHUB_APP_ID: "5409576",
+    GITHUB_APP_PRIVATE_KEY: undefined,
+    GITHUB_APP_SLUG: undefined,
+  });
+  try {
+    assert.deepEqual(githubAppStatus(), {
+      configured: false,
+      missing: ["GITHUB_APP_PRIVATE_KEY", "GITHUB_APP_SLUG"],
+    });
+    assert.equal(githubInstallUrl(), undefined);
+  } finally {
+    restore();
+  }
+});
+
+test("signs and verifies the installation state token", () => {
+  const restore = withEnv({ GITHUB_ENCRYPTION_KEY: "state-key" });
+  try {
+    const token = createSignedState("user-1", "/runs/abc");
+    const verified = verifySignedState(token);
+    assert.equal(verified?.userId, "user-1");
+    assert.equal(verified?.returnTo, "/runs/abc");
+    assert.ok(verified && verified.exp > Math.floor(Date.now() / 1000));
+    assert.equal(verifySignedState(`${token.slice(0, -2)}AA`), null);
+    assert.equal(verifySignedState("not-a-token"), null);
+    assert.equal(verifySignedState(null), null);
+  } finally {
+    restore();
+  }
+});
+
+test("rejects expired installation state tokens", () => {
+  const restore = withEnv({ GITHUB_ENCRYPTION_KEY: "state-key" });
+  try {
+    const token = createSignedState("user-1", "/");
+    const payload = JSON.parse(
+      Buffer.from(token.split(".")[0], "base64url").toString("utf8"),
+    ) as { exp: number };
+    payload.exp = Math.floor(Date.now() / 1000) - 1;
+    const forged = Buffer.from(JSON.stringify(payload), "utf8").toString(
+      "base64url",
+    );
+    const signature = token.split(".")[1];
+    assert.equal(verifySignedState(`${forged}.${signature}`), null);
+  } finally {
+    restore();
+  }
+});
+
+test("sanitizes the return destination", () => {
+  assert.equal(sanitizeReturnTo("/runs/abc?tab=git"), "/runs/abc?tab=git");
+  assert.equal(sanitizeReturnTo("/settings"), "/settings");
+  assert.equal(sanitizeReturnTo("https://evil.example/"), "/");
+  assert.equal(sanitizeReturnTo("//evil.example/"), "/");
+  assert.equal(sanitizeReturnTo("\\evil"), "/");
+  assert.equal(sanitizeReturnTo(""), "/");
+  assert.equal(sanitizeReturnTo(null), "/");
+});
+
+test("fetches an installation with the App JWT", async () => {
+  const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const pem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+  const restore = withEnv({
+    GITHUB_APP_ID: "5409576",
+    GITHUB_APP_PRIVATE_KEY: pem,
   });
   const originalFetch = globalThis.fetch;
   let request: { url: string; init?: RequestInit } | undefined;
@@ -136,28 +230,104 @@ test("exchanges an OAuth code using the configured client credentials", async ()
     request = { url: String(url), init };
     return new Response(
       JSON.stringify({
-        access_token: "ghu_token",
-        token_type: "bearer",
-        scope: "repo",
-        expires_in: 28800,
-        refresh_token: "ghr_refresh",
-        refresh_token_expires_in: 15897600,
+        id: 42,
+        account: { login: "acme", id: 7 },
+        app_id: 5409576,
+        suspended_at: null,
       }),
       { status: 200, headers: { "Content-Type": "application/json" } },
     );
   }) as typeof fetch;
   try {
-    const token = await exchangeOAuthCode("code-123");
-    assert.equal(token.access_token, "ghu_token");
-    assert.equal(token.refresh_token, "ghr_refresh");
-    assert.equal(request?.url, "https://github.com/login/oauth/access_token");
-    const body = new URLSearchParams(String(request?.init?.body));
-    assert.equal(body.get("client_id"), "Iv23li56drjF94DNgYtS");
-    assert.equal(body.get("client_secret"), "client-secret");
-    assert.equal(body.get("code"), "code-123");
+    const installation = await getInstallation(42);
+    assert.equal(installation.id, 42);
+    assert.equal(installation.account.login, "acme");
+    assert.equal(request?.url, "https://api.github.com/app/installations/42");
+    const authorization = (request?.init?.headers as Record<string, string>)[
+      "Authorization"
+    ];
+    assert.match(authorization ?? "", /^Bearer ey/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    restore();
+  }
+});
+
+test("mints an installation access token and lists repositories", async () => {
+  const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const pem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+  const restore = withEnv({
+    GITHUB_APP_ID: "5409576",
+    GITHUB_APP_PRIVATE_KEY: pem,
+  });
+  const originalFetch = globalThis.fetch;
+  const requests: { url: string; method: string; authorization: string }[] = [];
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    const parsed = new URL(String(url));
+    requests.push({
+      url: parsed.pathname,
+      method: init?.method ?? "GET",
+      authorization:
+        (init?.headers as Record<string, string>)["Authorization"] ?? "",
+    });
+    if (parsed.pathname === "/app/installations/42/access_tokens") {
+      return new Response(
+        JSON.stringify({ token: "ghs_token", expires_at: "2026-01-01T00:00:00Z" }),
+        { status: 201, headers: { "Content-Type": "application/json" } },
+      );
+    }
+    return new Response(
+      JSON.stringify({
+        total_count: 2,
+        repositories: [
+          { id: 1, name: "a", full_name: "acme/a", private: true },
+          { id: 2, name: "b", full_name: "acme/b", private: false },
+        ],
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  }) as typeof fetch;
+  try {
+    const created = await createInstallationToken(42);
+    assert.equal(created.token, "ghs_token");
     assert.equal(
-      body.get("redirect_uri"),
-      "http://localhost:3000/api/github/callback",
+      requests[0].url,
+      "/app/installations/42/access_tokens",
+    );
+    assert.equal(requests[0].method, "POST");
+    assert.match(requests[0].authorization, /^Bearer ey/);
+
+    const repositories = await listInstallationRepositories("ghs_token");
+    assert.equal(repositories.length, 2);
+    assert.equal(repositories[0].full_name, "acme/a");
+    assert.equal(requests[1].url, "/installation/repositories");
+    assert.equal(requests[1].authorization, "Bearer ghs_token");
+  } finally {
+    globalThis.fetch = originalFetch;
+    restore();
+  }
+});
+
+test("surfaces GitHub API errors with their status", async () => {
+  const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const pem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+  const restore = withEnv({
+    GITHUB_APP_ID: "5409576",
+    GITHUB_APP_PRIVATE_KEY: pem,
+  });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(
+      JSON.stringify({ message: "Not Found" }),
+      { status: 404, headers: { "Content-Type": "application/json" } },
+    )) as typeof fetch;
+  try {
+    await assert.rejects(
+      async () => {
+        await listInstallationRepositories("ghs_token");
+      },
+      (error: unknown) =>
+        error instanceof GitHubApiError && error.status === 404,
     );
   } finally {
     globalThis.fetch = originalFetch;

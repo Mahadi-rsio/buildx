@@ -4,6 +4,8 @@ import {
   DEFAULT_MAX_STEPS,
   DEFAULT_MODEL,
   getModelContextWindow,
+  type AgentCheckpoint,
+  type ApprovalOption,
   type ContextUsagePayload,
   type ConversationTurn,
   type FileChangePayload,
@@ -30,7 +32,7 @@ import {
   buildGitHubTools,
   type GitHubToolsOptions,
 } from "./github";
-import { buildTools } from "./tools";
+import { buildTools, WaitingForUserError } from "./tools";
 import {
   buildSelectedSkillsSection,
   buildSkillsSection,
@@ -39,7 +41,7 @@ import {
 } from "./skills";
 
 export { buildSystemPrompt } from "./prompt";
-export { buildTools, type AgentTools } from "./tools";
+export { buildTools, WaitingForUserError, type AgentTools } from "./tools";
 export {
   buildGitHubTools,
   GitHubPublishError,
@@ -148,6 +150,17 @@ export interface CreateAgentOptions {
    * every `prepareStep`, so the orchestrator can emit live context stats.
    */
   onContextAssembled?: (info: { assembledTokens: number }) => void | Promise<void>;
+  /** Called before the first file mutation so the harness can ensure a task branch. */
+  onBeforeMutate?: () => void | Promise<void>;
+  /**
+   * Ask-user gate. Should emit an approval event and either return an answer
+   * already known for this resume, or throw `WaitingForUserError`.
+   */
+  onAskUser?: (request: {
+    toolCallId: string;
+    question: string;
+    options?: ApprovalOption[];
+  }) => Promise<{ answer: string }>;
 }
 
 function buildToolSet(options: CreateAgentOptions): {
@@ -158,6 +171,8 @@ function buildToolSet(options: CreateAgentOptions): {
     onTodo: options.onTodo,
     onFileChange: options.onFileChange,
     onTerminal: options.onTerminal,
+    onBeforeMutate: options.onBeforeMutate,
+    onAskUser: options.onAskUser,
   });
   // Enabled by default at 75k tokens; callers can raise the limit or pass
   // `limitTokens: 0` / `Infinity` to opt out.
@@ -226,6 +241,14 @@ export interface RunTaskOptions extends CreateAgentOptions {
   approveMcpTool?: BuildMcpToolsOptions["approve"];
   /** Skills the user attached; their full instructions are preloaded. */
   selectedSkills?: string[];
+  /** Prior checkpoint restored after stop / ask_user pause. */
+  checkpoint?: AgentCheckpoint;
+  /** Persist the latest valid checkpoint on stop / wait / interrupt. */
+  onCheckpoint?: (checkpoint: AgentCheckpoint) => void | Promise<void>;
+  /** Selected GitHub repository full name for this session, when any. */
+  repository?: string;
+  /** Local task branch name to create/reuse before edits. */
+  taskBranch?: string;
 }
 
 export interface RunTaskUsage {
@@ -368,6 +391,46 @@ export async function runTask(options: RunTaskOptions): Promise<RunTaskResult> {
   const mcpServerFor = (toolName: string): string | undefined =>
     serverByTool[toolName]?.config.name;
 
+  let liveTodos: TodoItem[] | undefined = options.checkpoint?.todos;
+  let assistantText = "";
+  let completedSteps = options.checkpoint?.completedSteps ?? 0;
+  let interruptedTool: AgentCheckpoint["interruptedTool"] | undefined =
+    options.checkpoint?.interruptedTool;
+  let pendingApprovalId = options.checkpoint?.pendingApprovalId;
+  let taskBranch = options.taskBranch ?? options.checkpoint?.taskBranch;
+  let mutatePrepared = Boolean(taskBranch && options.checkpoint?.taskBranch);
+
+  const saveCheckpoint = async (
+    extras: Partial<AgentCheckpoint> = {},
+  ): Promise<AgentCheckpoint> => {
+    const history: ConversationTurn[] = [
+      ...(options.history ?? []),
+      { role: "user", content: options.task },
+      ...(assistantText.trim().length > 0
+        ? [{ role: "assistant" as const, content: assistantText.trim() }]
+        : []),
+    ];
+    const checkpoint: AgentCheckpoint = {
+      version: 1,
+      history,
+      completedSteps,
+      ...(liveTodos ? { todos: liveTodos } : {}),
+      ...(interruptedTool ? { interruptedTool } : {}),
+      ...(taskBranch ? { taskBranch } : {}),
+      ...(options.repository ?? options.checkpoint?.repository
+        ? {
+            repository:
+              options.repository ?? options.checkpoint?.repository,
+          }
+        : {}),
+      ...(pendingApprovalId ? { pendingApprovalId } : {}),
+      updatedAt: Date.now(),
+      ...extras,
+    };
+    await options.onCheckpoint?.(checkpoint);
+    return checkpoint;
+  };
+
   const agent = createAgent({
     ...options,
     instructions,
@@ -404,6 +467,7 @@ export async function runTask(options: RunTaskOptions): Promise<RunTaskResult> {
       };
     },
     onTodo: async (todos) => {
+      liveTodos = todos;
       await options.onTodo?.(todos);
       await emit({ type: "todo", data: { todos }, ts: ts() });
     },
@@ -415,19 +479,59 @@ export async function runTask(options: RunTaskOptions): Promise<RunTaskResult> {
       await options.onTerminal?.(chunk);
       await emit({ type: "terminal", data: chunk, ts: ts() });
     },
+    onBeforeMutate: async () => {
+      if (mutatePrepared) {
+        await options.onBeforeMutate?.();
+        return;
+      }
+      mutatePrepared = true;
+      await options.onBeforeMutate?.();
+      if (taskBranch) await saveCheckpoint({ taskBranch });
+    },
+    onAskUser: async (request) => {
+      if (options.onAskUser) return options.onAskUser(request);
+      await emit({
+        type: "approval",
+        data: {
+          toolCallId: request.toolCallId,
+          question: request.question,
+          options: request.options,
+          status: "pending",
+        },
+        ts: ts(),
+      });
+      interruptedTool = {
+        toolCallId: request.toolCallId,
+        toolName: "ask_user",
+        input: {
+          question: request.question,
+          options: request.options,
+        },
+      };
+      throw new WaitingForUserError(request);
+    },
   });
   let status: RunStatus = "completed";
   let failureMessage: string | undefined;
 
   try {
-    // Replay earlier turns so a follow-up message keeps the conversation
-    // context instead of starting from scratch.
+    // Replay earlier turns (including checkpoint history after stop/ask_user)
+    // so a follow-up or resume keeps conversation context.
+    const resumeHistory =
+      options.checkpoint?.history?.length && !(options.history?.length)
+        ? options.checkpoint.history
+        : (options.history ?? []);
+    const resumeNote =
+      options.checkpoint?.interruptedTool &&
+      options.checkpoint.interruptedTool.toolName !== "ask_user"
+        ? `\n\n[System: A previous attempt was interrupted while calling \`${options.checkpoint.interruptedTool.toolName}\`. Inspect the filesystem/git state before retrying that tool; do not assume its effects are absent or complete.]`
+        : "";
     const messages: ModelMessage[] = [
-      ...(options.history ?? []).map((turn) => ({
+      ...resumeHistory.map((turn) => ({
         role: turn.role,
         content: turn.content,
       })),
-      { role: "user" as const, content: options.task },
+      { role: "user" as const, content: `${options.task}${resumeNote}` },
     ];
 
     const result = await agent.stream({
@@ -435,7 +539,6 @@ export async function runTask(options: RunTaskOptions): Promise<RunTaskResult> {
       abortSignal: options.abortSignal,
     });
 
-    let completedSteps = 0;
     let liveUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
 
     for await (const part of result.fullStream) {
@@ -447,11 +550,23 @@ export async function runTask(options: RunTaskOptions): Promise<RunTaskResult> {
         case "text-delta":
           if (options.abortSignal?.aborted) break;
           if (part.text.length > 0) {
+            assistantText += part.text;
             await emit({ type: "text", data: { text: part.text }, ts: ts() });
           }
           break;
         case "tool-call":
           if (options.abortSignal?.aborted) break;
+          interruptedTool = {
+            toolCallId: part.toolCallId,
+            toolName: part.toolName,
+            input: part.input,
+            maybeApplied: [
+              "write_file",
+              "edit_file",
+              "bash",
+              "github_create_pull_request",
+            ].includes(part.toolName),
+          };
           await emit({
             type: "tool_call",
             data: {
@@ -465,6 +580,9 @@ export async function runTask(options: RunTaskOptions): Promise<RunTaskResult> {
           break;
         case "tool-result":
           if (options.abortSignal?.aborted) break;
+          if (interruptedTool?.toolCallId === part.toolCallId) {
+            interruptedTool = undefined;
+          }
           await emit({
             type: "tool_result",
             data: {
@@ -478,6 +596,31 @@ export async function runTask(options: RunTaskOptions): Promise<RunTaskResult> {
           break;
         case "tool-error":
           if (options.abortSignal?.aborted) break;
+          if (part.error instanceof WaitingForUserError) {
+            status = "waiting_input";
+            interruptedTool = {
+              toolCallId: part.error.toolCallId,
+              toolName: "ask_user",
+              input: {
+                question: part.error.question,
+                options: part.error.options,
+              },
+            };
+            await emit({
+              type: "approval",
+              data: {
+                toolCallId: part.error.toolCallId,
+                question: part.error.question,
+                options: part.error.options,
+                status: "pending",
+              },
+              ts: ts(),
+            });
+            break;
+          }
+          if (interruptedTool?.toolCallId === part.toolCallId) {
+            interruptedTool = undefined;
+          }
           await emit({
             type: "tool_result",
             data: {
@@ -535,6 +678,7 @@ export async function runTask(options: RunTaskOptions): Promise<RunTaskResult> {
         default:
           break;
       }
+      if (status === "waiting_input") break;
     }
 
     const [text, usage, steps] = await Promise.all([
@@ -542,8 +686,17 @@ export async function runTask(options: RunTaskOptions): Promise<RunTaskResult> {
       result.totalUsage,
       result.steps,
     ]);
+    if (!assistantText && text) assistantText = text;
 
     if (options.abortSignal?.aborted) status = "cancelled";
+
+    if (status === "cancelled" || status === "waiting_input") {
+      await saveCheckpoint(
+        status === "waiting_input" && pendingApprovalId
+          ? { pendingApprovalId }
+          : {},
+      );
+    }
 
     // Final authoritative usage (the in-flight `finish-step` numbers are
     // per-step and may lag the provider's totals).
@@ -563,14 +716,21 @@ export async function runTask(options: RunTaskOptions): Promise<RunTaskResult> {
       type: "status",
       data: {
         status,
-        message: status === "completed" ? "run completed" : status === "cancelled" ? "run cancelled" : undefined,
+        message:
+          status === "completed"
+            ? "run completed"
+            : status === "cancelled"
+              ? "run cancelled"
+              : status === "waiting_input"
+                ? "waiting for user input"
+                : undefined,
       },
       ts: ts(),
     });
 
     return {
       status,
-      text,
+      text: assistantText || text,
       steps: steps.length,
       usage: usage
         ? {
@@ -582,20 +742,45 @@ export async function runTask(options: RunTaskOptions): Promise<RunTaskResult> {
       error: failureMessage,
     };
   } catch (error) {
+    if (error instanceof WaitingForUserError) {
+      interruptedTool = {
+        toolCallId: error.toolCallId,
+        toolName: "ask_user",
+        input: { question: error.question, options: error.options },
+      };
+      await emit({
+        type: "approval",
+        data: {
+          toolCallId: error.toolCallId,
+          question: error.question,
+          options: error.options,
+          status: "pending",
+        },
+        ts: ts(),
+      });
+      await saveCheckpoint();
+      await emit({
+        type: "status",
+        data: { status: "waiting_input", message: "waiting for user input" },
+        ts: ts(),
+      });
+      return { status: "waiting_input", text: assistantText, steps: completedSteps };
+    }
     if (options.abortSignal?.aborted) {
+      await saveCheckpoint();
       await emit({
         type: "status",
         data: { status: "cancelled", message: "run cancelled" },
         ts: ts(),
       });
-      return { status: "cancelled", text: "", steps: 0 };
+      return { status: "cancelled", text: assistantText, steps: completedSteps };
     }
     status = "failed";
     const message =
       failureMessage ?? describeProviderError(error, options.model);
     await emit({ type: "error", data: { message }, ts: ts() });
     await emit({ type: "status", data: { status }, ts: ts() });
-    return { status, text: "", steps: 0, error: message };
+    return { status, text: assistantText, steps: completedSteps, error: message };
   } finally {
     await Promise.allSettled(connections.map((connection) => connection.close()));
   }

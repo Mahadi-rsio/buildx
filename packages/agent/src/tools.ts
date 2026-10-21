@@ -36,6 +36,40 @@ export interface ToolHooks {
     chunk: string;
     toolCallId?: string;
   }) => void | Promise<void>;
+  /**
+   * Called before the first workspace mutation so the harness can ensure a
+   * task branch exists. Must be idempotent across resume.
+   */
+  onBeforeMutate?: () => void | Promise<void>;
+  /**
+   * Pause for a structured user question. Resolves with the answer when the
+   * user has already responded in this process; otherwise throws
+   * `WaitingForUserError` so the run can checkpoint and wait.
+   */
+  onAskUser?: (request: {
+    toolCallId: string;
+    question: string;
+    options?: Array<{ id: string; label: string }>;
+  }) => Promise<{ answer: string }>;
+}
+
+/** Thrown by `ask_user` when the run must pause for a durable user answer. */
+export class WaitingForUserError extends Error {
+  readonly question: string;
+  readonly options?: Array<{ id: string; label: string }>;
+  readonly toolCallId: string;
+
+  constructor(input: {
+    toolCallId: string;
+    question: string;
+    options?: Array<{ id: string; label: string }>;
+  }) {
+    super("waiting_input");
+    this.name = "WaitingForUserError";
+    this.toolCallId = input.toolCallId;
+    this.question = input.question;
+    this.options = input.options;
+  }
 }
 
 interface TruncatedText {
@@ -74,16 +108,70 @@ function truncateMiddle(
   };
 }
 
+/** Strip CSI / OSC ANSI sequences so model summaries stay readable. */
+function stripAnsi(text: string): string {
+  return text
+    .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, "")
+    .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, "")
+    .replace(/\r(?!\n)/g, "");
+}
+
+/**
+ * Collapse repetitive progress noise (identical consecutive lines, spinner
+ * frames, bare percent counters) without dropping error context.
+ */
+function scrubProgressNoise(text: string): string {
+  const lines = text.split("\n");
+  const out: string[] = [];
+  let prev = "";
+  let repeat = 0;
+  for (const line of lines) {
+    const normalized = line
+      .replace(/[\u2800-\u28ff]/g, "")
+      .replace(/[\\|/-]\s*$/g, "")
+      .replace(/\s+/g, " ")
+      .trimEnd();
+    const isProgress =
+      /^\s*(?:\d{1,3}%|download|downloading|progress|eta\b)/i.test(normalized) ||
+      /^[\s.*=#\-_|/\\]+$/.test(normalized);
+    if (normalized === prev) {
+      repeat += 1;
+      continue;
+    }
+    if (repeat > 0) {
+      out.push(`… [repeated previous line ${repeat} more times]`);
+      repeat = 0;
+    }
+    if (isProgress && out.length > 0 && out[out.length - 1] === normalized) {
+      continue;
+    }
+    out.push(line);
+    prev = normalized;
+  }
+  if (repeat > 0) out.push(`… [repeated previous line ${repeat} more times]`);
+  return out.join("\n");
+}
+
+function cleanBashStream(text: string): string {
+  return scrubProgressNoise(stripAnsi(text));
+}
+
 /** Bound each stream and the combined result without dropping stderr's tail. */
 function boundBashOutput(
   rawStdout: string,
   rawStderr: string,
 ): { stdout: string; stderr: string; truncated: boolean } {
-  const stdout = truncateMiddle(rawStdout, MAX_STDOUT_CHARS);
-  const stderr = truncateMiddle(rawStderr, MAX_STDERR_CHARS, 0.75);
+  const cleanedStdout = cleanBashStream(rawStdout);
+  const cleanedStderr = cleanBashStream(rawStderr);
+  const stdout = truncateMiddle(cleanedStdout, MAX_STDOUT_CHARS);
+  const stderr = truncateMiddle(cleanedStderr, MAX_STDERR_CHARS, 0.75);
   let boundedStdout = stdout.text;
   const boundedStderr = stderr.text;
-  let truncated = stdout.truncated || stderr.truncated;
+  let truncated =
+    stdout.truncated ||
+    stderr.truncated ||
+    cleanedStdout.length !== rawStdout.length ||
+    cleanedStderr.length !== rawStderr.length;
 
   if (boundedStdout.length + boundedStderr.length > MAX_TOTAL_OUTPUT_CHARS) {
     const stdoutBudget = Math.max(
@@ -96,6 +184,125 @@ function boundBashOutput(
   }
 
   return { stdout: boundedStdout, stderr: boundedStderr, truncated };
+}
+
+/** Persist the full raw command transcript in the durable sandbox filesystem. */
+async function writeBashLog(
+  sandbox: Sandbox,
+  toolCallId: string | undefined,
+  payload: {
+    command: string;
+    cwd: string;
+    exitCode: number;
+    stdout: string;
+    stderr: string;
+    durationMs: number;
+  },
+): Promise<string | undefined> {
+  if (!toolCallId) return undefined;
+  const safeId = toolCallId.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120);
+  const logPath = `.buildx/logs/${safeId}.log`;
+  const body = [
+    `# buildx bash log`,
+    `command: ${payload.command}`,
+    `cwd: ${payload.cwd}`,
+    `exitCode: ${payload.exitCode}`,
+    `durationMs: ${payload.durationMs}`,
+    ``,
+    `--- stdout ---`,
+    payload.stdout,
+    ``,
+    `--- stderr ---`,
+    payload.stderr,
+    ``,
+  ].join("\n");
+  try {
+    await sandbox.writeFile(logPath, body);
+    return logPath;
+  } catch {
+    return undefined;
+  }
+}
+
+/** On failure, surface a short durable-log tail for targeted debugging. */
+async function readLogTail(
+  sandbox: Sandbox,
+  logPath: string | undefined,
+  maxChars = 2_000,
+): Promise<string | undefined> {
+  if (!logPath) return undefined;
+  try {
+    const content = await sandbox.readFile(logPath);
+    if (content.length <= maxChars) return content;
+    return truncateMiddle(content, maxChars, 0.8).text;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Build a short unified-diff style snippet around the first changed region. */
+function summarizeEditDiff(
+  before: string,
+  after: string,
+  path: string,
+): string {
+  if (before === after) return `(no content change in ${path})`;
+  const beforeLines = before.split("\n");
+  const afterLines = after.split("\n");
+  let start = 0;
+  while (
+    start < beforeLines.length &&
+    start < afterLines.length &&
+    beforeLines[start] === afterLines[start]
+  ) {
+    start += 1;
+  }
+  let endBefore = beforeLines.length - 1;
+  let endAfter = afterLines.length - 1;
+  while (
+    endBefore >= start &&
+    endAfter >= start &&
+    beforeLines[endBefore] === afterLines[endAfter]
+  ) {
+    endBefore -= 1;
+    endAfter -= 1;
+  }
+  const ctx = 2;
+  const from = Math.max(0, start - ctx);
+  const removed = beforeLines.slice(from, endBefore + 1 + ctx);
+  const added = afterLines.slice(from, endAfter + 1 + ctx);
+  const lines = [
+    `--- a/${path}`,
+    `+++ b/${path}`,
+    `@@ -${from + 1},${removed.length} +${from + 1},${added.length} @@`,
+    ...removed.slice(0, 40).map((line) => `- ${line}`),
+    ...added.slice(0, 40).map((line) => `+ ${line}`),
+  ];
+  return lines.join("\n");
+}
+
+/** Suggest nearby context when an exact `old_str` miss happens. */
+function suggestEditContext(content: string, oldStr: string): string {
+  const needle = oldStr.trim().split("\n")[0]?.trim() ?? "";
+  if (!needle || needle.length < 4) {
+    return "Reread a narrow range around the intended edit and retry with exact surrounding context.";
+  }
+  const lines = content.split("\n");
+  const hits: string[] = [];
+  const lower = needle.toLowerCase();
+  for (let i = 0; i < lines.length && hits.length < 3; i++) {
+    if (lines[i].toLowerCase().includes(lower.slice(0, Math.min(48, lower.length)))) {
+      const from = Math.max(0, i - 1);
+      const to = Math.min(lines.length, i + 2);
+      hits.push(
+        numberLines(lines.slice(from, to).join("\n"), from),
+      );
+    }
+  }
+  if (hits.length === 0) {
+    return "old_str not found; use grep to locate the symbol, then read_file a small range and retry.";
+  }
+  return `old_str not found. Nearby candidates:\n${hits.join("\n---\n")}`;
 }
 
 /** Prefix each line with its 1-based number, starting at `startLine`. */
@@ -449,15 +656,38 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}) {
       if (timedOut) {
         stderr += `\n[buildx: command timed out after ${timeout}ms]\n`;
       }
-      const bounded = boundBashOutput(stdout.trimEnd(), stderr.trimEnd());
+      const exitCode = timedOut ? 124 : (parsed.exitCode ?? 0);
+      const durationMs = Date.now() - startedAt;
+      const rawStdout = stdout.trimEnd();
+      const rawStderr = stderr.trimEnd();
+      const logPath = await writeBashLog(sandbox, options?.toolCallId, {
+        command,
+        cwd: cwd ?? ".",
+        exitCode,
+        stdout: rawStdout,
+        stderr: rawStderr,
+        durationMs,
+      });
+      const bounded = boundBashOutput(rawStdout, rawStderr);
+      const failureTail =
+        exitCode !== 0
+          ? await readLogTail(sandbox, logPath)
+          : undefined;
       const result = {
         command,
         cwd: cwd ?? ".",
-        exitCode: timedOut ? 124 : (parsed.exitCode ?? 0),
+        exitCode,
         stdout: bounded.stdout,
         stderr: bounded.stderr,
         truncated: bounded.truncated,
-        durationMs: Date.now() - startedAt,
+        durationMs,
+        ...(logPath
+          ? {
+              logPath,
+              logDurable: true as const,
+              ...(failureTail ? { logTail: failureTail } : {}),
+            }
+          : {}),
         ...(timedOut ? { timedOut: true } : {}),
       };
       return result;
@@ -507,6 +737,7 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}) {
       if (options?.abortSignal?.aborted) {
         throw new Error("Tool execution aborted: run cancelled");
       }
+      await hooks.onBeforeMutate?.();
       await sandbox.writeFile(path, content);
       await hooks.onFileChange?.({ path, change: "write" });
       return { path, bytes: Buffer.byteLength(content, "utf8") };
@@ -515,8 +746,10 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}) {
 
   const edit_file = tool({
     description:
-      "Replace an exact string in a file. `old_str` must match exactly and " +
-      "uniquely, unless `replace_all` is true.",
+      "Apply a focused patch to an existing file by replacing an exact string. " +
+      "`old_str` must match the current file exactly and uniquely unless " +
+      "`replace_all` is true. Prefer this over rewrite-via-write_file. On " +
+      "mismatch, reread only the affected range and retry with more context.",
     inputSchema: z.object({
       path: z.string().describe("File path relative to the workspace root"),
       old_str: z.string().describe("Exact text to find"),
@@ -530,13 +763,13 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}) {
       if (options?.abortSignal?.aborted) {
         throw new Error("Tool execution aborted: run cancelled");
       }
-      const content = await sandbox.readFile(path);
-      const count = content.split(old_str).length - 1;
       if (old_str.length === 0) {
         throw new Error("old_str must not be empty");
       }
+      const content = await sandbox.readFile(path);
+      const count = content.split(old_str).length - 1;
       if (count === 0) {
-        throw new Error(`old_str not found in ${path}`);
+        throw new Error(suggestEditContext(content, old_str));
       }
       if (count > 1 && !replace_all) {
         throw new Error(
@@ -546,9 +779,73 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}) {
       const next = replace_all
         ? content.split(old_str).join(new_str)
         : content.replace(old_str, new_str);
+      await hooks.onBeforeMutate?.();
+      // Re-read immediately before write to catch concurrent drift.
+      const latest = await sandbox.readFile(path);
+      if (latest !== content) {
+        throw new Error(
+          `File ${path} changed while preparing the patch; reread the affected range and retry.`,
+        );
+      }
       await sandbox.writeFile(path, next);
       await hooks.onFileChange?.({ path, change: "edit" });
-      return { path, replacements: replace_all ? count : 1 };
+      return {
+        path,
+        replacements: replace_all ? count : 1,
+        diff: summarizeEditDiff(content, next, path),
+      };
+    },
+  });
+
+  const ask_user = tool({
+    description:
+      "Ask the user a concise clarifying question with optional multiple-choice " +
+      "answers, then wait for their reply. Use before destructive actions, " +
+      "significant overwrites, unapproved publishing, production changes, or " +
+      "irreversible operations. Do not ask before routine file edits or safe tests.",
+    inputSchema: z.object({
+      question: z
+        .string()
+        .min(1)
+        .max(2_000)
+        .describe("Concise question shown to the user"),
+      options: z
+        .array(
+          z.object({
+            id: z.string().min(1).max(64),
+            label: z.string().min(1).max(200),
+          }),
+        )
+        .min(1)
+        .max(8)
+        .optional()
+        .describe("Optional structured answer choices"),
+    }),
+    execute: async ({ question, options: answerOptions }, toolOptions) => {
+      if (toolOptions?.abortSignal?.aborted) {
+        throw new Error("Tool execution aborted: run cancelled");
+      }
+      const toolCallId = toolOptions?.toolCallId ?? `ask-${Date.now()}`;
+      const deduped = answerOptions
+        ? [
+            ...new Map(
+              answerOptions.map((option) => [option.id.trim(), option] as const),
+            ).values(),
+          ].filter((option) => option.id.length > 0 && option.label.trim().length > 0)
+        : undefined;
+      if (!hooks.onAskUser) {
+        throw new WaitingForUserError({
+          toolCallId,
+          question: question.trim(),
+          options: deduped,
+        });
+      }
+      const result = await hooks.onAskUser({
+        toolCallId,
+        question: question.trim(),
+        options: deduped,
+      });
+      return { question: question.trim(), answer: result.answer, options: deduped };
     },
   });
 
@@ -855,6 +1152,7 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}) {
     glob,
     semantic_search,
     todo_write,
+    ask_user,
   };
 }
 

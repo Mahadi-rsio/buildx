@@ -128,8 +128,8 @@ export function GitHubConnection() {
       {!status.configured && !status.connected ? (
         <p className="rounded-lg border border-border bg-background px-3 py-2 text-muted-foreground">
           GitHub App credentials are not configured on this server. Set
-          <code className="mx-1 font-mono">GITHUB_CLIENT_ID</code> and
-          <code className="mx-1 font-mono">GITHUB_CLIENT_SECRET</code>.
+          <code className="mx-1 font-mono">GITHUB_APP_ID</code> and
+          <code className="mx-1 font-mono">GITHUB_APP_PRIVATE_KEY</code>.
         </p>
       ) : null}
 
@@ -176,7 +176,7 @@ export function GitHubConnection() {
               </a>
             ) : null}
             <a
-              href="/api/github/connect"
+              href="/api/github/connect?returnTo=/settings"
               className={buttonVariants({ variant: "outline", size: "sm" })}
             >
               Reconnect
@@ -195,7 +195,7 @@ export function GitHubConnection() {
       ) : (
         <div className="flex flex-wrap items-center gap-2">
           <a
-            href="/api/github/connect"
+            href="/api/github/connect?returnTo=/settings"
             className={buttonVariants({ variant: "default", size: "sm" })}
           >
             <GitPullRequest className="size-3.5" />

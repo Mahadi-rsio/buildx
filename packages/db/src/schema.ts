@@ -276,6 +276,12 @@ export const runs = pgTable(
     /** Earlier conversation turns replayed before `task` so follow-up messages
      *  keep their context across runs. */
     history: jsonb("history").$type<ConversationTurn[]>(),
+    /** Last valid agent checkpoint (stop / ask_user / interrupted tool). */
+    checkpoint: jsonb("checkpoint").$type<Record<string, unknown>>(),
+    /** GitHub `owner/repo` selected when the session started. */
+    repository: text("repository"),
+    /** Local task branch created before the first edit, when applicable. */
+    taskBranch: text("task_branch"),
     /** Installed skills the user attached; preloaded into the model context. */
     skillNames: jsonb("skill_names").$type<string[]>(),
     /** Human label for the sandbox workspace backing this run. */
@@ -456,8 +462,11 @@ export const approvals = pgTable(
       .references(() => runs.id, { onDelete: "cascade" }),
     toolCallId: text("tool_call_id"),
     command: text("command"),
+    question: text("question"),
+    options: jsonb("options").$type<Array<{ id: string; label: string }>>(),
+    answer: text("answer"),
     status: text("status")
-      .$type<"pending" | "approved" | "denied">()
+      .$type<"pending" | "approved" | "denied" | "answered">()
       .notNull()
       .default("pending"),
     decidedAt: timestamp("decided_at", { withTimezone: true }),
@@ -528,9 +537,10 @@ export const mcpServers = pgTable(
 );
 
 /**
- * Per-user GitHub App authorization. Tokens are AES-256-GCM encrypted by the
- * web layer before they reach this table; plaintext tokens never live in the
- * database or the sandbox.
+ * Per-user GitHub App connection. The web layer only stores the installation
+ * association; access tokens are short-lived and minted on demand, so no user
+ * token ever reaches this table. The token columns are kept nullable for
+ * legacy OAuth rows.
  */
 export const githubConnections = pgTable(
   "github_connections",
@@ -544,7 +554,7 @@ export const githubConnections = pgTable(
     login: text("login").notNull(),
     name: text("name"),
     avatarUrl: text("avatar_url"),
-    accessTokenEncrypted: text("access_token_encrypted").notNull(),
+    accessTokenEncrypted: text("access_token_encrypted"),
     refreshTokenEncrypted: text("refresh_token_encrypted"),
     accessTokenExpiresAt: timestamp("access_token_expires_at", {
       withTimezone: true,

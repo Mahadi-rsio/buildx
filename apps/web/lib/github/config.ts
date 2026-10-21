@@ -1,7 +1,7 @@
 /**
- * GitHub App configuration. OAuth (connect + user tokens) and App auth
- * (installation tokens + webhook) are configured independently so a dev app
- * without a private key can still be tested through OAuth.
+ * GitHub App configuration. Access is installation-based: the App's private
+ * key mints a JWT, the JWT mints short-lived installation access tokens, and
+ * those tokens drive repository operations. OAuth user tokens are gone.
  */
 
 function value(name: string): string | undefined {
@@ -11,43 +11,42 @@ function value(name: string): string | undefined {
 
 export interface GitHubConfig {
   appId?: string;
-  clientId?: string;
-  clientSecret?: string;
   privateKey?: string;
   webhookSecret?: string;
   appSlug?: string;
-  redirectUri?: string;
-  /** OAuth can start and complete. */
-  oauthConfigured: boolean;
   /** App JWT / installation tokens / real webhooks can be verified. */
   appConfigured: boolean;
+  /** App id, private key, and slug are all present (needed to install). */
+  installConfigured: boolean;
 }
 
 export function githubConfig(): GitHubConfig {
   const appId = value("GITHUB_APP_ID");
-  const clientId = value("GITHUB_CLIENT_ID");
-  const clientSecret = value("GITHUB_CLIENT_SECRET");
   const privateKey = value("GITHUB_APP_PRIVATE_KEY");
   const webhookSecret = value("GITHUB_WEBHOOK_SECRET");
   const appSlug = value("GITHUB_APP_SLUG");
-  const baseUrl = value("BETTER_AUTH_URL")?.replace(/\/+$/, "");
-  const redirectUri =
-    value("GITHUB_REDIRECT_URI") ??
-    (baseUrl ? `${baseUrl}/api/github/callback` : undefined);
 
   return {
     appId,
-    clientId,
-    clientSecret,
     privateKey,
     webhookSecret,
     appSlug,
-    redirectUri,
-    oauthConfigured: Boolean(clientId && clientSecret),
     appConfigured: Boolean(appId && privateKey),
+    installConfigured: Boolean(appId && privateKey && appSlug),
   };
 }
 
+/** Which GitHub App settings are still missing (for setup guidance). */
+export function githubAppStatus(): { configured: boolean; missing: string[] } {
+  const config = githubConfig();
+  const missing: string[] = [];
+  if (!config.appId) missing.push("GITHUB_APP_ID");
+  if (!config.privateKey) missing.push("GITHUB_APP_PRIVATE_KEY");
+  if (!config.appSlug) missing.push("GITHUB_APP_SLUG");
+  return { configured: missing.length === 0, missing };
+}
+
+/** The GitHub App installation page for the configured slug. */
 export function githubInstallUrl(slug = githubConfig().appSlug): string | undefined {
   if (!slug) return undefined;
   return `https://github.com/apps/${encodeURIComponent(slug)}/installations/new`;

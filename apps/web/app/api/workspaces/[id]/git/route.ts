@@ -1,10 +1,12 @@
 import { z } from "zod";
+import type { GitAuth } from "@buildx/sandbox";
 import { getCurrentUser, unauthorized } from "@/lib/auth/server";
 import { findOwnedRun, notFound } from "@/lib/authz";
 import {
   gitErrorResponse,
   workspaceGit,
 } from "@/lib/git";
+import { getGitHubToolAuth } from "@/lib/github/auth";
 import { resolveWorkspaceBox, tryGetWorkspaceBox } from "@/lib/sandbox";
 import type { GitRepositorySummary } from "@/lib/types";
 
@@ -124,7 +126,16 @@ export async function POST(
 
     switch (action.action) {
       case "clone": {
-        const result = await git.clone(action.url, action.directory);
+        // Best-effort installation auth for private repositories; a user with
+        // no connection falls back to the public clone path.
+        let auth: GitAuth | undefined;
+        try {
+          const githubAuth = await getGitHubToolAuth(user.id);
+          auth = { username: githubAuth.username, token: githubAuth.token };
+        } catch {
+          // Not connected — public clone only.
+        }
+        const result = await git.clone(action.url, action.directory, auth);
         return Response.json({ repoPath: result.repoPath, repo: result.repo });
       }
       case "create_branch": {

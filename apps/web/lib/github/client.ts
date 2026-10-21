@@ -13,34 +13,32 @@ export class GitHubApiError extends Error {
   }
 }
 
-export interface GitHubUser {
-  id: number;
-  login: string;
-  name: string | null;
-  avatar_url: string | null;
-}
-
 export interface GitHubInstallation {
   id: number;
   account: {
     login: string;
+    id: number;
     type?: string;
+    name?: string | null;
     avatar_url?: string | null;
   };
+  app_id: number;
+  suspended_at: string | null;
+  permissions?: Record<string, string>;
+  html_url?: string;
 }
 
-export interface OAuthTokenResponse {
-  access_token: string;
-  token_type?: string;
-  scope?: string;
-  refresh_token?: string;
-  expires_in?: number;
-  refresh_token_expires_in?: number;
-  error?: string;
-  error_description?: string;
+export interface GitHubRepository {
+  id: number;
+  name: string;
+  full_name: string;
+  private: boolean;
+  default_branch: string;
+  html_url: string;
+  owner: { login: string; type?: string };
+  permissions?: Record<string, string>;
 }
 
-const WEB_ORIGIN = process.env.GITHUB_WEB_URL?.replace(/\/+$/, "") ?? "https://github.com";
 const API_ORIGIN =
   process.env.GITHUB_API_URL?.replace(/\/+$/, "") ?? "https://api.github.com";
 
@@ -87,74 +85,6 @@ export function normalizePrivateKey(raw: string): string {
   return key.endsWith("\n") ? key : `${key}\n`;
 }
 
-export function oauthAuthorizeUrl(state: string): string {
-  const config = githubConfig();
-  if (!config.clientId || !config.redirectUri) {
-    throw new Error("GitHub OAuth is not configured.");
-  }
-  const params = new URLSearchParams({
-    client_id: config.clientId,
-    redirect_uri: config.redirectUri,
-    state,
-    allow_signup: "true",
-  });
-  return `${WEB_ORIGIN}/login/oauth/authorize?${params.toString()}`;
-}
-
-async function oauthRequest(body: URLSearchParams): Promise<OAuthTokenResponse> {
-  const config = githubConfig();
-  if (!config.clientId || !config.clientSecret) {
-    throw new Error("GitHub OAuth client credentials are not configured.");
-  }
-  body.set("client_id", config.clientId);
-  body.set("client_secret", config.clientSecret);
-  const response = await fetch(`${WEB_ORIGIN}/login/oauth/access_token`, {
-    method: "POST",
-    headers: { Accept: "application/json" },
-    body,
-  });
-  const text = await response.text();
-  let parsed: OAuthTokenResponse;
-  try {
-    parsed = JSON.parse(text) as OAuthTokenResponse;
-  } catch {
-    throw new GitHubApiError("GitHub returned an invalid OAuth response.", response.status, text);
-  }
-  if (parsed.error) {
-    throw new GitHubApiError(
-      parsed.error_description || parsed.error,
-      response.status,
-      text,
-    );
-  }
-  if (!parsed.access_token) {
-    throw new GitHubApiError("GitHub did not return an access token.", response.status, text);
-  }
-  return parsed;
-}
-
-export async function exchangeOAuthCode(code: string): Promise<OAuthTokenResponse> {
-  const config = githubConfig();
-  if (!config.redirectUri) throw new Error("GitHub OAuth is not configured.");
-  return oauthRequest(
-    new URLSearchParams({
-      code,
-      redirect_uri: config.redirectUri,
-    }),
-  );
-}
-
-export async function refreshUserToken(
-  refreshToken: string,
-): Promise<OAuthTokenResponse> {
-  return oauthRequest(
-    new URLSearchParams({
-      grant_type: "refresh_token",
-      refresh_token: refreshToken,
-    }),
-  );
-}
-
 async function api<T>(
   token: string,
   path: string,
@@ -183,21 +113,17 @@ async function api<T>(
   return text ? (JSON.parse(text) as T) : (undefined as T);
 }
 
-export async function fetchGitHubUser(token: string): Promise<GitHubUser> {
-  return api<GitHubUser>(token, "/user");
-}
-
-/** Installations visible to a GitHub App user access token. */
-export async function listUserInstallations(
-  token: string,
-): Promise<GitHubInstallation[]> {
-  const body = await api<{ installations?: GitHubInstallation[] }>(
-    token,
-    "/user/installations?per_page=100",
+/** Fetch one installation by id using the App JWT. */
+export async function getInstallation(
+  installationId: number,
+): Promise<GitHubInstallation> {
+  return api<GitHubInstallation>(
+    createAppJwt(),
+    `/app/installations/${installationId}`,
   );
-  return body.installations ?? [];
 }
 
+/** Mint a short-lived installation access token from the App JWT. */
 export async function createInstallationToken(
   installationId: number,
 ): Promise<{ token: string; expires_at: string }> {
@@ -206,4 +132,15 @@ export async function createInstallationToken(
     `/app/installations/${installationId}/access_tokens`,
     { method: "POST" },
   );
+}
+
+/** Repositories the installation can access, via its access token. */
+export async function listInstallationRepositories(
+  token: string,
+): Promise<GitHubRepository[]> {
+  const body = await api<{ repositories?: GitHubRepository[] }>(
+    token,
+    "/installation/repositories?per_page=100",
+  );
+  return body.repositories ?? [];
 }

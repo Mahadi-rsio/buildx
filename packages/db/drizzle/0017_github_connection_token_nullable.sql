@@ -1,0 +1,1 @@
+ALTER TABLE "github_connections" ALTER COLUMN "access_token_encrypted" DROP NOT NULL;--> statement-breakpoint

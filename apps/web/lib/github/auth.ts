@@ -1,128 +1,57 @@
-import { githubConfig } from "./config";
-import {
-  createInstallationToken,
-  GitHubApiError,
-  listUserInstallations,
-  refreshUserToken,
-} from "./client";
-import {
-  findGitHubConnection,
-  readAccessToken,
-  readRefreshToken,
-  updateGitHubTokens,
-} from "./store";
+import { createInstallationToken } from "./client";
+import { findGitHubConnection } from "./store";
 
 export interface GitHubToolAuth {
-  /** Bearer token for the GitHub REST API. */
+  /** Bearer token for the GitHub REST API / git credential helper. */
   token: string;
   /** Git HTTPS username; installation tokens use `x-access-token`. */
   username: string;
-  /** Authenticated GitHub login. */
+  /** Account the installation was made on. */
   login: string;
   installationId?: string;
 }
 
 export class GitHubReconnectError extends Error {
-  constructor(message = "GitHub authorization expired. Reconnect GitHub in Settings.") {
+  constructor(message = "GitHub is not connected. Connect the GitHub App in the Git tab.") {
     super(message);
     this.name = "GitHubReconnectError";
   }
 }
 
-const EXPIRY_SKEW_MS = 60_000;
-
-function expiresAt(seconds: number | undefined): Date | null {
-  if (!seconds || seconds <= 0) return null;
-  return new Date(Date.now() + seconds * 1000);
-}
-
-async function currentAccessToken(userId: string): Promise<{
-  token: string;
-  login: string;
-  githubUserId: string;
-}> {
-  const row = await findGitHubConnection(userId);
-  if (!row) {
-    throw new GitHubReconnectError(
-      "GitHub is not connected. Connect it in Settings before opening a pull request.",
-    );
-  }
-
-  const expiring =
-    row.accessTokenExpiresAt &&
-    row.accessTokenExpiresAt.getTime() <= Date.now() + EXPIRY_SKEW_MS;
-  if (!expiring) {
-    return {
-      token: readAccessToken(row),
-      login: row.login,
-      githubUserId: row.githubUserId,
-    };
-  }
-
-  const refreshToken = readRefreshToken(row);
-  if (!refreshToken) {
-    throw new GitHubReconnectError(
-      "GitHub authorization expired. Reconnect GitHub in Settings.",
-    );
-  }
-
-  try {
-    const refreshed = await refreshUserToken(refreshToken);
-    await updateGitHubTokens(userId, {
-      accessToken: refreshed.access_token,
-      refreshToken: refreshed.refresh_token ?? refreshToken,
-      accessTokenExpiresAt: expiresAt(refreshed.expires_in),
-      refreshTokenExpiresAt: expiresAt(refreshed.refresh_token_expires_in),
-      scope: refreshed.scope ?? row.scope,
-    });
-    return {
-      token: refreshed.access_token,
-      login: row.login,
-      githubUserId: row.githubUserId,
-    };
-  } catch (error) {
-    if (error instanceof GitHubApiError) {
-      throw new GitHubReconnectError(
-        "GitHub authorization expired. Reconnect GitHub in Settings.",
-      );
-    }
-    throw error;
-  }
-}
-
 /**
- * Resolve GitHub credentials for a tool call. When an owner is known and the
- * App has a private key, prefer an installation token scoped to that account;
- * otherwise use the user access token.
+ * Resolve GitHub credentials for a tool call from the user's stored
+ * installation. Installation access tokens are short-lived and minted on
+ * demand; no user access token is stored. Publishing is only possible for the
+ * account the App was installed on.
  */
 export async function getGitHubToolAuth(
   userId: string,
   owner?: string,
 ): Promise<GitHubToolAuth> {
-  const { token, login } = await currentAccessToken(userId);
-  const config = githubConfig();
-
-  if (owner && config.appConfigured) {
-    try {
-      const installations = await listUserInstallations(token);
-      const installation = installations.find(
-        (item) => item.account.login.toLowerCase() === owner.toLowerCase(),
-      );
-      if (installation) {
-        const created = await createInstallationToken(installation.id);
-        return {
-          token: created.token,
-          username: "x-access-token",
-          login,
-          installationId: String(installation.id),
-        };
-      }
-    } catch (error) {
-      // The user token remains valid across installations the user can access;
-      // fall through instead of failing the publish on an App permissions issue.
-      console.warn(`[github] installation token unavailable: ${String(error)}`);
-    }
+  const row = await findGitHubConnection(userId);
+  if (!row || !row.installationId) {
+    throw new GitHubReconnectError(
+      "GitHub is not connected. Connect the GitHub App in the Git tab before publishing a pull request.",
+    );
   }
 
-  return { token, username: login, login };
+  const login = row.login;
+  if (owner && owner.toLowerCase() !== login.toLowerCase()) {
+    throw new GitHubReconnectError(
+      `The GitHub App is installed on ${login}, not ${owner}. Install the app on ${owner} to publish there.`,
+    );
+  }
+
+  const installationId = Number.parseInt(row.installationId, 10);
+  if (!Number.isInteger(installationId) || installationId <= 0) {
+    throw new GitHubReconnectError("The stored GitHub installation id is invalid.");
+  }
+
+  const created = await createInstallationToken(installationId);
+  return {
+    token: created.token,
+    username: "x-access-token",
+    login,
+    installationId: row.installationId,
+  };
 }

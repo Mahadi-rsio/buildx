@@ -488,8 +488,16 @@ interface PreparedChanges {
 export class WorkspaceGit {
   constructor(private readonly sandbox: Sandbox) {}
 
-  /** Clone a public HTTPS repository into `repos/<name>` (or `directory`). */
-  async clone(url: string, directory?: string): Promise<GitCloneResult> {
+  /**
+   * Clone an HTTPS repository into `repos/<name>` (or `directory`). Pass
+   * `auth` for private repositories; credentials travel in the backend's
+   * secure session and never appear in the clone URL or git config.
+   */
+  async clone(
+    url: string,
+    directory?: string,
+    auth?: GitAuth,
+  ): Promise<GitCloneResult> {
     const safeUrl = validateRepositoryUrl(url);
     const repoPath = directory
       ? validateRepoPath(directory)
@@ -511,10 +519,10 @@ export class WorkspaceGit {
     const parent = dirname(repoPath);
     if (parent && parent !== ".") await this.ensureDirectory(parent);
 
-    const result = await this.runGit(
-      ["clone", "--", safeUrl, repoPath],
-      { timeoutMs: CLONE_TIMEOUT_MS },
-    );
+    const options = { timeoutMs: CLONE_TIMEOUT_MS };
+    const result = auth
+      ? await this.runNetworkGit(["clone", "--", safeUrl, repoPath], options, auth)
+      : await this.runGit(["clone", "--", safeUrl, repoPath], options);
     if (result.code !== 0) {
       throw new GitError(
         "clone_failed",
@@ -889,6 +897,89 @@ export class WorkspaceGit {
       );
     }
     return this.getRepository(repoPath);
+  }
+
+  /**
+   * Ensure a task-specific local branch exists before edits. Preserves
+   * pre-existing uncommitted changes, reuses the branch on resume, and never
+   * initializes a repository without explicit user approval.
+   */
+  async ensureTaskBranch(input: {
+    path?: string;
+    branch: string;
+  }): Promise<{
+    isRepo: boolean;
+    branch: string | null;
+    created: boolean;
+    reused: boolean;
+    status: GitStatusSummary | null;
+  }> {
+    const repoPath = validateRepoPath(input.path ?? ".", { allowRoot: true });
+    const branch = validateBranchName(input.branch);
+
+    if (!(await this.isRepository(repoPath))) {
+      return {
+        isRepo: false,
+        branch: null,
+        created: false,
+        reused: false,
+        status: null,
+      };
+    }
+
+    const status = await this.readStatus(repoPath);
+    const current = await this.runGit(
+      ["symbolic-ref", "--quiet", "--short", "HEAD"],
+      { cwd: repoPath },
+    );
+    const currentBranch =
+      current.code === 0 ? current.stdout.trim() || null : null;
+
+    if (currentBranch === branch) {
+      return {
+        isRepo: true,
+        branch,
+        created: false,
+        reused: true,
+        status,
+      };
+    }
+
+    const exists = await this.refExists(repoPath, `refs/heads/${branch}`);
+    if (exists) {
+      // Prefer switch; git keeps uncommitted changes when they do not conflict.
+      const switched = await this.runGit(["switch", branch], { cwd: repoPath });
+      if (switched.code !== 0) {
+        throw new GitError(
+          "checkout_failed",
+          `Could not switch to task branch ${branch} while preserving local changes: ${describe(switched)}`,
+        );
+      }
+      return {
+        isRepo: true,
+        branch,
+        created: false,
+        reused: true,
+        status: await this.readStatus(repoPath),
+      };
+    }
+
+    const created = await this.runGit(["switch", "-c", branch], {
+      cwd: repoPath,
+    });
+    if (created.code !== 0) {
+      throw new GitError(
+        "checkout_failed",
+        `Could not create task branch ${branch}: ${describe(created)}`,
+      );
+    }
+    return {
+      isRepo: true,
+      branch,
+      created: true,
+      reused: false,
+      status: await this.readStatus(repoPath),
+    };
   }
 
   /** Switch to an existing local branch; a dirty tree is rejected. */

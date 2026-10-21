@@ -472,6 +472,50 @@ test("clone builds a quoted command from an argv array with a fake sandbox", asy
   );
 });
 
+test("authenticated clone keeps the token out of argv", async () => {
+  const sandbox = new SessionRecordingSandbox();
+  const git = new WorkspaceGit(sandbox);
+  const auth = { username: "x-access-token", token: "ghs_secret" };
+
+  const result = await git.clone(
+    "https://github.com/acme/widgets.git",
+    undefined,
+    auth,
+  );
+  assert.equal(result.repoPath, "repos/widgets");
+  assert.equal(sandbox.sessions.length, 1);
+  const session = sandbox.sessions[0];
+  assert.ok(session.argv);
+  assert.ok(session.argv.includes("clone"), "clone command runs in the session");
+  assert.ok(
+    session.argv.some((arg) => arg.startsWith("credential.helper=")),
+    "credential helper is configured",
+  );
+  assert.ok(
+    session.argv.every((arg) => !arg.includes("ghs_secret")),
+    "tokens never reach argv",
+  );
+  assert.equal(session.env?.BUILDX_GIT_USERNAME, "x-access-token");
+  assert.equal(session.env?.BUILDX_GIT_TOKEN, "ghs_secret");
+});
+
+test("authenticated clone refuses sandboxes without secure sessions", async () => {
+  const sandbox = new RecordingSandbox();
+  const git = new WorkspaceGit(sandbox);
+
+  await assert.rejects(
+    git.clone("https://github.com/acme/widgets.git", undefined, {
+      username: "x-access-token",
+      token: "ghs_secret",
+    }),
+    isGitError("command_failed"),
+  );
+  assert.ok(
+    sandbox.commands.every((cmd) => !cmd.includes("ghs_secret")),
+    "tokens never reach a shell command",
+  );
+});
+
 test("authenticated fetch refuses sandboxes without secure sessions", async () => {
   const sandbox = new RecordingSandbox();
   const git = new WorkspaceGit(sandbox);
