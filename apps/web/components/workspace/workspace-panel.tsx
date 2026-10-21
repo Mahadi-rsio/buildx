@@ -20,11 +20,18 @@ import { File, Tree, type TreeViewElement } from "@/components/ui/file-tree";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type {
+  DiffFallbackFile,
   DiffFile,
   FileContentResponse,
   FilesResponse,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
+}
 
 function listingToTree(listing: FilesResponse | null): TreeViewElement[] {
   if (!listing) return [];
@@ -40,9 +47,11 @@ function listingToTree(listing: FilesResponse | null): TreeViewElement[] {
 function Unavailable({
   title,
   detail,
+  onRetry,
 }: {
   title: string;
   detail: string;
+  onRetry?: () => void;
 }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
@@ -53,6 +62,77 @@ function Unavailable({
       <p className="max-w-60 text-secondary leading-relaxed text-muted-foreground">
         {detail}
       </p>
+      {onRetry ? (
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="mt-1 h-8"
+          onClick={onRetry}
+        >
+          <RefreshCw className="size-3.5" />
+          Retry
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
+function DiffFallback({
+  files,
+  message,
+  onRetry,
+  onOpenFile,
+}: {
+  files: DiffFallbackFile[];
+  message: string;
+  onRetry?: () => void;
+  onOpenFile: (path: string) => void;
+}) {
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex shrink-0 items-start gap-2 border-b border-border bg-sidebar/60 px-2 py-2">
+        <p className="min-w-0 flex-1 text-[11px] leading-relaxed text-muted-foreground">
+          {message}
+        </p>
+        {onRetry ? (
+          <Button
+            type="button"
+            size="icon-xs"
+            variant="ghost"
+            aria-label="Retry diff"
+            onClick={onRetry}
+          >
+            <RefreshCw className="size-3.5" />
+          </Button>
+        ) : null}
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto overscroll-contain p-2">
+        {files.length === 0 ? (
+          <p className="px-1 py-2 text-xs text-muted-foreground">
+            No files to show.
+          </p>
+        ) : (
+          <div className="space-y-0.5">
+            {files.map((file) => (
+              <button
+                key={file.path}
+                type="button"
+                onClick={() => onOpenFile(file.path)}
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition hover:bg-muted/50"
+              >
+                <FileIcon path={file.path} className="size-3.5 shrink-0" />
+                <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-foreground/80">
+                  {file.path}
+                </span>
+                <span className="shrink-0 font-mono text-[10px] text-muted-foreground/60">
+                  {formatBytes(file.size)}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -187,6 +267,9 @@ export function WorkspacePanel({
   diffFiles,
   diffUnchanged,
   diffStatus,
+  diffError,
+  diffFallback,
+  onRefreshDiff,
   onNavigate,
   onOpenFile,
   onBackFromFile,
@@ -205,6 +288,9 @@ export function WorkspacePanel({
   diffFiles: DiffFile[];
   diffUnchanged: number;
   diffStatus: "loading" | "ready" | "error";
+  diffError: string | null;
+  diffFallback: DiffFallbackFile[];
+  onRefreshDiff?: () => void;
   onNavigate: (path: string) => void;
   onOpenFile: (path: string) => void;
   onBackFromFile: () => void;
@@ -224,18 +310,18 @@ export function WorkspacePanel({
         onValueChange={(next) => onTabChange?.(String(next))}
         className="flex h-full min-h-0 flex-col gap-0"
       >
-        <div className="flex h-9 shrink-0 items-center gap-1.5 border-b border-border bg-sidebar/60 px-1.5">
-          <TabsList className="h-7 w-full gap-0.5 rounded-lg p-px">
+        <div className="flex h-11 shrink-0 items-center border-b border-border bg-sidebar/60 px-2">
+          <TabsList className="h-9 w-full justify-start gap-0.5 overflow-x-auto rounded-lg bg-muted/40 p-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             <TabsTrigger
               value="files"
-              className="gap-1.5 rounded-md px-2.5 text-xs data-active:bg-muted/70"
+              className="h-8 flex-none shrink-0 gap-1.5 rounded-md px-2.5 text-[11px] font-medium data-active:bg-surface data-active:shadow-[inset_0_0_0_1px_var(--border)]"
             >
               <FolderTree className="size-3.5" />
               Files
             </TabsTrigger>
             <TabsTrigger
               value="changes"
-              className="gap-1.5 rounded-md px-2.5 text-xs data-active:bg-muted/70"
+              className="h-8 flex-none shrink-0 gap-1.5 rounded-md px-2.5 text-[11px] font-medium data-active:bg-surface data-active:shadow-[inset_0_0_0_1px_var(--border)]"
             >
               <FolderOpen className="size-3.5" />
               Changes
@@ -247,14 +333,14 @@ export function WorkspacePanel({
             </TabsTrigger>
             <TabsTrigger
               value="terminal"
-              className="gap-1.5 rounded-md px-2.5 text-xs data-active:bg-muted/70"
+              className="h-8 flex-none shrink-0 gap-1.5 rounded-md px-2.5 text-[11px] font-medium data-active:bg-surface data-active:shadow-[inset_0_0_0_1px_var(--border)]"
             >
               <TerminalSquare className="size-3.5" />
               Terminal
             </TabsTrigger>
             <TabsTrigger
               value="git"
-              className="gap-1.5 rounded-md px-2.5 text-xs data-active:bg-muted/70"
+              className="h-8 flex-none shrink-0 gap-1.5 rounded-md px-2.5 text-[11px] font-medium data-active:bg-surface data-active:shadow-[inset_0_0_0_1px_var(--border)]"
             >
               <GitBranch className="size-3.5" />
               Git
@@ -340,10 +426,26 @@ export function WorkspacePanel({
               title="Building the diff"
               detail="Diffing the workspace against the run-start baseline…"
             />
+          ) : diffStatus === "error" && diffFallback.length > 0 ? (
+            <DiffFallback
+              files={diffFallback}
+              message={
+                diffError ??
+                "The diff is taking too long. Showing the workspace file list instead."
+              }
+              onRetry={onRefreshDiff}
+              onOpenFile={(target) => {
+                onOpenFromDiff(target);
+                onTabChange?.("files");
+              }}
+            />
           ) : diffStatus === "error" && diffFiles.length === 0 ? (
             <Unavailable
               title="Diff unavailable"
-              detail="The diff endpoint could not be reached for this run."
+              detail={
+                diffError ?? "The diff endpoint could not be reached for this run."
+              }
+              onRetry={onRefreshDiff}
             />
           ) : (
             <DiffView

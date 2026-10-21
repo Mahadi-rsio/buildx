@@ -3,28 +3,24 @@
 import Link from "next/link";
 import { BarChart3, PanelLeft, PanelRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { ModelPicker } from "@/components/model-picker";
-import { ThemeToggle } from "@/components/shell/theme-toggle";
+import { ProfileMenu } from "@/components/shell/profile-menu";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useShell } from "@/components/shell/shell-context";
 
 export function TopBar() {
   const isMobile = useIsMobile();
   const {
-    meta,
     collapsed,
     toggleCollapsed,
     setSidebarOpen,
     setUsageOpen,
-    modelOverride,
-    setModelOverride,
     panelOpen,
     togglePanel,
   } = useShell();
 
   return (
-    <header className="flex h-12 shrink-0 items-center gap-1.5 border-b border-border bg-background/80 px-2 backdrop-blur sm:gap-2 sm:px-3">
-      <div className="flex min-w-0 shrink-0 items-center gap-1.5">
+    <header className="flex h-[calc(3rem+env(safe-area-inset-top))] shrink-0 items-center gap-1 border-b border-border bg-background/80 px-2 pt-[env(safe-area-inset-top)] backdrop-blur-xl sm:gap-1.5 sm:px-3">
+      <div className="flex min-w-0 shrink-0 items-center gap-1">
         {isMobile ? (
           <Button
             type="button"
@@ -49,7 +45,8 @@ export function TopBar() {
 
         <Link
           href="/"
-          className="flex shrink-0 items-center gap-2 rounded-md px-1.5 py-1 transition hover:bg-muted/50"
+          aria-label="Buildx home"
+          className="flex shrink-0 items-center gap-2 rounded-lg px-1.5 py-1 transition-colors hover:bg-muted/50"
         >
           <span className="flex size-6 items-center justify-center rounded-md bg-foreground text-background">
             <svg viewBox="0 0 16 16" className="size-3.5" aria-hidden>
@@ -65,31 +62,15 @@ export function TopBar() {
         </Link>
       </div>
 
-      {/* Center: truncated run title. */}
-      <div className="flex min-w-0 flex-1 items-center justify-center gap-2 overflow-hidden px-1">
-        {meta.task ? (
-          <span
-            title={meta.task}
-            className="min-w-0 truncate text-[13px] font-medium text-[var(--text)]"
-          >
-            {meta.task}
-          </span>
-        ) : null}
-      </div>
+      <div className="min-w-0 flex-1" />
 
       <div className="flex shrink-0 items-center gap-0.5 sm:gap-1">
-        <ModelPicker
-          value={modelOverride}
-          onChange={setModelOverride}
-          align="end"
-          className="hidden min-[420px]:flex sm:max-w-52"
-        />
-        <ThemeToggle />
         <Button
           type="button"
           variant="ghost"
           size="icon-touch"
           aria-label="Usage"
+          title="Usage"
           onClick={() => setUsageOpen(true)}
         >
           <BarChart3 className="size-4" />
@@ -105,6 +86,7 @@ export function TopBar() {
         >
           <PanelRight className="size-4" />
         </Button>
+        <ProfileMenu />
       </div>
     </header>
   );

@@ -5,6 +5,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { TopBar } from "@/components/shell/top-bar";
 import { Sidebar, SidebarDrawer } from "@/components/shell/sidebar";
 import { UsageDialog } from "@/components/shell/usage-dialog";
+import { UpgradeDialog } from "@/components/shell/upgrade-dialog";
 import { ShellProvider, useShell } from "@/components/shell/shell-context";
 
 function ShellLayout({ children }: { children: ReactNode }) {
@@ -22,6 +23,7 @@ function ShellLayout({ children }: { children: ReactNode }) {
         <SidebarDrawer open={sidebarOpen} onOpenChange={setSidebarOpen} />
       ) : null}
       <UsageDialog />
+      <UpgradeDialog />
     </div>
   );
 }

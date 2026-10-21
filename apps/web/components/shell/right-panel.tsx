@@ -5,7 +5,12 @@ import { WorkspacePanel } from "@/components/workspace/workspace-panel";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import type { RunEvent } from "@buildx/shared";
-import type { DiffFile, FileContentResponse, FilesResponse } from "@/lib/types";
+import type {
+  DiffFallbackFile,
+  DiffFile,
+  FileContentResponse,
+  FilesResponse,
+} from "@/lib/types";
 import { useShell, type PanelTab } from "@/components/shell/shell-context";
 
 /** Live diff state handed from the page to the Changes tab. */
@@ -13,6 +18,9 @@ export interface WorkspaceDiff {
   files: DiffFile[];
   unchanged: number;
   status: "loading" | "ready" | "error";
+  error: string | null;
+  fallbackFiles: DiffFallbackFile[];
+  onRefresh: () => void;
 }
 
 /** Workspace state a page hands to the right panel. */
@@ -81,6 +89,9 @@ function PanelBody(props: WorkspaceData) {
       diffFiles={props.diff.files}
       diffUnchanged={props.diff.unchanged}
       diffStatus={props.diff.status}
+      diffError={props.diff.error}
+      diffFallback={props.diff.fallbackFiles}
+      onRefreshDiff={props.diff.onRefresh}
       onNavigate={props.onNavigate}
       onOpenFile={props.onOpenFile}
       onBackFromFile={props.onBackFromFile}

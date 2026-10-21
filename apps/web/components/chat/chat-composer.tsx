@@ -190,7 +190,7 @@ export function ChatComposer({
   return (
     <form
       onSubmit={handleSubmit}
-      className="relative mx-auto w-full max-w-3xl shrink-0 px-3 pt-2 pb-safe-min sm:px-4"
+      className="relative z-20 mx-auto w-full max-w-3xl shrink-0 bg-gradient-to-t from-background via-background/95 to-background/0 px-3 pb-safe-min pl-safe pr-safe pt-2 sm:px-4"
     >
       {paletteOpen ? (
         <div className="absolute bottom-full left-3 right-3 z-30 mb-2 overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--surface)] shadow-lg sm:left-4 sm:right-4">

@@ -13,6 +13,7 @@ import {
 import { ChatComposer } from "@/components/chat/chat-composer";
 import { ChatThread } from "@/components/chat/chat-thread";
 import { ContextStatsPanel } from "@/components/context-stats-panel";
+import { RunFailureCard } from "@/components/chat/run-failure-card";
 import { PanelSplit } from "@/components/shell/panel-split";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -23,9 +24,11 @@ import { useRunStream } from "@/hooks/use-run-stream";
 import { useSkills } from "@/hooks/use-skills";
 import { useWorkspaceDiff } from "@/hooks/use-workspace-diff";
 import { useWorkspaceFiles } from "@/hooks/use-workspace-files";
+import { useQuota } from "@/hooks/use-quota";
 import { buildChatMessages, type ChatMessage } from "@/lib/chat-messages";
 import { newConversationId } from "@/lib/conversation-id";
 import { enqueueConversationEvent } from "@/lib/conversation-sync";
+import { isDailyLimitMessage } from "@/lib/quota-errors";
 
 /** Final assistant prose, for the synced conversation log. */
 function lastAssistantText(messages: ChatMessage[]): string {
@@ -101,6 +104,7 @@ export default function RunPage() {
     setModelOverride,
     contextWindowTokens,
     panelVisible,
+    setUpgradeOpen,
   } = useShell();
   const [draft, setDraft] = useState("");
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
@@ -112,6 +116,8 @@ export default function RunPage() {
   const queueKey = queueStorageKey(run?.conversationId);
 
   const status = run?.status ?? "idle";
+  const limitReached = isDailyLimitMessage(run?.error);
+  const quota = useQuota(Boolean(run?.error && limitReached));
   useShellMeta({
     status,
     model: run?.model,
@@ -177,6 +183,9 @@ export default function RunPage() {
           files: diff.files,
           unchanged: diff.unchanged,
           status: diff.status,
+          error: diff.error,
+          fallbackFiles: diff.fallbackFiles,
+          onRefresh: diff.refresh,
         },
         onOpenFromDiff: (target) => void files.openFile(target),
       }
@@ -376,10 +385,21 @@ export default function RunPage() {
               />
             ) : null}
             {run?.error ? (
-              <Alert variant="destructive">
-                <AlertTitle>Run failed</AlertTitle>
-                <AlertDescription>{run.error}</AlertDescription>
-              </Alert>
+              <RunFailureCard
+                reason={run.error}
+                resetAt={quota.data?.resetAt}
+                onAddCredit={() => setUpgradeOpen(true)}
+                onRetry={() => {
+                  void createRun({
+                    task: run.task,
+                    model: modelOverride.trim() || undefined,
+                    contextWindow: run.contextWindowTokens,
+                    skillNames: run.skillNames,
+                    history: run.history,
+                    conversationId: run.conversationId,
+                  });
+                }}
+              />
             ) : null}
             {streamError ? (
               <Alert className="border-[var(--border)] bg-[var(--surface)]">

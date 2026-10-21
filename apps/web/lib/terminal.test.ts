@@ -7,6 +7,7 @@ import type {
 } from "@buildx/sandbox";
 import {
   TERMINAL_MAX_OUTPUT_BYTES,
+  TERMINAL_MAX_SESSIONS_PER_USER,
   acquireTerminalSlot,
   canAccessWorkspace,
   clampTerminalTimeout,
@@ -282,13 +283,15 @@ test("terminal input validation", () => {
   assert.equal(parseTerminalInput({ type: "resize", rows: 0, cols: 1 }).ok, false);
 });
 
-test("terminal slot is exclusive per user and releases", () => {
+test("terminal slots allow a bounded number of tabs per user", () => {
   resetTerminalRegistryForTest();
-  const release = acquireTerminalSlot("user-1");
-  assert.ok(release);
+  const releases = Array.from({ length: TERMINAL_MAX_SESSIONS_PER_USER }, () =>
+    acquireTerminalSlot("user-1"),
+  );
+  for (const release of releases) assert.ok(release);
   assert.equal(acquireTerminalSlot("user-1"), undefined);
   assert.ok(acquireTerminalSlot("user-2"));
-  release();
+  releases[0]?.();
   assert.ok(acquireTerminalSlot("user-1"));
   resetTerminalRegistryForTest();
 });

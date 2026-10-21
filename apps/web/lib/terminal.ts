@@ -14,6 +14,7 @@ export const TERMINAL_MAX_OUTPUT_BYTES = 512 * 1024;
 export const TERMINAL_MAX_INPUT_CHARS = 64 * 1024;
 export const TERMINAL_MAX_ROWS = 200;
 export const TERMINAL_MAX_COLS = 500;
+export const TERMINAL_MAX_SESSIONS_PER_USER = 4;
 
 export type TerminalErrorCode =
   | "timeout"
@@ -213,7 +214,7 @@ export function parseTerminalInput(body: unknown): TerminalInputResult {
 }
 
 interface TerminalRegistry {
-  active: Map<string, symbol>;
+  active: Map<string, Set<symbol>>;
   sessions: Map<string, TerminalSessionEntry>;
 }
 
@@ -245,21 +246,24 @@ function sessionKey(userId: string, id: string): string {
 }
 
 /**
- * Claim the single terminal slot for a user. Returns a release function, or
- * `undefined` when a session is already running for that user.
+ * Claim one of a user's terminal slots (one per open tab). Returns a release
+ * function, or `undefined` once all slots are in use.
  */
 export function acquireTerminalSlot(userId: string): (() => void) | undefined {
   const { active } = registry();
-  if (active.has(userId)) return undefined;
+  const tokens = active.get(userId) ?? new Set<symbol>();
+  if (tokens.size >= TERMINAL_MAX_SESSIONS_PER_USER) return undefined;
   const token = Symbol(userId);
-  active.set(userId, token);
+  tokens.add(token);
+  active.set(userId, tokens);
   return () => {
-    if (active.get(userId) === token) active.delete(userId);
+    tokens.delete(token);
+    if (tokens.size === 0) active.delete(userId);
   };
 }
 
 export function isTerminalActive(userId: string): boolean {
-  return registry().active.has(userId);
+  return (registry().active.get(userId)?.size ?? 0) > 0;
 }
 
 export function registerTerminalSession(entry: TerminalSessionEntry): void {

@@ -1,6 +1,7 @@
 import type { BoxSandbox } from "@buildx/sandbox";
 import type { StoredRun } from "./store";
 import { tryGetWorkspaceBox } from "./sandbox";
+import { createIgnoreMatcher, type IgnoreMatcher } from "./ignore";
 
 const IGNORED_DIRS = new Set([
   "node_modules",
@@ -52,6 +53,7 @@ async function walk(
   list: (rel: string) => Promise<WorkspaceEntry[]>,
   rel: string,
   out: { path: string; size: number; mtime?: number }[],
+  ignored: IgnoreMatcher,
 ): Promise<void> {
   let entries: WorkspaceEntry[];
   try {
@@ -60,9 +62,10 @@ async function walk(
     return;
   }
   for (const entry of entries) {
-    if (IGNORED_DIRS.has(entry.name)) continue;
-    if (entry.type === "dir") {
-      await walk(list, entry.path, out);
+    const isDir = entry.type === "dir";
+    if (IGNORED_DIRS.has(entry.name) || ignored(entry.path, isDir)) continue;
+    if (isDir) {
+      await walk(list, entry.path, out, ignored);
       continue;
     }
     out.push({ path: entry.path, size: entry.size ?? 0, mtime: entry.mtime });
@@ -112,8 +115,17 @@ export class BoxWorkspaceSource implements WorkspaceSource {
   }
 
   async listFiles(): Promise<{ path: string; size: number; mtime?: number }[]> {
+    let ignored = createIgnoreMatcher([]);
+    try {
+      const file = await this.readFile(".gitignore");
+      if (!file.binary) {
+        ignored = createIgnoreMatcher(file.content.split(/\r?\n/));
+      }
+    } catch {
+      // No root .gitignore.
+    }
     const out: { path: string; size: number; mtime?: number }[] = [];
-    await walk((rel) => this.listDir(rel), "", out);
+    await walk((rel) => this.listDir(rel), "", out, ignored);
     return out;
   }
 }

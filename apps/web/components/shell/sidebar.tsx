@@ -12,6 +12,7 @@ import {
   Plug,
   Plus,
   Search,
+  Settings,
   Trash2,
   Pencil,
   X,
@@ -398,6 +399,20 @@ function SidebarBody({
             <span>Usage</span>
           </button>
         </div>
+        <Link
+          href="/settings"
+          onClick={onNavigate}
+          aria-current={pathname === "/settings" ? "page" : undefined}
+          className={cn(
+            "mt-1.5 flex h-9 items-center gap-2 rounded-lg border px-2.5 text-xs transition",
+            pathname === "/settings"
+              ? "border-border bg-[var(--surface)] text-foreground"
+              : "border-transparent text-muted-foreground hover:border-border hover:bg-[var(--surface)] hover:text-foreground",
+          )}
+        >
+          <Settings className="size-3.5" />
+          <span>Settings</span>
+        </Link>
       </div>
 
       <RenameDialog

@@ -119,11 +119,19 @@ export interface DiffFile {
   mtime?: number;
 }
 
+export interface DiffFallbackFile {
+  path: string;
+  size: number;
+  mtime?: number;
+}
+
 export interface DiffResponse {
   files: DiffFile[];
   /** Number of files compared but left unchanged (shown in the summary). */
   unchanged: number;
   skipped: number;
+  /** Present when the full diff timed out; lets the UI show a file list. */
+  fallbackFiles?: DiffFallbackFile[];
 }
 
 /** Git view types shared by the workspace Git API and the dashboard UI. */

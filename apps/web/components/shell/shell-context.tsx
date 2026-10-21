@@ -62,6 +62,8 @@ interface ShellContextValue {
   setPanelTab: (tab: PanelTab) => void;
   usageOpen: boolean;
   setUsageOpen: (open: boolean) => void;
+  upgradeOpen: boolean;
+  setUpgradeOpen: (open: boolean) => void;
   modelOverride: string;
   setModelOverride: (model: string) => void;
   contextWindowTokens: ContextWindowTokens;
@@ -150,6 +152,7 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   const [panelTouched, setPanelTouched] = useState(false);
   const [panelTab, setPanelTab] = useState<PanelTab>(DEFAULT_PANEL_TAB);
   const [usageOpen, setUsageOpen] = useState(false);
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
   const [meta, setMetaState] = useState<ShellMeta>(IDLE_META);
   const [ready, setReady] = useState(false);
   const isMobile = useIsMobile();
@@ -233,6 +236,8 @@ export function ShellProvider({ children }: { children: ReactNode }) {
       setPanelTab,
       usageOpen,
       setUsageOpen,
+      upgradeOpen,
+      setUpgradeOpen,
       modelOverride: prefs.modelOverride,
       setModelOverride,
       contextWindowTokens: prefs.contextWindowTokens,
@@ -253,6 +258,7 @@ export function ShellProvider({ children }: { children: ReactNode }) {
       panelVisible,
       panelTab,
       usageOpen,
+      upgradeOpen,
       setModelOverride,
       setContextWindowTokens,
     ],

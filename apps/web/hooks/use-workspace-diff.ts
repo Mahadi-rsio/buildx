@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { DiffFile, DiffResponse } from "@/lib/types";
+import type { DiffFallbackFile, DiffFile, DiffResponse } from "@/lib/types";
 
 export interface DiffState {
   files: DiffFile[];
@@ -9,6 +9,7 @@ export interface DiffState {
   error: string | null;
   unchanged: number;
   skipped: number;
+  fallbackFiles: DiffFallbackFile[];
 }
 
 const INITIAL: DiffState = {
@@ -17,6 +18,7 @@ const INITIAL: DiffState = {
   error: null,
   unchanged: 0,
   skipped: 0,
+  fallbackFiles: [],
 };
 
 /**
@@ -49,32 +51,47 @@ export function useWorkspaceDiff(
     let alive = true;
     void (async () => {
       try {
-        const res = await fetch(`/api/workspaces/${workspaceId}/diff`);
+        const res = await fetch(`/api/workspaces/${workspaceId}/diff`, {
+          signal: AbortSignal.timeout(20_000),
+        });
         const data = (await res.json()) as
           | DiffResponse
-          | { error?: string; message?: string };
+          | {
+              error?: string;
+              message?: string;
+              fallbackFiles?: DiffFallbackFile[];
+            };
         if (!alive) return;
+        const ok = res.ok && "files" in data;
+        const fallbackFiles =
+          "fallbackFiles" in data ? (data.fallbackFiles ?? []) : [];
         setState({
-          files: res.ok && "files" in data ? data.files : [],
-          status:
-            res.ok && "files" in data
-              ? "ready"
-              : res.status === 404
-                ? "ready"
-                : "error",
-          error:
-            res.status === 404
+          files: ok ? data.files : [],
+          status: ok ? "ready" : res.status === 404 ? "ready" : "error",
+          error: ok
+            ? null
+            : res.status === 404
               ? null
-              : "files" in data
-                ? null
-                : (data as { message?: string }).message ??
-                  (data as { error?: string }).error ??
-                  "Failed to load diff",
-          unchanged: res.ok && "files" in data ? data.unchanged : 0,
-          skipped: res.ok && "files" in data ? data.skipped : 0,
+              : "message" in data && data.message
+                ? data.message
+                : "error" in data && data.error
+                  ? data.error
+                  : "Failed to load diff",
+          unchanged: ok ? data.unchanged : 0,
+          skipped: ok ? data.skipped : 0,
+          fallbackFiles,
         });
-      } catch {
-        if (alive) setState({ ...INITIAL, status: "error", error: "Network error" });
+      } catch (error) {
+        if (!alive) return;
+        const timedOut =
+          error instanceof DOMException && error.name === "TimeoutError";
+        setState({
+          ...INITIAL,
+          status: "error",
+          error: timedOut
+            ? "The diff is taking too long."
+            : "Network error",
+        });
       }
     })();
     return () => {

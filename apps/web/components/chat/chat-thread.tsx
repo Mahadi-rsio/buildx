@@ -189,7 +189,7 @@ export function ChatThread({
           "absolute inset-0 overflow-y-auto overscroll-contain",
         )}
       >
-        <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-3 py-6 pb-10 sm:px-6 sm:py-8">
+        <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-3 py-6 pb-14 sm:px-6 sm:py-8">
           {messages.map((message, index) => (
             <ChatMessageView
               key={message.id}
@@ -217,13 +217,13 @@ export function ChatThread({
       </div>
 
       {!nearBottom ? (
-        <div className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2">
+        <div className="pointer-events-none absolute bottom-3 left-1/2 z-20 -translate-x-1/2 sm:bottom-4">
           <Button
             type="button"
             size="sm"
             variant="secondary"
             onClick={jumpToLatest}
-            className="pointer-events-auto h-8 gap-1.5 shadow-sm"
+            className="pointer-events-auto h-8 gap-1.5 rounded-full border border-border bg-background/85 px-3 shadow-lg backdrop-blur-md transition hover:bg-background"
           >
             <ArrowDown className="size-3.5" />
             Jump to latest

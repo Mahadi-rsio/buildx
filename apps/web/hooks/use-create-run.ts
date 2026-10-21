@@ -6,9 +6,12 @@ import type { ContextWindowTokens, ConversationTurn } from "@buildx/shared";
 import { getQueryClient } from "@/lib/query-client";
 import { quotaQueryKey } from "@/hooks/use-quota";
 import { runsQueryKey } from "@/hooks/use-runs";
+import { useShell } from "@/components/shell/shell-context";
+import { isDailyLimitMessage } from "@/lib/quota-errors";
 
 export function useCreateRun() {
   const router = useRouter();
+  const { setUpgradeOpen } = useShell();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -49,7 +52,10 @@ export function useCreateRun() {
         }
 
         if (!res.ok || !data.id) {
-          setError(data.message ?? data.error ?? "Could not start the run");
+          const message =
+            data.message ?? data.error ?? "Could not start the run";
+          setError(message);
+          if (isDailyLimitMessage(message)) setUpgradeOpen(true);
           return null;
         }
         const client = getQueryClient();
@@ -68,7 +74,7 @@ export function useCreateRun() {
         setSubmitting(false);
       }
     },
-    [router, submitting],
+    [router, submitting, setUpgradeOpen],
   );
 
   return { createRun, submitting, error, setError };
