@@ -1,0 +1,23 @@
+# Build context is the repository root.
+.git
+.github
+.opencode
+node_modules
+**/node_modules
+**/.next
+**/dist
+**/coverage
+**/*.tsbuildinfo
+.workspaces
+apps/web/.workspaces
+docs
+infra
+litellm
+services
+scripts
+*.md
+
+# Never bake secrets or local env into the image.
+.env
+.env.*
+!.env.example

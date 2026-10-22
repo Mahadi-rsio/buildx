@@ -1,5 +1,10 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { NextConfig } from "next";
 import { loadRootEnv } from "@buildx/shared/node";
+
+// Monorepo root, used for standalone file tracing in Docker builds.
+const rootDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 // Next.js only auto-loads `.env` from the app directory, but this monorepo keeps
 // a single `.env` at the repo root (shared with docker compose and the CLI
@@ -19,6 +24,8 @@ const nextConfig: NextConfig = {
   // Required for Docker deployment (standalone output produces minimal .next/standalone
   // directory with only necessary runtime files and dependencies).
   output: "standalone",
+  // Trace files from the monorepo root so workspace deps land in .next/standalone.
+  outputFileTracingRoot: rootDir,
   // Workspace packages export TypeScript source (`./src/index.ts`), so Next must
   // transpile them before bundling.
   transpilePackages: [

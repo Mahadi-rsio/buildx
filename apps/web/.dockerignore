@@ -1,6 +1,0 @@
-# Docker build context exclusions for Next.js standalone output
-# .next/standalone is copied into the image; keep it from being excluded.
-node_modules
-*.log
-*.tar
-*.tgz

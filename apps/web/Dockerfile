@@ -1,49 +1,55 @@
-FROM node:22-alpine AS builder
+# syntax=docker/dockerfile:1
 
-WORKDIR /app
+# Build context is the repository root, because this is a pnpm workspace and
+# @buildx/web depends on the local packages (agent, db, sandbox, shared, storage).
 
-# Install build dependencies
-RUN apk add --no-cache python3
+FROM node:22-alpine AS base
+RUN npm install -g pnpm@12.3.4
+WORKDIR /repo
+ENV NEXT_TELEMETRY_DISABLED=1
 
-# Create a non-root user
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+# ---- Builder ---------------------------------------------------------------
+FROM base AS builder
 
-# Copy root package files for workspace hoisting
-COPY package.json pnpm-lock.yaml ./
+# Manifests first so the dependency install layer stays cacheable.
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY apps/web/package.json apps/web/
+COPY packages/agent/package.json packages/agent/
+COPY packages/db/package.json packages/db/
+COPY packages/sandbox/package.json packages/sandbox/
+COPY packages/shared/package.json packages/shared/
+COPY packages/storage/package.json packages/storage/
+RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile
 
-# Install dependencies (root + web filter)
-RUN npm install -g pnpm@12 && pnpm install --frozen-lockfile
+# Full sources (node_modules / .next are excluded via .dockerignore and survive
+# the merge, so the install above is preserved).
+COPY apps/web apps/web
+COPY packages packages
 
-# Copy app source
-COPY apps/web ./apps/web
+RUN --mount=type=cache,id=nextjs,target=/repo/apps/web/.next/cache \
+    pnpm --filter @buildx/web build
 
-# Build the Next.js app (monorepo-aware)
-RUN pnpm --filter @buildx/web build
+# ---- Runner ----------------------------------------------------------------
+FROM node:22-alpine AS runner
 
-# Production stage
-FROM node:22-alpine AS production
+WORKDIR /repo
 
-WORKDIR /app
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
+    PORT=3000 \
+    HOSTNAME=0.0.0.0
 
-# Install runtime dependencies only
-RUN apk add --no-cache libstdc++
+RUN addgroup -S -g 1001 nodejs && adduser -S -u 1001 -G nodejs nextjs
 
-# Create non-root user (same as builder)
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+# `output: "standalone"` emits a self-contained server under .next/standalone
+# that mirrors the repo layout, so the entrypoint is apps/web/server.js.
+COPY --from=builder --chown=nextjs:nodejs /repo/apps/web/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /repo/apps/web/.next/static ./apps/web/.next/static
+COPY --from=builder --chown=nextjs:nodejs /repo/apps/web/public ./apps/web/public
 
-# Copy built output from builder (standalone output mode)
-COPY --from=builder /app/apps/web/.next/standalone ./apps/web/.next
-COPY --from=builder /app/apps/web/node_modules ./apps/web/node_modules
-COPY --from=builder /app/apps/web/package.json ./apps/web/package.json
+USER nextjs
 
-# Set correct ownership
-RUN chown -R appuser:appgroup /app
-
-# Switch to non-root user
-USER appuser
-
-# Expose the default Next.js port
 EXPOSE 3000
 
-# Start the app
-CMD ["next", "start"]
+CMD ["node", "apps/web/server.js"]
