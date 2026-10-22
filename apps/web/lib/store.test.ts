@@ -30,6 +30,7 @@ import {
   listEventsAfter,
   listRunsForUser,
   markLostOwnership,
+  persistCheckpoint,
   persistStats,
   StaleRunError,
   type RunRow,
@@ -657,4 +658,37 @@ test("progress events are rejected on cancelled run", { skip: skipReason }, asyn
 
   // Finalize as cancelled succeeds
   assert.equal(await finishRun(worker, "cancelled", "stop requested"), true);
+});
+
+test("persistCheckpoint round-trips checkpoint, repository, and task branch", { skip: skipReason }, async () => {
+  const uid = await newUser();
+  const created = await createRun(
+    {
+      userId: uid,
+      task: "checkpoint task",
+      model: "gpt-4o-mini",
+      maxSteps: 5,
+      workspaceName: "checkpoint",
+    },
+    { db },
+  );
+  assert.equal(created.created, true);
+
+  const checkpoint = {
+    version: 1 as const,
+    history: [{ role: "user" as const, content: "hi" }],
+    completedSteps: 2,
+    todos: [],
+    updatedAt: Date.now(),
+    taskBranch: "buildx/checkpoint-task",
+    repository: "octo/repo",
+  };
+  const persisted = await persistCheckpoint(created.run, checkpoint);
+  assert.equal(persisted, true, "checkpoint persists while the run is queued");
+
+  const loaded = await getRun(created.run.id);
+  assert.equal(loaded?.checkpoint?.completedSteps, 2);
+  assert.equal(loaded?.checkpoint?.repository, "octo/repo");
+  assert.equal(loaded?.repository, "octo/repo");
+  assert.equal(loaded?.taskBranch, "buildx/checkpoint-task");
 });

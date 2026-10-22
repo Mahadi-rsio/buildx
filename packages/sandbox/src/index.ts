@@ -16,6 +16,7 @@ export {
   safeRepoName,
   sanitizeRemoteUrl,
   shellQuote,
+  taskBranchName,
   titleFromBranch,
   validateBranchName,
   validateRemoteName,

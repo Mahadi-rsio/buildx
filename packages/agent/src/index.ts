@@ -150,8 +150,12 @@ export interface CreateAgentOptions {
    * every `prepareStep`, so the orchestrator can emit live context stats.
    */
   onContextAssembled?: (info: { assembledTokens: number }) => void | Promise<void>;
-  /** Called before the first file mutation so the harness can ensure a task branch. */
-  onBeforeMutate?: () => void | Promise<void>;
+  /**
+   * Called before every file mutation so the harness can ensure a task branch.
+   * Returning a branch name records it on the checkpoint; returning undefined
+   * means the workspace is not a git repository.
+   */
+  onBeforeMutate?: () => void | string | Promise<void | string>;
   /**
    * Ask-user gate. Should emit an approval event and either return an answer
    * already known for this resume, or throw `WaitingForUserError`.
@@ -397,8 +401,12 @@ export async function runTask(options: RunTaskOptions): Promise<RunTaskResult> {
   let interruptedTool: AgentCheckpoint["interruptedTool"] | undefined =
     options.checkpoint?.interruptedTool;
   let pendingApprovalId = options.checkpoint?.pendingApprovalId;
+  const approvalAnswer = options.checkpoint?.approvalAnswer;
   let taskBranch = options.taskBranch ?? options.checkpoint?.taskBranch;
-  let mutatePrepared = Boolean(taskBranch && options.checkpoint?.taskBranch);
+  let mutatePrepared = false;
+  const toolResults: NonNullable<AgentCheckpoint["toolResults"]> = [
+    ...(options.checkpoint?.toolResults ?? []),
+  ];
 
   const saveCheckpoint = async (
     extras: Partial<AgentCheckpoint> = {},
@@ -416,6 +424,8 @@ export async function runTask(options: RunTaskOptions): Promise<RunTaskResult> {
       completedSteps,
       ...(liveTodos ? { todos: liveTodos } : {}),
       ...(interruptedTool ? { interruptedTool } : {}),
+      ...(toolResults.length > 0 ? { toolResults: toolResults.slice(-20) } : {}),
+      ...(approvalAnswer ? { approvalAnswer } : {}),
       ...(taskBranch ? { taskBranch } : {}),
       ...(options.repository ?? options.checkpoint?.repository
         ? {
@@ -480,16 +490,28 @@ export async function runTask(options: RunTaskOptions): Promise<RunTaskResult> {
       await emit({ type: "terminal", data: chunk, ts: ts() });
     },
     onBeforeMutate: async () => {
-      if (mutatePrepared) {
-        await options.onBeforeMutate?.();
-        return;
+      const ensured = await options.onBeforeMutate?.();
+      if (typeof ensured === "string" && ensured.length > 0) {
+        taskBranch = ensured;
       }
-      mutatePrepared = true;
-      await options.onBeforeMutate?.();
-      if (taskBranch) await saveCheckpoint({ taskBranch });
+      // Record the branch before the first edit so a crash cannot lose it.
+      if (!mutatePrepared && taskBranch) {
+        mutatePrepared = true;
+        await saveCheckpoint({ taskBranch });
+      }
+      return taskBranch;
     },
     onAskUser: async (request) => {
+      // A resumed run already has the user's answer; replay it instead of
+      // pausing a second time for the same question.
+      if (
+        approvalAnswer &&
+        approvalAnswer.question.trim() === request.question.trim()
+      ) {
+        return { answer: approvalAnswer.answer };
+      }
       if (options.onAskUser) return options.onAskUser(request);
+      pendingApprovalId = request.toolCallId;
       await emit({
         type: "approval",
         data: {
@@ -521,10 +543,31 @@ export async function runTask(options: RunTaskOptions): Promise<RunTaskResult> {
       options.checkpoint?.history?.length && !(options.history?.length)
         ? options.checkpoint.history
         : (options.history ?? []);
-    const resumeNote =
+    const resumeNotes: string[] = [];
+    if (
       options.checkpoint?.interruptedTool &&
       options.checkpoint.interruptedTool.toolName !== "ask_user"
-        ? `\n\n[System: A previous attempt was interrupted while calling \`${options.checkpoint.interruptedTool.toolName}\`. Inspect the filesystem/git state before retrying that tool; do not assume its effects are absent or complete.]`
+    ) {
+      resumeNotes.push(
+        `A previous attempt was interrupted while calling \`${options.checkpoint.interruptedTool.toolName}\`. Inspect the filesystem/git state before retrying that tool; do not assume its effects are absent or complete.`,
+      );
+    }
+    if (options.checkpoint?.approvalAnswer) {
+      resumeNotes.push(
+        `The user answered "${options.checkpoint.approvalAnswer.question}" with: ${options.checkpoint.approvalAnswer.answer}. Continue from that answer.`,
+      );
+    }
+    const recentResults = options.checkpoint?.toolResults
+      ?.slice(-5)
+      .map((result) => `${result.toolName}: ${result.output.slice(0, 1_000)}`);
+    if (recentResults?.length) {
+      resumeNotes.push(
+        `Recent tool results from the interrupted execution:\n${recentResults.join("\n")}`,
+      );
+    }
+    const resumeNote =
+      resumeNotes.length > 0
+        ? `\n\n[System: ${resumeNotes.join("\n\n")}]`
         : "";
     const messages: ModelMessage[] = [
       ...resumeHistory.map((turn) => ({
@@ -583,6 +626,15 @@ export async function runTask(options: RunTaskOptions): Promise<RunTaskResult> {
           if (interruptedTool?.toolCallId === part.toolCallId) {
             interruptedTool = undefined;
           }
+          if (part.toolName === "ask_user") {
+            pendingApprovalId = undefined;
+          }
+          toolResults.push({
+            toolCallId: part.toolCallId,
+            toolName: part.toolName,
+            output: toText(part.output).slice(0, 4_000),
+          });
+          if (toolResults.length > 20) toolResults.splice(0, toolResults.length - 20);
           await emit({
             type: "tool_result",
             data: {
@@ -598,6 +650,7 @@ export async function runTask(options: RunTaskOptions): Promise<RunTaskResult> {
           if (options.abortSignal?.aborted) break;
           if (part.error instanceof WaitingForUserError) {
             status = "waiting_input";
+            pendingApprovalId = part.error.toolCallId;
             interruptedTool = {
               toolCallId: part.error.toolCallId,
               toolName: "ask_user",
@@ -696,6 +749,8 @@ export async function runTask(options: RunTaskOptions): Promise<RunTaskResult> {
           ? { pendingApprovalId }
           : {},
       );
+    } else if (status === "completed") {
+      await saveCheckpoint();
     }
 
     // Final authoritative usage (the in-flight `finish-step` numbers are
@@ -743,6 +798,7 @@ export async function runTask(options: RunTaskOptions): Promise<RunTaskResult> {
     };
   } catch (error) {
     if (error instanceof WaitingForUserError) {
+      pendingApprovalId = error.toolCallId;
       interruptedTool = {
         toolCallId: error.toolCallId,
         toolName: "ask_user",

@@ -9,7 +9,7 @@ An autonomous coding agent (like Jules / Devin / Copilot agent) that takes a tas
 ## 2. Goals
 
 - Agent can build a full app from scratch (Next.js, Node, Python, etc.), not just edit snippets.
-- Every task runs in an **isolated Fly Machine** (microVM) with a real shell, filesystem, and network.
+- Every task runs in an **isolated Upstash Box** microVM with a real shell, filesystem, and network.
 - **Strong search harness**: the agent finds the right code fast in big repos.
 - Live dashboard: stream of thoughts, tool calls, terminal output, file diffs, preview.
 - Human can interrupt, approve, or steer at any time.
@@ -32,84 +32,119 @@ An autonomous coding agent (like Jules / Devin / Copilot agent) that takes a tas
 | Validation | Zod (tool schemas, API, env) |
 | Auth | Better Auth |
 | DB | Neon Postgres + Drizzle ORM |
-| Agent loop | Vercel AI SDK 6 (`ToolLoopAgent`, typed tools, `stopWhen`, `prepareStep`) |
-| Sandbox | **Fly Machines** (Machines REST API) behind a `Sandbox` interface — chosen over Fly Sprites for cost |
+| Agent loop | AI SDK 7 (`ToolLoopAgent`, typed tools, `stopWhen`, `prepareStep`) |
+| Sandbox | **Upstash Box** (microVM, isolated per run) behind a `Sandbox` interface — chosen over Fly Machines for cost; Sprites / Vercel Sandbox / Firecracker later via adapter |
 | Models | Provider-agnostic via AI SDK (Claude / GPT / Gemini / open models) |
 | Search | ripgrep + tree-sitter repo map + optional embeddings |
 | Streaming | SSE (AI SDK UI stream protocol) + WebSocket/SSE for terminal |
+| Storage | S3-compatible (Cloudflare R2 production; MinIO local dev) |
 
 ## 5. Core Concepts
 
 - **Project** — a repo the agent works on (GitHub URL or empty).
 - **Task** — one instruction ("add Stripe checkout") → one agent run.
-- **Workspace** — one Fly Machine + volume holding the repo and tools.
+- **Workspace** — one Upstash Box microVM + volume holding the repo and tools.
 - **Run** — the agent loop execution; produces messages, tool calls, events.
 - **Harness** — the tools + prompts + context management around the model. This is where quality is won.
 
 ## 6. Phases
 
 ### Phase 0 — Foundation (week 1)
+
 Next.js app, auth, DB schema, env/zod config, dashboard shell, basic chat UI.
 
-### Phase 1 — Sandbox (week 1–2)
-Define the `Sandbox` interface (exec, fs, background processes, snapshot/restore, preview URL). Implement `FlyMachinesSandbox`: create, start, stop, suspend, destroy. Base Docker image (Node, pnpm, git, ripgrep, python, build tools). Sandbox daemon (`exec`, files, ports). Volume per workspace + volume snapshots for rollback.
+### Phase 1 — Dockerized infra + storage (week 1–2)
 
-### Phase 2 — Agent loop MVP (week 2–3)
-AI SDK 6 `ToolLoopAgent` with core tools: `bash`, `read_file`, `write_file`, `edit_file`, `list_dir`. Raise the default step cap (20) for long coding tasks. Stream to UI. Persist messages + tool calls. Stop/resume.
+- `docker-compose.yml` at repo root: `postgres` (official pin, e.g. `postgres:17-alpine`, `pg_isready` healthcheck, port `127.0.0.1` only) and `minio` (image from `MINIO_IMAGE`, default `pgsty/minio:RELEASE.2026-08-04T00-00-00Z`, pinned tag, `server /data --console-address ":9001"`, ports `127.0.0.1:9000` / `127.0.0.1:9001`, root creds from env). Named volumes + healthchecks for both. Credentials never hardcoded.
+- `.env.example`: `DATABASE_URL`, `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `SMTP_*`, `MINIO_IMAGE`, `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD`, `S3_ENDPOINT`, `S3_PUBLIC_ENDPOINT`, `S3_REGION`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_FORCE_PATH_STYLE=true`, `S3_BUCKET_WORKSPACES`, `S3_BUCKET_DB_BACKUPS`, `FLY_API_TOKEN`, `FLY_ORG_SLUG`. Real `.env` never committed (`.env` already gitignored).
+- `scripts/init-storage.ts` (TypeScript, `@aws-sdk/client-s3`): idempotent CreateBucket for `buildx-workspaces` and `buildx-db-backups`. No `mc` client dependency.
+- Drizzle wired to Postgres via `pg`/postgres.js with a connection pool; singleton `Pool` on `globalThis` in Next.js dev (hot-reload safe). `packages/db` becomes the only schema/queries home.
+- Package scripts: `infra:up` (`docker compose up -d --wait`), `infra:down`, `db:generate`, `db:migrate`, `db:studio`, `storage:init`.
+- Onboarding path works on a fresh clone: copy `.env.example` -> `pnpm install` -> `pnpm infra:up` -> `pnpm db:migrate` -> `pnpm storage:init`.
+- Exit: typecheck + tests green; app boots against real Postgres + MinIO.
 
-### Phase 3 — Search harness (week 3–4)
-`grep`, `glob`, repo map (tree-sitter), symbol search, optional semantic search. Context compaction. `AGENTS.md` support.
+### Phase 2 — Better Auth + protected dashboard + requireUser (week 2–3)
 
-### Phase 4 — Dev experience (week 4–5)
-Live terminal, file tree + diff viewer, preview iframe (dev server exposed via Fly proxy), git branch + commit + PR (GitHub App).
+- Better Auth wired to Drizzle (provider `"pg"`), same database. Generate auth tables with the Better Auth CLI and merge into the single `packages/db` schema so BuildX tables can FK to the auth user (match the id column type; do not assume).
+- Login: email + password and GitHub OAuth. Email verification REQUIRED before workspace creation; in dev without SMTP, log the verification link to the server console.
+- Mount auth route handler in Next.js. Helpers in `apps/web/lib/auth`: `getSession()` (server) and `requireUser()` (throws 401-style when unauthenticated). Every route/action touching projects, workspaces, runs, or sandboxes calls `requireUser()` + ownership check.
+- Rate limiting on auth endpoints (verify option name); secure cookies in production.
+- `BETTER_AUTH_SECRET`: strong random, required at startup (fail fast if missing).
+- Pages: sign-in, sign-up, verify-email notice, protected dashboard layout (redirect unauthenticated to sign-in). Minimal shadcn UI.
+- Exit: typecheck + tests green; unauthenticated requests to workspace/sandbox routes rejected; unverified user cannot create a workspace.
 
-### Phase 5 — Reliability (week 5–6)
-Planning/todo tool, self-verification (run build/tests/lint before "done"), error recovery, step/cost limits, approvals for risky commands, snapshots.
+### Phase 3 — Core BuildX schema, transitions + quota functions (week 3–4)
 
-### Phase 6 — Polish & launch (week 6+)
-Usage tracking, quotas, secrets manager, templates, onboarding, docs.
+- Drizzle tables per `arcetecture.md` §4, plus: `workspaces`, `usage_sessions`, `daily_requests`.
+  - `workspaces`: id, user_id, name, status, daemon_token_encrypted, last_active_at, last_synced_at, backup_bytes, backup_sha256, lockfile_hash, image_digest, created_at, updated_at. `UNIQUE(user_id)` (one workspace per user).
+  - Conventions: uuid PKs, created_at/updated_at timestamptz, FK to auth user, indexes on user_id and status.
+- `db.transition(id, from, to)` -> boolean (single conditional UPDATE).
+- Quota functions:
+  - Monthly CPU-hours = closed `usage_sessions` + elapsed time of any open session (refuse restore when used up).
+  - Daily counter: one atomic `INSERT ... ON CONFLICT (user_id, day) DO UPDATE SET count = count + 1 WHERE count < 30 RETURNING count`. Day boundary midnight Asia/Dhaka. Refund on server-side failure.
+  - Per-request limits: max 25 steps, max 10 min, one active run per user.
+  - Idle constant `FREE_IDLE_MINUTES = 5`.
+- Test: daily counter never exceeds 30 under 100 concurrent requests.
+- Exit: typecheck + tests green; migrations in place.
 
-### Phase 7 — Fly workspace lifecycle: create/restore/archive
-**Done** — `packages/sandbox` fly-manager (`createWorkspace`, `ensureRunning`,
-`archive`, `reconcile`), daemon HTTP client (health/init/sync), storage-backed
-backups with a strict sync → verify → rotate → destroy order, quotas + usage
-sessions. Detailed spec + tests in `phase.md` §143–166. Root checks green.
+### Phase 4 — Daemon hardening + tests (`services/sandbox-daemon/server.mjs`) (week 4–5)
 
-## 7. Key Design Decisions
+- Fail closed if auth token missing (refuse start / reject every request).
+- Per-workspace token via `POST /init` (only endpoint accepted before init), compared in constant time.
+- Add `GET /health`, `POST /init` (token + restoreUrl: download + extract into /workspace), `POST /sync` (uploadUrl: create tar.zst archive, upload, return `{size, sha256}`), last-activity tracking.
+- Per-command timeout, max output size, process-tree cleanup on timeout/cancel, path validation (nothing outside /workspace readable/writable).
+- Archive format: tar.zst of /workspace excluding `node_modules`, `.next`, `.turbo`, `dist`, `.cache`, `.pnpm-store`, `.env*`. Hard cap 200 MB per backup (configurable), reject larger with clear user error.
+- Update `infra/fly-image/Dockerfile`: Node, pnpm, git, zstd, tar, curl, pre-warmed pnpm store (next, react, tailwind). Pin image by digest in config.
+- Tests: token required; path escapes blocked.
+- Exit: typecheck + tests green.
 
-1. **Fly Machines, not Sprites (cost).** Sprites are persistent and have built-in checkpoint/restore, but cost too much for this product. Machines are cheaper; we rebuild the useful parts ourselves: suspend/stop on idle, volume snapshots for rollback, small machine sizes. Sandbox access goes through a `Sandbox` interface so the backend can be swapped later (Sprites, Vercel Sandbox, own Firecracker on Hetzner) without touching the harness.
-2. **Agent loop lives outside the sandbox.** The orchestrator (Next.js server/worker) calls the model; tools execute remotely in the Fly Machine through a small daemon. Model keys never enter the sandbox.
-3. **One Fly Machine per workspace**, suspend when idle (fast resume, cheap).
-4. **Everything is an event.** Each message/tool call/terminal chunk is an append-only event row → replayable, resumable UI.
-5. **Search before read.** Agent is trained (via prompt + tool design) to search → narrow → read ranges, never dump whole files.
-6. **Verification is mandatory.** A task isn't done until build/test/lint pass or the agent explains why not.
-7. **Least privilege.** Sandbox has no platform secrets; user secrets injected per workspace; network egress controllable.
+### Phase 5 — Lazy sandbox + web wiring (week 5–6)
 
-## 8. Risks & Mitigations
+- `lazy-sandbox.ts`: a `Sandbox` implementation calling `ensureRunning` on first use, then delegating to `DaemonSandbox` with this workspace's URL + token. Normal chat starts NO machine; machine created lazily on the first tool call needing the sandbox (exec, read/write/edit file).
+- Replace global SANDBOX_BASE_URL/TOKEN in `apps/web/lib/sandbox.ts` with a per-workspace resolver; keep local mode for dev/tests.
+- Per-workspace daemon token stored encrypted; presigned URLs short-lived.
+- Exit: typecheck + tests green; local mode still works for dev/tests.
 
-| Risk | Mitigation |
-|---|---|
-| Runaway cost (tokens + machines) | Step limits, per-run budget, aggressive idle auto-stop/suspend, small machine sizes, volume cleanup for old workspaces, usage dashboard |
-| Machines lack native checkpoint/restore | Volume snapshots before risky steps + git commits as checkpoints; restore = new volume from snapshot |
-| Sandbox vendor lock-in | `Sandbox` interface with swappable adapters |
-| Prompt injection from repo/web content | Treat tool output as untrusted, no secrets in sandbox, approval for destructive/network actions |
-| Long runs exceed serverless limits | Run orchestrator on long-lived worker (own VPS/Fly app), durable events, resumable streams |
-| Context overflow in big repos | Repo map, ranged reads, compaction, subagent for exploration |
-| Flaky sandbox | Health checks, auto-restart, snapshot/restore |
-| Agent loops/stalls | Loop detection, max steps, "ask user" escape hatch |
+### Phase 6 — Reaper, reconciler, cleanup, pg_dump backup job (week 6+)
 
-## 9. Success Metrics
+Background jobs, idempotent, each guarded with `pg_advisory_lock` (only one instance runs each):
+- **Idle reaper (every minute):** archive workspaces idle >= FREE_IDLE_MINUTES AND no active agent run AND no running exec. Long builds must not be killed mid-run.
+- **Reconciler (hourly):** diff Upstash Box machines/volumes/apps vs DB; destroy orphans; close stale usage sessions; retry archive_failed; fail rows stuck in creating/restoring > 10 min.
+- **Storage cleanup (daily):** delete tmp upload keys older than 24 h; retention — notify then delete backups of workspaces inactive 90 days.
+- **DB backup (nightly):** `pg_dump` -> compressed -> `S3_BUCKET_DB_BACKUPS`, keep last 7 dumps. Documented restore procedure tested once. Document that Postgres + MinIO Docker volumes need host-level backups in prod.
+- Test: crash-after-volume-create repaired by reconciler.
+- Exit: typecheck + tests green.
 
-- Task completion rate on a fixed eval set (e.g. 30 tasks: bugfix, feature, scaffold).
-- Median time-to-first-preview.
-- Avg cost per completed task.
-- % of runs needing human intervention.
-- Tool error rate.
+### Phase 7 — UI + events (`apps/web`) (week 7–8)
 
-## 10. Eval Strategy
+- Stream workspace events: `workspace.restoring` (with sub-steps), `workspace.ready`, `workspace.archiving`, `workspace.archived`.
+- Show: status badge, countdown to auto-pause while running, monthly CPU-hours used (x of 5h), daily requests used (x of 30) with Dhaka reset time, clear messages when quota exhausted ("Your work is saved").
+- Copy friendly and short.
+- Exit: typecheck + lint + tests green.
 
-Build a small benchmark early (Phase 2): 10–30 reproducible tasks ("scaffold todo app", "fix failing test in repo X", "add dark mode"). Run after every harness change. Track pass rate + cost.
+### Phase 8 — Docs updates (week 8–9)
 
-## 11. Harness Build-vs-Buy Note
+- Update `arcetecture.md` / `plan.md` / `todo.md`: Upstash Box lifecycle; new schema/API surface; local Dockerized dev stack details.
+- Runbook in `docs/`: run one real create -> restore -> edit file -> archive -> restore cycle on Upstash Box, including exposing `S3_PUBLIC_ENDPOINT` to Box via a tunnel; confirm the file survived (hash match).
+- README: startup (`pnpm infra:up && pnpm db:migrate && pnpm storage:init`), MINIO_IMAGE swap note.
+- Final report: what's done, full TODO(verify) list, deviations from this spec + reasons.
 
-Default: build on AI SDK 6 `ToolLoopAgent` (matches the stack, full control over the Fly sandbox and event store). Once the eval set exists (Phase 2), benchmark Cline SDK (`@cline/sdk`) and OpenAI's open-sourced Codex Harness against our own loop; adopt one only if it wins on pass rate/cost and can run tools against a remote sandbox. DeepSeek's open-source harness is a reference for replay-driven testing and fail-closed sandboxing, not a dependency.
+## 7. Acceptance checklist (final)
+
+- Fresh clone: `pnpm infra:up && pnpm db:migrate && pnpm storage:init` succeeds and the app boots.
+- Storage: presigned PUT->GET round-trip; presigned URL expires; URL for key A cannot read key B.
+- Unauthenticated requests to workspace/sandbox routes rejected; user A cannot act on user B's workspace.
+- Unverified email cannot create a workspace.
+- Concurrent `ensureRunning` -> exactly one machine.
+- archive never deletes anything on upload/verify failure.
+- Crash after volume-create repaired by reconciler.
+- Daily counter never exceeds 30 under 100 concurrent requests.
+- Quota exhaustion mid-session triggers backup-then-stop.
+- `pnpm typecheck`, `pnpm lint`, `pnpm test` all green; docs runaround cycle proven live.
+
+## 8. Open questions / risks
+
+- `skip_launch`, volume-delete-while-attached, API rate limits, app/IP request shapes — unverified Box fields.
+- Better Auth CLI schema generation + exact option names (rate limiting).
+- Separate public endpoint vs signed host — must test MinIO accepts URLs signed for the public host.
+- Free-tier Upstash Box org on a single developer account may itself hit Box API rate limits during reconcile.

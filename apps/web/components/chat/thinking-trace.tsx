@@ -156,7 +156,7 @@ export function resolveActivityState(blocks: ChatBlock[]): ActivityState {
     if (item.kind === "approval" && item.status === "pending") {
       return {
         label: "Waiting for approval",
-        target: item.command,
+        target: item.command ?? null,
         anchored: true,
         ts: item.ts,
       };

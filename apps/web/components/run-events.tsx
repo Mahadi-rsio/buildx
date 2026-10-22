@@ -36,7 +36,7 @@ export type StreamItem =
       summary: string;
       estimatedTokens: number;
     }
-  | { key: number; kind: "approval"; ts: number; command: string; status: string }
+  | { key: number; kind: "approval"; ts: number; command?: string; status: string }
   | {
       key: number;
       kind: "workspace";

@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { after, test } from "node:test";
 import type { Db } from "@buildx/db";
 import {
+  conversations as conversationsTable,
   getDb,
   inArray,
   runs as runsTable,
@@ -105,6 +106,105 @@ function failingInsertOnce(database: Db): Db {
     });
   return wrap(database);
 }
+
+test("resumeFromRunId restores checkpoint, history, repository, and task branch", { skip: skipReason }, async () => {
+  const uid = await newUser();
+  const conversationId = randomUUID();
+  const previousId = randomUUID();
+  const now = new Date();
+  const checkpoint = {
+    version: 1,
+    history: [
+      { role: "user" as const, content: "first turn" },
+      { role: "assistant" as const, content: "first answer" },
+    ],
+    completedSteps: 3,
+    todos: [],
+    taskBranch: "buildx/make-a-file",
+  };
+
+  await db!.insert(conversationsTable).values({
+    id: conversationId,
+    userId: uid,
+  });
+
+  await db!.insert(runsTable).values({
+    id: previousId,
+    userId: uid,
+    conversationId,
+    model: "gpt-4o-mini",
+    status: "cancelled",
+    task: "first turn",
+    maxSteps: 5,
+    repository: "octo/repo",
+    taskBranch: "buildx/make-a-file",
+    checkpoint,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  const continued = await createRunForUser({
+    ...inputFor(uid),
+    task: "keep going",
+    conversationId,
+    resumeFromRunId: previousId,
+  });
+  assert.equal(continued.kind, "created");
+  if (continued.kind !== "created") return;
+  assert.equal(continued.run.repository, "octo/repo");
+  assert.equal(continued.run.taskBranch, "buildx/make-a-file");
+  assert.deepEqual(
+    continued.run.checkpoint?.history,
+    checkpoint.history,
+    "resumed run carries the prior checkpoint history",
+  );
+  assert.equal(continued.run.checkpoint?.completedSteps, 3);
+
+  await db!.delete(runsTable).where(sql`${runsTable.id} = ${previousId}`);
+  await db!.delete(runsTable).where(sql`${runsTable.id} = ${continued.run.id}`);
+  await db!.delete(conversationsTable).where(sql`${conversationsTable.id} = ${conversationId}`);
+});
+
+test("resumeFromRunId never splices another conversation's checkpoint", { skip: skipReason }, async () => {
+  const uid = await newUser();
+  const priorConversationId = randomUUID();
+  const previousId = randomUUID();
+  const now = new Date();
+  await db!.insert(conversationsTable).values({
+    id: priorConversationId,
+    userId: uid,
+  });
+  await db!.insert(runsTable).values({
+    id: previousId,
+    userId: uid,
+    conversationId: priorConversationId,
+    model: "gpt-4o-mini",
+    status: "cancelled",
+    task: "unrelated",
+    maxSteps: 5,
+    repository: "octo/repo",
+    checkpoint: {
+      version: 1,
+      history: [],
+      completedSteps: 2,
+      todos: [],
+      taskBranch: "buildx/unrelated",
+    },
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  const continued = await createRunForUser({
+    ...inputFor(uid),
+    task: "new conversation",
+    conversationId: randomUUID(),
+    resumeFromRunId: previousId,
+  });
+  assert.equal(continued.kind, "created");
+  if (continued.kind !== "created") return;
+  assert.equal(continued.run.checkpoint, undefined, "cross-conversation checkpoint is dropped");
+  assert.equal(continued.run.repository, undefined);
+});
 
 after(async () => {
   if (skipReason || createdUsers.length === 0) return;

@@ -285,6 +285,15 @@ export function ChatMessageView({
             {text}
           </p>
         </div>
+        {message.queued ? (
+          <span className="mt-1 text-2xs uppercase tracking-wide text-[var(--text-faint)]">
+            Queued
+          </span>
+        ) : message.optimistic ? (
+          <span className="mt-1 text-2xs uppercase tracking-wide text-[var(--text-faint)]">
+            Sending…
+          </span>
+        ) : null}
         {message.skillNames?.length ? (
           <div className="mt-1.5 flex max-w-[85%] flex-wrap justify-end gap-1.5">
             {message.skillNames.map((name) => (

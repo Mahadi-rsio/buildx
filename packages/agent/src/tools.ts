@@ -37,10 +37,11 @@ export interface ToolHooks {
     toolCallId?: string;
   }) => void | Promise<void>;
   /**
-   * Called before the first workspace mutation so the harness can ensure a
-   * task branch exists. Must be idempotent across resume.
+   * Called before every workspace mutation so the harness can ensure a task
+   * branch exists. Returning a branch name records it on the checkpoint;
+   * `undefined` means the workspace is not a git repository.
    */
-  onBeforeMutate?: () => void | Promise<void>;
+  onBeforeMutate?: () => void | string | Promise<void | string>;
   /**
    * Pause for a structured user question. Resolves with the answer when the
    * user has already responded in this process; otherwise throws
@@ -224,7 +225,10 @@ async function writeBashLog(
   }
 }
 
-/** On failure, surface a short durable-log tail for targeted debugging. */
+/**
+ * On failure, surface a short durable-log tail for targeted debugging. Reads
+ * only the last lines of the log instead of loading a potentially huge file.
+ */
 async function readLogTail(
   sandbox: Sandbox,
   logPath: string | undefined,
@@ -232,7 +236,12 @@ async function readLogTail(
 ): Promise<string | undefined> {
   if (!logPath) return undefined;
   try {
-    const content = await sandbox.readFile(logPath);
+    const { stdout } = await execCapture(
+      sandbox,
+      `tail -n 80 -- ${shellQuote(logPath)} 2>/dev/null`,
+    );
+    const content = stdout.trim();
+    if (!content) return undefined;
     if (content.length <= maxChars) return content;
     return truncateMiddle(content, maxChars, 0.8).text;
   } catch {
@@ -673,10 +682,21 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}) {
         exitCode !== 0
           ? await readLogTail(sandbox, logPath)
           : undefined;
+      const errorLine = bounded.stderr
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .at(-1);
+      const summary = timedOut
+        ? `Command timed out after ${timeout}ms`
+        : exitCode !== 0
+          ? `Command failed with exit code ${exitCode}${errorLine ? `: ${errorLine.slice(0, 300)}` : ""}`
+          : "Command completed successfully";
       const result = {
         command,
         cwd: cwd ?? ".",
         exitCode,
+        summary,
         stdout: bounded.stdout,
         stderr: bounded.stderr,
         truncated: bounded.truncated,
@@ -728,18 +748,39 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}) {
   });
 
   const write_file = tool({
-    description: "Create or overwrite a file with the given content.",
+    description:
+      "Create a new file with the given content. Refuses to replace an existing " +
+      "file unless `overwrite` is true; use `edit_file` for focused patches to " +
+      "existing sources instead of rewriting the whole file.",
     inputSchema: z.object({
       path: z.string().describe("File path relative to the workspace root"),
       content: z.string().describe("Full file content"),
+      overwrite: z
+        .boolean()
+        .optional()
+        .describe("Allow replacing an existing file; only for intentional rewrites"),
     }),
-    execute: async ({ path, content }, options) => {
+    execute: async ({ path, content, overwrite }, options) => {
       if (options?.abortSignal?.aborted) {
         throw new Error("Tool execution aborted: run cancelled");
       }
+      let existing: string | undefined;
+      try {
+        existing = await sandbox.readFile(path);
+      } catch {
+        existing = undefined;
+      }
+      if (existing !== undefined && !overwrite) {
+        throw new Error(
+          `${path} already exists. Use edit_file for a focused patch, or pass overwrite: true only when the whole file must change.`,
+        );
+      }
       await hooks.onBeforeMutate?.();
       await sandbox.writeFile(path, content);
-      await hooks.onFileChange?.({ path, change: "write" });
+      await hooks.onFileChange?.({
+        path,
+        change: existing === undefined ? "create" : "write",
+      });
       return { path, bytes: Buffer.byteLength(content, "utf8") };
     },
   });

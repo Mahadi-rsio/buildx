@@ -11,6 +11,7 @@ import {
 } from "@buildx/db";
 import {
   DEFAULT_CONTEXT_WINDOW_TOKENS,
+  type AgentCheckpoint,
   type ContextWindowTokens,
   type ConversationTurn,
 } from "@buildx/shared";
@@ -56,6 +57,10 @@ export interface CreateRunInput {
   maxSteps: number;
   contextWindowTokens?: ContextWindowTokens;
   history?: ConversationTurn[];
+  checkpoint?: AgentCheckpoint;
+  /** Previous interrupted run whose checkpoint should seed this continuation. */
+  resumeFromRunId?: string;
+  repository?: string;
   skillNames?: string[];
   conversationId?: string;
   idempotencyKey?: string;
@@ -149,6 +154,54 @@ export async function createRunForUser(
   if (!preflight) return { kind: "quota_unavailable" };
   if (preflight.remaining <= 0) return { kind: "quota_exhausted" };
 
+  // A continuation of an interrupted run restores its last valid checkpoint:
+  // history, completed steps, pending ask_user answer, and task branch.
+  let resumeCheckpoint = input.checkpoint;
+  let resumeRepository: string | undefined;
+  if (input.resumeFromRunId) {
+    const [previous] = await db
+      .select()
+      .from(runsTable)
+      .where(
+        and(
+          eq(runsTable.id, input.resumeFromRunId),
+          eq(runsTable.userId, input.user.id),
+        ),
+      );
+    if (previous) {
+      resumeCheckpoint =
+        resumeCheckpoint ??
+        (previous.checkpoint as unknown as AgentCheckpoint | null) ??
+        undefined;
+      resumeRepository = previous.repository ?? undefined;
+      if (
+        input.conversationId &&
+        previous.conversationId &&
+        input.conversationId !== previous.conversationId
+      ) {
+        // Never splice another conversation's checkpoint into this run.
+        resumeCheckpoint = input.checkpoint;
+        resumeRepository = undefined;
+      }
+    }
+  }
+  const mergedHistory =
+    input.history?.length
+      ? input.history
+      : resumeCheckpoint?.history?.length
+        ? resumeCheckpoint.history
+        : undefined;
+  const repository =
+    input.repository ?? resumeRepository ?? resumeCheckpoint?.repository;
+  const checkpoint =
+    resumeCheckpoint
+      ? {
+          ...resumeCheckpoint,
+          ...(repository ? { repository } : {}),
+          ...(mergedHistory ? { history: mergedHistory } : {}),
+        }
+      : undefined;
+
   const conversationId = input.conversationId ?? randomUUID();
   const title = input.task.slice(0, 200);
   // The CPU-usage aggregate is independent of run/conversation creation, so
@@ -216,7 +269,10 @@ export async function createRunForUser(
           model: input.model,
           status: "queued",
           task: input.task,
-          history: input.history?.length ? input.history : null,
+          history: mergedHistory?.length ? mergedHistory : null,
+          checkpoint: checkpoint ?? null,
+          repository: repository ?? null,
+          taskBranch: checkpoint?.taskBranch ?? null,
           skillNames: input.skillNames?.length ? input.skillNames : null,
           workspaceName:
             input.user.name?.trim() ||

@@ -238,6 +238,22 @@ export function safeRepoName(url: string): string {
 }
 
 /** Validate a git branch / remote-tracking ref name. */
+/** Build a stable, task-specific local branch name for a run. */
+export function taskBranchName(input: { runId: string; title?: string }): string {
+  const id = input.runId
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "")
+    .slice(0, 8) || "task";
+  const slug = (input.title ?? "")
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48)
+    .replace(/-+$/g, "");
+  return validateBranchName(`buildx/${slug ? `${slug}-` : ""}${id}`);
+}
+
 export function validateBranchName(value: string): string {
   const name = value.trim();
   if (!name) throw new GitError("invalid_branch", "Branch name is required.");
@@ -955,6 +971,16 @@ export class WorkspaceGit {
           `Could not switch to task branch ${branch} while preserving local changes: ${describe(switched)}`,
         );
       }
+      const verified = await this.runGit(
+        ["symbolic-ref", "--quiet", "--short", "HEAD"],
+        { cwd: repoPath },
+      );
+      if (verified.code !== 0 || verified.stdout.trim() !== branch) {
+        throw new GitError(
+          "checkout_failed",
+          `Workspace is not on task branch ${branch} after switching.`,
+        );
+      }
       return {
         isRepo: true,
         branch,
@@ -971,6 +997,16 @@ export class WorkspaceGit {
       throw new GitError(
         "checkout_failed",
         `Could not create task branch ${branch}: ${describe(created)}`,
+      );
+    }
+    const verified = await this.runGit(
+      ["symbolic-ref", "--quiet", "--short", "HEAD"],
+      { cwd: repoPath },
+    );
+    if (verified.code !== 0 || verified.stdout.trim() !== branch) {
+      throw new GitError(
+        "checkout_failed",
+        `Workspace is not on task branch ${branch} after creation.`,
       );
     }
     return {

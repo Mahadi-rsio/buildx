@@ -6,6 +6,7 @@ import {
   isTerminalStatus,
 } from "@buildx/shared";
 import type {
+  AgentCheckpoint,
   ContextWindowTokens,
   ConversationTurn,
   RunEvent,
@@ -78,6 +79,12 @@ export interface StoredRun {
   task: string;
   /** Earlier turns replayed before `task` to keep follow-up context. */
   history?: ConversationTurn[];
+  /** Last valid agent checkpoint (stop / ask_user / interrupted tool). */
+  checkpoint?: AgentCheckpoint;
+  /** GitHub repository selected for the session, when any. */
+  repository?: string;
+  /** Local task branch created before edits, when the workspace is a repo. */
+  taskBranch?: string;
   /** Installed skills attached to this run and preloaded into its context. */
   skillNames?: string[];
   status: RunStatus;
@@ -148,6 +155,11 @@ function syncFromRow(run: StoredRun, row: RunRow): void {
   run.workspaceName = row.workspaceName ?? "workspace";
   run.task = row.task ?? "";
   run.history = row.history ?? undefined;
+  run.checkpoint = row.checkpoint
+    ? (row.checkpoint as unknown as AgentCheckpoint)
+    : undefined;
+  run.repository = row.repository ?? undefined;
+  run.taskBranch = row.taskBranch ?? undefined;
   run.skillNames = row.skillNames ?? undefined;
   run.status = row.status;
   run.model = row.model ?? DEFAULT_MODEL;
@@ -198,6 +210,11 @@ export async function hydrateRun(
     workspaceName: row.workspaceName ?? "workspace",
     task: row.task ?? "",
     history: row.history ?? undefined,
+    checkpoint: row.checkpoint
+      ? (row.checkpoint as unknown as AgentCheckpoint)
+      : undefined,
+    repository: row.repository ?? undefined,
+    taskBranch: row.taskBranch ?? undefined,
     skillNames: row.skillNames ?? undefined,
     status: row.status,
     model: row.model ?? DEFAULT_MODEL,
@@ -256,6 +273,9 @@ export interface CreateRunArgs {
   workspaceName: string;
   task: string;
   history?: ConversationTurn[];
+  checkpoint?: AgentCheckpoint;
+  repository?: string;
+  taskBranch?: string;
   skillNames?: string[];
   model: string;
   maxSteps: number;
@@ -313,6 +333,11 @@ export async function createRun(
         status: "queued",
         task: args.task,
         history: args.history?.length ? args.history : null,
+        checkpoint:
+          (args.checkpoint as unknown as Record<string, unknown> | null) ??
+          null,
+        repository: args.repository ?? null,
+        taskBranch: args.taskBranch ?? null,
         skillNames: args.skillNames?.length ? args.skillNames : null,
         workspaceName: args.workspaceName,
         maxSteps: args.maxSteps,
@@ -357,6 +382,11 @@ export async function createRun(
     workspaceName: row.workspaceName ?? "workspace",
     task: row.task ?? "",
     history: row.history ?? undefined,
+    checkpoint: row.checkpoint
+      ? (row.checkpoint as unknown as AgentCheckpoint)
+      : undefined,
+    repository: row.repository ?? undefined,
+    taskBranch: row.taskBranch ?? undefined,
     skillNames: row.skillNames ?? undefined,
     status: "queued",
     model: row.model ?? DEFAULT_MODEL,
@@ -645,6 +675,43 @@ export async function persistStats(run: StoredRun): Promise<void> {
     );
 }
 
+/**
+ * Persist the latest agent checkpoint (conversation history, completed steps,
+ * interrupted tool, ask_user answer, task branch). Lease-guarded when the run is
+ * executing so a stale worker cannot overwrite the current owner's checkpoint.
+ */
+export async function persistCheckpoint(
+  run: StoredRun,
+  checkpoint: AgentCheckpoint,
+): Promise<boolean> {
+  run.checkpoint = checkpoint;
+  if (checkpoint.taskBranch) run.taskBranch = checkpoint.taskBranch;
+  if (checkpoint.repository) run.repository = checkpoint.repository;
+  if (run.runtime.lostOwnership || isTerminalStatus(run.status)) return false;
+  const rows = await getDb()
+    .update(runsTable)
+    .set({
+      checkpoint: checkpoint as unknown as Record<string, unknown>,
+      taskBranch: run.taskBranch ?? null,
+      repository: run.repository ?? null,
+      updatedAt: new Date(),
+    })
+    .where(
+      run.leaseId
+        ? and(
+            eq(runsTable.id, run.id),
+            eq(runsTable.leaseId, run.leaseId),
+            run.fencingToken !== undefined
+              ? eq(runsTable.fencingToken, run.fencingToken)
+              : sql`true`,
+            sql`(${runsTable.leaseExpiresAt} IS NULL OR ${runsTable.leaseExpiresAt} >= now())`,
+          )
+        : eq(runsTable.id, run.id),
+    )
+    .returning({ id: runsTable.id });
+  return rows.length === 1;
+}
+
 /** Statuses a run can be finalized as (only terminal transitions are legal). */
 export type TerminalRunStatus = Exclude<
   RunStatus,
@@ -732,6 +799,8 @@ export function toRunSummary(run: StoredRun): RunSummary {
     id: run.id,
     conversationId: run.conversationId,
     task: run.task,
+    repository: run.repository,
+    taskBranch: run.taskBranch,
     skillNames: run.skillNames,
     status: run.status,
     model: run.model,
@@ -751,7 +820,12 @@ export function toRunSummary(run: StoredRun): RunSummary {
 
 export async function toRunDetail(run: StoredRun): Promise<RunDetail> {
   const events = await loadEvents(run.id);
-  return { ...toRunSummary(run), events, history: run.history };
+  return {
+    ...toRunSummary(run),
+    events,
+    history: run.history,
+    checkpoint: run.checkpoint,
+  };
 }
 
 export interface RunSnapshot {

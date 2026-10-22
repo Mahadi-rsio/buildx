@@ -7,6 +7,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   isContextWindowTokens,
   isTerminalStatus,
+  type ApprovalPayload,
   type ContextWindowTokens,
   type ConversationTurn,
 } from "@buildx/shared";
@@ -53,6 +54,14 @@ interface QueuedTurn {
   model?: string;
   contextWindow: ContextWindowTokens;
   skillNames?: string[];
+}
+
+interface OptimisticMessage {
+  id: string;
+  task: string;
+  conversationId?: string;
+  createdAt: number;
+  queued?: boolean;
 }
 
 function isQueuedTurn(value: unknown): value is QueuedTurn {
@@ -110,7 +119,13 @@ export default function RunPage() {
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
   const [queue, setQueue] = useState<QueuedTurn[]>([]);
   const [queuePaused, setQueuePaused] = useState(false);
+  const [optimistic, setOptimistic] = useState<OptimisticMessage[]>([]);
+  const [answerText, setAnswerText] = useState("");
+  const [answerSending, setAnswerSending] = useState(false);
+  const [answerError, setAnswerError] = useState<string | null>(null);
+  const [answeredIds, setAnsweredIds] = useState<string[]>([]);
   const dispatchInFlightRef = useRef(false);
+  const sendInFlightRef = useRef(false);
   const dispatchedRunRef = useRef<string | null>(null);
   const loadedQueueKeyRef = useRef<string | null>(null);
   const queueKey = queueStorageKey(run?.conversationId);
@@ -211,6 +226,51 @@ export default function RunPage() {
     [runId, run, events, running, skillsReady],
   );
 
+  const visibleMessages = useMemo<ChatMessage[]>(() => {
+    const pending = optimistic
+      .filter(
+        (item) =>
+          !(
+            run &&
+            run.task.trim() === item.task.trim() &&
+            (!item.conversationId ||
+              !run.conversationId ||
+              item.conversationId === run.conversationId)
+          ),
+      )
+      .map((item) => ({
+        id: `optimistic-${item.id}`,
+        role: "user" as const,
+        createdAt: item.createdAt,
+        optimistic: true,
+        queued: item.queued,
+        blocks: [
+          {
+            id: `optimistic-${item.id}-text`,
+            kind: "text" as const,
+            text: item.task,
+          },
+        ],
+      }));
+    return [...messages, ...pending];
+  }, [messages, optimistic, run]);
+
+  const pendingApproval = useMemo<ApprovalPayload | null>(() => {
+    let pending: ApprovalPayload | null = null;
+    for (const event of events) {
+      if (event.type !== "approval") continue;
+      if (event.data.status === "pending") {
+        if (!answeredIds.includes(event.data.toolCallId)) pending = event.data;
+      } else if (
+        pending &&
+        event.data.toolCallId === pending.toolCallId
+      ) {
+        pending = null;
+      }
+    }
+    return pending;
+  }, [events, answeredIds]);
+
   const conversationIdRef = useRef<string>(
     run?.conversationId ?? newConversationId(),
   );
@@ -308,31 +368,63 @@ export default function RunPage() {
     });
   }, [run, messages, runId]);
 
+  async function answerPending(value: string) {
+    const question = pendingApproval;
+    if (!question || answerSending || value.trim().length === 0) return;
+    setAnswerSending(true);
+    setAnswerError(null);
+    try {
+      const res = await fetch(`/api/runs/${runId}/answer`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          toolCallId: question.toolCallId,
+          answer: value.trim(),
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        message?: string;
+      };
+      if (!res.ok) {
+        setAnswerError(data.message ?? "Could not send that answer.");
+        return;
+      }
+      setAnsweredIds((current) => [...current, question.toolCallId]);
+      setAnswerText("");
+    } catch {
+      setAnswerError("Network error — your answer was kept. Try again.");
+    } finally {
+      setAnswerSending(false);
+    }
+  }
+
   async function send() {
     const task = draft.trim();
-    if (task.length === 0 || submitting) return;
+    if (task.length === 0 || submitting || sendInFlightRef.current) return;
+    sendInFlightRef.current = true;
 
-    if (running || queue.length > 0) {
-      setQueue((current) => [
-        ...current,
-        {
-          id: crypto.randomUUID(),
-          task,
-          model: modelOverride.trim() || undefined,
-          contextWindow: contextWindowTokens,
-          skillNames: selectedSkills.length > 0 ? selectedSkills : undefined,
-        },
-      ]);
-      setQueuePaused(false);
-      setDraft("");
-      setSelectedSkills([]);
-      return;
-    }
-
+    const clientMessageId = crypto.randomUUID();
     const conversationId = run?.conversationId ?? conversationIdRef.current;
     conversationIdRef.current = conversationId;
+    const skillsForTurn =
+      selectedSkills.length > 0 ? selectedSkills : undefined;
+
+    // Optimistic UI: the message and queued/running state land immediately,
+    // before the network call and without waiting for the model.
+    setOptimistic((current) => [
+      ...current,
+      {
+        id: clientMessageId,
+        task,
+        conversationId,
+        createdAt: Date.now(),
+        queued: running || queue.length > 0,
+      },
+    ]);
+    setDraft("");
+    setSelectedSkills([]);
     enqueueConversationEvent({
-      id: crypto.randomUUID(),
+      id: clientMessageId,
       conversationId,
       seq: Date.now(),
       role: "user",
@@ -340,17 +432,47 @@ export default function RunPage() {
       kind: "message",
       createdAt: Date.now(),
     });
-    const created = await createRun({
-      task,
-      model: modelOverride.trim() || undefined,
-      contextWindow: contextWindowTokens,
-      skillNames: selectedSkills.length > 0 ? selectedSkills : undefined,
-      history: toHistory(messages),
-      conversationId,
-    });
-    if (created) {
-      setDraft("");
-      setSelectedSkills([]);
+
+    try {
+      if (running || queue.length > 0) {
+        setQueue((current) => [
+          ...current,
+          {
+            id: clientMessageId,
+            task,
+            model: modelOverride.trim() || undefined,
+            contextWindow: contextWindowTokens,
+            skillNames: skillsForTurn,
+          },
+        ]);
+        setQueuePaused(false);
+        return;
+      }
+
+      const created = await createRun({
+        task,
+        model: modelOverride.trim() || undefined,
+        contextWindow: contextWindowTokens,
+        skillNames: skillsForTurn,
+        history: toHistory(messages),
+        conversationId,
+        idempotencyKey: clientMessageId,
+        clientMessageId,
+        resumeFromRunId:
+          run && (run.status === "cancelled" || run.status === "waiting_input")
+            ? run.id
+            : undefined,
+      });
+      if (!created) {
+        // Preserve the text and skills so the user can retry without retyping.
+        setOptimistic((current) =>
+          current.filter((item) => item.id !== clientMessageId),
+        );
+        setDraft((current) => (current.length > 0 ? current : task));
+        if (skillsForTurn) setSelectedSkills(skillsForTurn);
+      }
+    } finally {
+      sendInFlightRef.current = false;
     }
   }
 
@@ -415,7 +537,7 @@ export default function RunPage() {
         ) : null}
 
         <ChatThread
-          messages={messages}
+          messages={visibleMessages}
           loading={loading}
           showThinking={running}
           cancelled={run?.status === "cancelled"}
@@ -497,6 +619,63 @@ export default function RunPage() {
                   </li>
                 ))}
               </ul>
+            </div>
+          </div>
+        ) : null}
+
+        {run?.status === "waiting_input" &&
+        pendingApproval?.question &&
+        !answeredIds.includes(pendingApproval.toolCallId) ? (
+          <div className="mx-auto w-full max-w-3xl shrink-0 px-3 pb-1 sm:px-4">
+            <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5">
+              <p className="text-[11px] font-medium uppercase tracking-wider text-[var(--text-faint)]">
+                Waiting for your answer
+              </p>
+              <p className="mt-1 whitespace-pre-wrap text-[13px] text-[var(--text)]">
+                {pendingApproval.question}
+              </p>
+              {pendingApproval.options && pendingApproval.options.length > 0 ? (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {pendingApproval.options.map((option) => (
+                    <Button
+                      key={option.id}
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={answerSending}
+                      onClick={() => void answerPending(option.id)}
+                    >
+                      {option.label}
+                    </Button>
+                  ))}
+                </div>
+              ) : (
+                <form
+                  className="mt-2 flex items-center gap-2"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void answerPending(answerText);
+                  }}
+                >
+                  <input
+                    value={answerText}
+                    onChange={(event) => setAnswerText(event.target.value)}
+                    placeholder="Type your answer…"
+                    aria-label="Answer"
+                    className="h-8 min-w-0 flex-1 rounded-md border border-[var(--border)] bg-[var(--bg)] px-2 text-xs text-[var(--text)] outline-none focus:border-[var(--text-muted)]"
+                  />
+                  <Button
+                    type="submit"
+                    size="sm"
+                    disabled={answerSending || answerText.trim().length === 0}
+                  >
+                    Answer
+                  </Button>
+                </form>
+              )}
+              {answerError ? (
+                <p className="mt-1.5 text-2xs text-destructive">{answerError}</p>
+              ) : null}
             </div>
           </div>
         ) : null}

@@ -159,6 +159,18 @@ export interface AgentCheckpoint {
     /** True when effects may already have landed on disk/git. */
     maybeApplied?: boolean;
   };
+  /** Last relevant tool results so a resumed run can avoid repeating work. */
+  toolResults?: Array<{
+    toolCallId: string;
+    toolName: string;
+    output: string;
+  }>;
+  /** Latest structured ask_user answer, replayed when the same run resumes. */
+  approvalAnswer?: {
+    toolCallId: string;
+    question: string;
+    answer: string;
+  };
   /** Local task branch created for this run, when the workspace is a git repo. */
   taskBranch?: string;
   /** Selected GitHub repository full name, when the session targeted one. */
@@ -314,6 +326,8 @@ export const createRunSchema = z.object({
     .regex(/^[\w.-]+\/[\w.-]+$/, "invalid repository")
     .max(200)
     .optional(),
+  /** Continue from an interrupted run's persisted checkpoint. */
+  resumeFromRunId: z.string().uuid().optional(),
   /** Client-generated id for optimistic message reconciliation. */
   clientMessageId: z.string().min(1).max(128).optional(),
 });

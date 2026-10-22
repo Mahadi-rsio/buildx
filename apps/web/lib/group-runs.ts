@@ -58,7 +58,9 @@ export function prepareRunList(
         run.title.toLowerCase().includes(q) ||
         run.task.toLowerCase().includes(q) ||
         run.id.toLowerCase().includes(q) ||
-        run.model.toLowerCase().includes(q)
+        run.model.toLowerCase().includes(q) ||
+        run.repository?.toLowerCase().includes(q) ||
+        run.taskBranch?.toLowerCase().includes(q)
       );
     });
 

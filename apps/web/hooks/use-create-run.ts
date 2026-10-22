@@ -23,6 +23,10 @@ export function useCreateRun() {
       history?: ConversationTurn[];
       skillNames?: string[];
       conversationId?: string;
+      repository?: string;
+      idempotencyKey?: string;
+      clientMessageId?: string;
+      resumeFromRunId?: string;
     }) => {
       const trimmed = args.task.trim();
       if (trimmed.length === 0 || submitting) return null;
@@ -40,6 +44,10 @@ export function useCreateRun() {
             history: args.history?.length ? args.history : undefined,
             skillNames: args.skillNames?.length ? args.skillNames : undefined,
             conversationId: args.conversationId,
+            repository: args.repository,
+            idempotencyKey: args.idempotencyKey,
+            clientMessageId: args.clientMessageId,
+            resumeFromRunId: args.resumeFromRunId,
           }),
         });
         const contentType = res.headers.get("content-type") ?? "";

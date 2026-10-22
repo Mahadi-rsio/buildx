@@ -34,6 +34,10 @@ export interface ChatMessage {
   skillsReady?: boolean;
   /** Attached skills are still being preloaded. */
   skillsLoading?: boolean;
+  /** Local-first message not yet reconciled with the server run. */
+  optimistic?: boolean;
+  /** Optimistic message accepted into the queue behind the active run. */
+  queued?: boolean;
 }
 
 /** Build a chat-shaped view from a run task + append-only events. */

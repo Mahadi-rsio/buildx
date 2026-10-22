@@ -79,6 +79,8 @@ export async function POST(request: Request): Promise<Response> {
       maxSteps: parsed.data.maxSteps ?? config.maxSteps,
       contextWindowTokens: parsed.data.contextWindow,
       history: parsed.data.history,
+      repository: parsed.data.repository,
+      resumeFromRunId: parsed.data.resumeFromRunId,
       skillNames: parsed.data.skillNames,
       conversationId: parsed.data.conversationId,
       idempotencyKey: parsed.data.idempotencyKey,

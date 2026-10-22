@@ -17,6 +17,7 @@ import type {
 } from "./index";
 import {
   GitError,
+  taskBranchName,
   validateBranchName,
   validateRepoFile,
   validateRemoteName,
@@ -188,6 +189,76 @@ function isGitError(code: string) {
   return (error: unknown) =>
     error instanceof GitError && error.code === code;
 }
+
+test("taskBranchName builds a stable, validated task branch", () => {
+  const name = taskBranchName({
+    runId: "b9f2c1a4-8e7d-4f0b-9a2c-1d3e5f7a9b0c",
+    title: "Fix: Dashboard TYPO!! (round 2)",
+  });
+  assert.match(name, /^buildx\/[a-z0-9-]+-[a-z0-9]{8}$/);
+  assert.ok(name.includes("dashboard-typo-round-2-"));
+  assert.equal(
+    taskBranchName({ runId: "b9f2c1a4-8e7d-4f0b-9a2c-1d3e5f7a9b0c", title: "Fix" }),
+    taskBranchName({ runId: "b9f2c1a4-8e7d-4f0b-9a2c-1d3e5f7a9b0c", title: "Fix" }),
+    "same run + title always yields the same branch (resume-stable)",
+  );
+});
+
+test("ensureTaskBranch creates the branch once and reuses it on resume", async () => {
+  const { root, sandbox, git } = await createRepo();
+  try {
+    await initialCommit(git, root);
+    const branch = taskBranchName({ runId: "abc12345", title: "Add feature" });
+
+    const created = await git.ensureTaskBranch({ path: ".", branch });
+    assert.equal(created.isRepo, true);
+    assert.equal(created.created, true);
+    assert.equal(created.reused, false);
+    assert.equal((await git.getRepository(".")).currentBranch, branch);
+
+    const again = await git.ensureTaskBranch({ path: ".", branch });
+    assert.equal(again.created, false);
+    assert.equal(again.reused, true, "second call reuses the existing branch");
+    assert.equal((await git.getRepository(".")).currentBranch, branch);
+  } finally {
+    await sandbox.destroy();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("ensureTaskBranch refuses a repo that is not on the requested branch", async () => {
+  const { root, sandbox, git } = await createRepo();
+  try {
+    await initialCommit(git, root);
+    const branch = taskBranchName({ runId: "def45678", title: "Other" });
+    await git.ensureTaskBranch({ path: ".", branch });
+    // Force the head elsewhere, then verify the mismatch is detected.
+    gitCli(root, ["switch", "-q", "main"]);
+    const stale = await git.ensureTaskBranch({ path: ".", branch });
+    assert.equal(stale.reused, true, "switching back is verified and safe");
+    assert.equal((await git.getRepository(".")).currentBranch, branch);
+  } finally {
+    await sandbox.destroy();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("ensureTaskBranch reports non-repositories without creating one", async () => {
+  const root = await mkdtemp(join(tmpdir(), "buildx-git-norepo-"));
+  const sandbox = new LocalSandbox(root);
+  try {
+    const git = new WorkspaceGit(sandbox);
+    const result = await git.ensureTaskBranch({
+      path: ".",
+      branch: "buildx/whatever",
+    });
+    assert.equal(result.isRepo, false);
+    assert.equal(result.branch, null);
+  } finally {
+    await sandbox.destroy();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("repository summary lists branches and creates a feature branch from a base", async () => {
   const { root, sandbox, git } = await createRepo();

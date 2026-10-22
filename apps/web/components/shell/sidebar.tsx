@@ -12,7 +12,6 @@ import {
   Plug,
   Plus,
   Search,
-  Settings,
   Trash2,
   Pencil,
   X,
@@ -38,6 +37,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useRuns } from "@/hooks/use-runs";
+import { useSkillCount } from "@/hooks/use-skills";
 import { useConversationPrefs } from "@/hooks/use-conversation-prefs";
 import { prepareRunList, type RunListItem } from "@/lib/group-runs";
 import { formatAgo } from "@/lib/format";
@@ -136,6 +136,12 @@ function SidebarBody({
   const pathname = usePathname();
   const { runs, loading, error } = useRuns();
   const { prefs, rename, togglePin, hide } = useConversationPrefs();
+  const { count: skillCount } = useSkillCount();
+  const [mcpSummary, setMcpSummary] = useState<{
+    loading: boolean;
+    enabled: number;
+    errors: number;
+  }>({ loading: true, enabled: 0, errors: 0 });
   const [query, setQuery] = useState("");
   const [renaming, setRenaming] = useState<RunListItem | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -159,6 +165,34 @@ function SidebarBody({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const response = await fetch("/api/mcp/servers", { cache: "no-store" });
+        const data = (await response.json().catch(() => ({}))) as {
+          servers?: Array<{ enabled?: boolean; lastStatus?: string }>;
+        };
+        if (!alive) return;
+        const servers = Array.isArray(data.servers) ? data.servers : [];
+        setMcpSummary({
+          loading: false,
+          enabled: servers.filter((server) => server.enabled).length,
+          errors: servers.filter(
+            (server) => server.enabled && server.lastStatus === "error",
+          ).length,
+        });
+      } catch {
+        if (alive) {
+          setMcpSummary({ loading: false, enabled: 0, errors: 0 });
+        }
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   function renderItem(run: RunListItem) {
     const active = pathname === `/runs/${run.id}`;
     return (
@@ -178,28 +212,40 @@ function SidebarBody({
             href={`/runs/${run.id}`}
             onClick={onNavigate}
             aria-current={active ? "page" : undefined}
-            className="flex min-w-0 flex-1 items-center gap-2 py-1.5 pl-2.5 pr-8"
+            className="flex min-w-0 flex-1 flex-col items-start gap-0.5 py-1.5 pl-2.5 pr-8"
           >
-            <StatusDot status={run.status} />
-            <span
-              className={cn(
-                "min-w-0 flex-1 truncate text-[13px]",
-                active
-                  ? "font-medium text-foreground"
-                  : "text-foreground/80 group-hover:text-foreground",
-              )}
-            >
-              {run.title}
+            <span className="flex w-full min-w-0 items-center">
+              <StatusDot status={run.status} />
+              <span
+                className={cn(
+                  "min-w-0 flex-1 truncate text-[13px]",
+                  active
+                    ? "font-medium text-foreground"
+                    : "text-foreground/80 group-hover:text-foreground",
+                )}
+              >
+                {run.title}
+              </span>
+              <span
+                className={cn(
+                  "shrink-0 font-mono text-[10px] text-muted-foreground transition",
+                  active
+                    ? "opacity-100"
+                    : "opacity-0 group-hover:opacity-100",
+                )}
+              >
+                {formatAgo(run.updatedAt)}
+              </span>
             </span>
-            <span
-              className={cn(
-                "shrink-0 font-mono text-[10px] text-muted-foreground transition",
-                active
-                  ? "opacity-100"
-                  : "opacity-0 group-hover:opacity-100",
-              )}
-            >
-              {formatAgo(run.updatedAt)}
+            <span className="flex min-w-0 items-center gap-1 font-mono text-[10px] leading-none text-muted-foreground/70">
+              <span className="capitalize">{run.status.replace("_", " ")}</span>
+              <span className="text-muted-foreground/40">·</span>
+              <span className="min-w-0 flex-1 truncate">
+                {run.repository ?? "workspace"}
+                {run.taskBranch && run.repository
+                  ? ` (${run.taskBranch})`
+                  : ""}
+              </span>
             </span>
           </Link>
           <DropdownMenu>
@@ -399,20 +445,21 @@ function SidebarBody({
             <span>Usage</span>
           </button>
         </div>
-        <Link
-          href="/settings"
-          onClick={onNavigate}
-          aria-current={pathname === "/settings" ? "page" : undefined}
-          className={cn(
-            "mt-1.5 flex h-9 items-center gap-2 rounded-lg border px-2.5 text-xs transition",
-            pathname === "/settings"
-              ? "border-border bg-[var(--surface)] text-foreground"
-              : "border-transparent text-muted-foreground hover:border-border hover:bg-[var(--surface)] hover:text-foreground",
-          )}
-        >
-          <Settings className="size-3.5" />
-          <span>Settings</span>
-        </Link>
+        <div className="mt-1.5 flex items-center justify-between rounded-lg border border-border/60 bg-[var(--surface)]/50 px-2.5 py-1.5 font-mono text-[10px] text-muted-foreground/80">
+          <span className="inline-flex items-center gap-1">
+            <Plug className="size-3" />
+            {mcpSummary.loading
+              ? "MCP…"
+              : `${mcpSummary.enabled} MCP server${mcpSummary.enabled === 1 ? "" : "s"}`}
+          </span>
+          {mcpSummary.errors > 0 ? (
+            <span className="text-destructive">!{mcpSummary.errors}</span>
+          ) : null}
+          <span className="inline-flex items-center gap-1">
+            <BookOpen className="size-3" />
+            {skillCount} skills
+          </span>
+        </div>
       </div>
 
       <RenameDialog

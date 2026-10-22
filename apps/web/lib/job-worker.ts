@@ -193,6 +193,10 @@ export async function processNextRun(deps: WorkerDeps): Promise<boolean> {
 
     await deps.startRun(run);
 
+    // A paused run intentionally released its lease and will be requeued by
+    // the ask_user answer endpoint. Do not fence or finalize it here.
+    if (run.status === "waiting_input") return true;
+
     // `startRun` can return without a terminal transition only when its
     // early-abort guard fired. If the lease was lost mid-run, the reclaiming
     // worker owns the row — refuse to finalize as a stale owner. Otherwise

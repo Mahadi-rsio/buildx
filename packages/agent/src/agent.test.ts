@@ -294,6 +294,48 @@ before(async () => {
         }
       }
 
+      if (userText.startsWith("ask-user-task")) {
+        if (!hasToolResult) {
+          send(
+            chunk(
+              {
+                role: "assistant",
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "call_ask",
+                    type: "function",
+                    function: {
+                      name: "ask_user",
+                      arguments: JSON.stringify({
+                        question: "Proceed?",
+                        options: [{ id: "yes", label: "Yes" }],
+                      }),
+                    },
+                  },
+                ],
+              },
+              null,
+            ),
+          );
+          send(chunk({}, "tool_calls"));
+        } else {
+          send(chunk({ role: "assistant", content: "Answered and finished" }, null));
+          send(chunk({}, "stop"));
+        }
+        send({
+          id: "chatcmpl-test",
+          object: "chat.completion.chunk",
+          created: Math.floor(Date.now() / 1000),
+          model,
+          choices: [],
+          usage: { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 },
+        });
+        res.write("data: [DONE]\n\n");
+        res.end();
+        return;
+      }
+
       if (!hasToolResult) {
         send(
           chunk(
@@ -510,7 +552,7 @@ test("runTask executes a tool call, writes a file, and streams events", async ()
         (event) =>
           event.type === "file_change" &&
           event.data.path === "hello.txt" &&
-          event.data.change === "write",
+          event.data.change === "create",
       ),
       "expected a file_change event for the written file",
     );
@@ -527,6 +569,124 @@ test("runTask executes a tool call, writes a file, and streams events", async ()
     if (last?.type === "status") {
       assert.equal(last.data.status, "completed");
     }
+  } finally {
+    await sandbox.destroy();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("ask_user replays a checkpointed approvalAnswer instead of pausing again", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "buildx-agent-ask-"));
+  const sandbox = new TestSandbox({ rootDir: dir });
+  await sandbox.start();
+  const events: RunEvent[] = [];
+  try {
+    const result = await runTask({
+      task: "ask-user-task",
+      sandbox,
+      model: "gpt-4o-mini",
+      apiKey: "test-key",
+      baseURL,
+      checkpoint: {
+        version: 1,
+        history: [],
+        completedSteps: 0,
+        todos: [],
+        approvalAnswer: {
+          toolCallId: "call_ask",
+          question: "Proceed?",
+          answer: "yes",
+        },
+      },
+      onEvent: (event) => {
+        events.push({ ...event, id: events.length + 1, runId: "run-ask" });
+      },
+    });
+
+    assert.equal(result.status, "completed", "the stored answer lets the run finish");
+    assert.ok(
+      events.some(
+        (event) =>
+          event.type === "tool_result" &&
+          event.data.toolName === "ask_user" &&
+          (event.data.output as { answer?: string })?.answer === "yes",
+      ),
+      "the replayed answer reaches the model as a tool result",
+    );
+  } finally {
+    await sandbox.destroy();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("ask_user without a stored answer pauses with waiting_input", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "buildx-agent-ask-pause-"));
+  const sandbox = new TestSandbox({ rootDir: dir });
+  await sandbox.start();
+  const events: RunEvent[] = [];
+  try {
+    const result = await runTask({
+      task: "ask-user-task",
+      sandbox,
+      model: "gpt-4o-mini",
+      apiKey: "test-key",
+      baseURL,
+      onEvent: (event) => {
+        events.push({ ...event, id: events.length + 1, runId: "run-ask-pause" });
+      },
+    });
+
+    assert.equal(result.status, "waiting_input");
+    assert.ok(
+      events.some(
+        (event) =>
+          event.type === "approval" && event.data.status === "pending",
+      ),
+      "the pending question is emitted for the UI",
+    );
+  } finally {
+    await sandbox.destroy();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("write_file refuses existing files unless overwrite is set", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "buildx-agent-write-guard-"));
+  const sandbox = new TestSandbox({ rootDir: dir });
+  await sandbox.start();
+  try {
+    await writeFile(join(dir, "existing.txt"), "original\n", "utf8");
+    const changes: unknown[] = [];
+    const tools = buildTools(sandbox, {
+      onFileChange: (change) => {
+        changes.push(change);
+      },
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const opts: any = { messages: [], toolCallId: "write-guard" };
+
+    await assert.rejects(
+      tools.write_file.execute(
+        { path: "existing.txt", content: "clobbered\n" },
+        opts,
+      ),
+      /already exists/,
+      "overwriting without the flag is rejected",
+    );
+    assert.equal(
+      await readFile(join(dir, "existing.txt"), "utf8"),
+      "original\n",
+      "the original content is untouched",
+    );
+
+    const replaced = (await tools.write_file.execute(
+      { path: "existing.txt", content: "new version\n", overwrite: true },
+      opts,
+    )) as { path: string; bytes: number };
+    assert.equal(replaced.path, "existing.txt");
+    assert.deepEqual(changes, [
+      { path: "existing.txt", change: "write" },
+    ]);
   } finally {
     await sandbox.destroy();
     await rm(dir, { recursive: true, force: true });
@@ -956,7 +1116,7 @@ test("search, todo, and file-change tools work on TestSandbox", async () => {
       { path: "src/new.ts", content: "export const x = 1;\n" },
       opts,
     );
-    assert.deepEqual(changes, [{ path: "src/new.ts", change: "write" }]);
+    assert.deepEqual(changes, [{ path: "src/new.ts", change: "create" }]);
   } finally {
     await sandbox.destroy();
     await rm(dir, { recursive: true, force: true });

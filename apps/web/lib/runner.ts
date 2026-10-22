@@ -1,17 +1,24 @@
 import { randomUUID } from "node:crypto";
 import { runTask } from "@buildx/agent";
-import type { Sandbox } from "@buildx/sandbox";
+import { taskBranchName, WorkspaceGit, type Sandbox } from "@buildx/sandbox";
 import {
   envStatus,
   isTerminalStatus,
   providerEndpoint,
   resolveModelProvider,
+  type AgentCheckpoint,
 } from "@buildx/shared";
-import { getDb, isRunCancelled, readRunControl } from "@buildx/db";
+import {
+  getDb,
+  isRunCancelled,
+  pauseWaitingInput,
+  readRunControl,
+} from "@buildx/db";
 import {
   appendEvent,
   finishRun,
   flushAppends,
+  persistCheckpoint,
   persistStats,
   type StoredRun,
   type TerminalRunStatus,
@@ -216,6 +223,8 @@ export async function startRun(run: StoredRun): Promise<void> {
   try {
     await sandbox.start();
 
+    const checkpoint = run.checkpoint as AgentCheckpoint | undefined;
+    const existingBranch = checkpoint?.taskBranch ?? run.taskBranch;
     const result = await runTask({
       task: run.task,
       history: run.history,
@@ -240,6 +249,26 @@ export async function startRun(run: StoredRun): Promise<void> {
         getAuth: (owner) => getGitHubToolAuth(run.userId, owner),
       },
       selectedSkills: run.skillNames,
+      checkpoint,
+      repository: run.repository,
+      taskBranch: existingBranch,
+      // Persist the last valid checkpoint on stop / ask_user / interrupt so a
+      // later message in this session can resume without losing progress.
+      onCheckpoint: async (next) => {
+        await persistCheckpoint(run, next);
+      },
+      // The first mutation creates/reuses a local task branch. Pre-existing
+      // changes are preserved by `git switch`; we never reset or commit them.
+      onBeforeMutate: async () => {
+        const git = new WorkspaceGit(sandbox);
+        const branch =
+          existingBranch ??
+          taskBranchName({ runId: run.id, title: run.task });
+        const ensured = await git.ensureTaskBranch({ path: ".", branch });
+        if (!ensured.isRepo || !ensured.branch) return undefined;
+        run.taskBranch = ensured.branch;
+        return ensured.branch;
+      },
       // Reserve one unit before every agent step, including each tool-loop
       // iteration. Provider retries are disabled; LiteLLM's `order` failover
       // may try another upstream after a 429/5xx within the same reservation.
@@ -292,6 +321,25 @@ export async function startRun(run: StoredRun): Promise<void> {
     }
     run.stats = { steps: result.steps, usage: result.usage };
     await persistStats(run);
+
+    // ask_user pauses the run without releasing its conversation. Persist the
+    // waiting state and drop the lease so the answer endpoint can requeue it.
+    if (result.status === "waiting_input" && run.leaseId) {
+      const paused = await pauseWaitingInput(getDb(), {
+        runId: run.id,
+        leaseId: run.leaseId,
+        fencingToken: run.fencingToken,
+      });
+      if (paused) {
+        run.status = "waiting_input";
+        run.leaseId = undefined;
+        run.fencingToken = undefined;
+        run.leaseExpiresAt = undefined;
+        run.updatedAt = Date.now();
+        return;
+      }
+    }
+
     const finalStatus =
       run.runtime.controller.signal.aborted || result.status === "cancelled"
         ? "cancelled"

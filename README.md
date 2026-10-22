@@ -13,7 +13,7 @@
 3. A Worker picks it up, spins up an **Upstash Box** microVM, and runs the AI agent loop.
 4. The agent writes code, runs shell commands, executes tests, and debugs — all inside the isolated sandbox.
 5. Every step streams to the dashboard in real time via SSE. Browser disconnection does not stop execution.
-6. Results land in Neon PostgreSQL; artifacts in Cloudflare R2.
+6. Results land in Neon PostgreSQL; artifacts in Cloudflare R2 (or MinIO locally).
 
 ---
 
@@ -31,11 +31,12 @@ Cloudflare Workers (Next.js 16 App Router via @opennextjs/cloudflare)
   │                            quotas, leases, transactional outbox
   │
   ├─ Cloudflare R2             large artifacts, snapshots, build logs
+  │   (local dev: MinIO via docker compose)
   │
   ├─ Cloudflare KV             disposable cache only (TTL ≥ 60 s)
   │
   └─ Upstash Box ──────────── sole production sandbox (isolated microVM)
-                               shell, file ops, builds, tests, cancellation
+                   shell, file ops, builds, tests, cancellation
 ```
 
 | Layer | Service |
@@ -44,7 +45,7 @@ Cloudflare Workers (Next.js 16 App Router via @opennextjs/cloudflare)
 | Async job dispatch | Cloudflare Queues + Dead-Letter Queue |
 | Transactional state | Neon PostgreSQL (Drizzle ORM, `@neondatabase/serverless`) |
 | Sandbox execution | Upstash Box (microVM, isolated per run) |
-| Artifact storage | Cloudflare R2 |
+| Artifact storage | Cloudflare R2 (production); MinIO (local dev) |
 | Disposable cache | Cloudflare KV |
 | Live event stream | SSE — `Last-Event-ID` replay, 15 s heartbeats, 64 KB bounds |
 
@@ -54,7 +55,7 @@ Cloudflare Workers (Next.js 16 App Router via @opennextjs/cloudflare)
 
 ```
 buildx/
-├── apps/
+├ apps/
 │   └── web/                     Next.js 16 dashboard + API + Worker entry
 │       ├── app/api/             REST + SSE endpoints
 │       ├── lib/
@@ -65,14 +66,20 @@ buildx/
 │       ├── worker/index.ts      Custom Worker entry (HTTP + Queue consumer)
 │       └── wrangler.jsonc       Wrangler bindings & resource config
 │
-├── packages/
-│   ├── agent/                   AI agent loop (AI SDK 7, tool harness)
-│   ├── db/                      Drizzle schema, transitions, outbox, leases
+├ packages/
+│   ├── agent/                   AI agent loop (AI SDK 7, tool harness, skills, MCP)
+│   ├── db/                      Drizzle schema, transitions, outbox, leases, auth
 │   ├── sandbox/                 Sandbox interface + BoxSandbox (Upstash Box)
 │   ├── shared/                  RunEvent model, Zod schemas, loadEnv()
-│   └── storage/                 Storage interface (R2/S3)
+│   └── storage/                 Storage interface (R2/MinIO), presign ops
 │
-├── CLOUDFLARE_DEPLOYMENT.md     Full ops guide (provision → deploy → rollback)
+├ scripts/
+│   └── init-storage.ts          Idempotent CreateBucket for buildx-workspaces
+│
+├ infra/
+│   └── docker-compose.yml       Postgres + MinIO + LiteLLM for local dev
+│
+├ CLOUDFLARE_DEPLOYMENT.md     Full ops guide (provision → deploy → rollback)
 └── .env.example                 All environment variables with descriptions
 ```
 
@@ -88,6 +95,7 @@ buildx/
 | Cloudflare account | Workers, Queues, R2, KV enabled |
 | Neon account | PostgreSQL project + pooled connection string |
 | Upstash account | Box API key |
+| Docker | for local dev (Postgres, MinIO, LiteLLM) |
 
 ---
 
@@ -104,10 +112,20 @@ cp .env.example apps/web/.env.local
 # Edit apps/web/.env.local — at minimum:
 #   DATABASE_URL, LITELLM_API_KEY, UPSTASH_BOX_API_KEY, BETTER_AUTH_SECRET
 
-# 3. Run database migrations
-pnpm --filter @buildx/db exec drizzle-kit push
+# 3. Start the infra (Postgres + MinIO + LiteLLM)
+pnpm infra:up
+# → Postgres on 127.0.0.1:5432
+# → MinIO on 127.0.0.1:9000 (API) / 9001 (console)
+# → LiteLLM proxy on 127.0.0.1:4000
 
-# 4. Start the dev server
+# 4. Run database migrations
+pnpm --filter @buildx/db exec drizzle-king push
+# or: pnpm --filter @buildx/db migrate
+
+# 5. Initialize storage buckets
+pnpm storage:init
+
+# 6. Start the dev server
 pnpm dev
 # → http://localhost:3000
 ```
@@ -118,7 +136,7 @@ pnpm dev
 
 ## Key environment variables
 
-See [`.env.example`](.env.example) for the full annotated list.
+See [` .env.example`](.env.example) for the full annotated list.
 
 | Variable | Required | Description |
 |---|---|---|

@@ -495,3 +495,33 @@ test("transient DB error within gracePeriodMs does not fence worker", async () =
   control.abort();
   await worker;
 });
+
+test("startRun pausing on waiting_input returns without finalizing", async () => {
+  resetWorkerForTest();
+  const calls: string[] = [];
+  const run = fakeRun();
+
+  const deps = makeDeps({
+    calls,
+    run,
+    claimCount: 1,
+    overrides: {
+      startRun: async (current: StoredRun) => {
+        calls.push("start");
+        current.status = "waiting_input";
+      },
+    },
+  });
+
+  const processed = await processNextRun(deps);
+  assert.equal(processed, true, "waiting_input is a processed, not idle, loop iteration");
+  assert.ok(calls.includes("start"), "startRun was invoked");
+  assert.ok(
+    !calls.some((c) => c.startsWith("finish")),
+    "a paused run is never finalized by the worker",
+  );
+  assert.ok(
+    !calls.includes("requeue"),
+    "a paused run keeps its paused status; only the answer endpoint requeues it",
+  );
+});
