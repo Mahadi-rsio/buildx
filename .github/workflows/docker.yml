@@ -55,13 +55,13 @@ jobs:
         with:
           images: ${{ env.IMAGE_NAME }}
           # Tag strategy:
-          #   - type=semver: detects semver tags (v1.0.0, v2.1.3) from push/release events
+          #   - type=ref: branch ref (master) → "master"
           #   - type=sha: SHA prefix for all builds
-          #   - type=template: release events → tag name (only for published releases)
+          #   - type=template: for release events, use tag name
           tags: |
-            type=semver
+            type=ref,format=short_ref
             type=sha,format=short,prefix=${{ github.sha }}-
-            # For release events (published), use the full tag name
+            # For release events (published), override with the tag name
             type=template,format=raw,template={{tag}},event=release
 
       - name: Build and push Docker image
