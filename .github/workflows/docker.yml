@@ -54,10 +54,13 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.IMAGE_NAME }}
+          # For push: use run number suffix; for release: use tag name; for dispatch: use run number
           tags: |
             type=ref,format=short_ref,suffix=-${{ github.run_number }}
             type=ref,format=default,branch={{.Branch}}
             type=sha,format=short,prefix=${{ github.sha }}-
+            # For release events, use the full tag name as version
+            type=template,template={{tag}},event=release
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
