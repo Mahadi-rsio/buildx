@@ -24,6 +24,7 @@ RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
 
 # Full sources (node_modules / .next are excluded via .dockerignore and survive
 # the merge, so the install above is preserved).
+COPY tsconfig.base.json ./
 COPY apps/web apps/web
 COPY packages packages
 
