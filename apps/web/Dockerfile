@@ -31,8 +31,8 @@ RUN apk add --no-cache libstdc++
 # Create non-root user (same as builder)
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 
-# Copy built output from builder
-COPY --from=builder /app/apps/web/.next ./apps/web/.next
+# Copy built output from builder (standalone output mode)
+COPY --from=builder /app/apps/web/.next/standalone ./apps/web/.next
 COPY --from=builder /app/apps/web/node_modules ./apps/web/node_modules
 COPY --from=builder /app/apps/web/package.json ./apps/web/package.json
 

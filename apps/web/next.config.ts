@@ -16,6 +16,9 @@ for (const key of ["AGENT_MODEL", "AGENT_MAX_STEPS"]) {
 const nextConfig: NextConfig = {
   // Keep the dev overlay out of screenshots (and out of the chat surface).
   devIndicators: false,
+  // Required for Docker deployment (standalone output produces minimal .next/standalone
+  // directory with only necessary runtime files and dependencies).
+  output: "standalone",
   // Workspace packages export TypeScript source (`./src/index.ts`), so Next must
   // transpile them before bundling.
   transpilePackages: [
