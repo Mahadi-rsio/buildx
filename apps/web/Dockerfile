@@ -28,16 +28,13 @@ COPY tsconfig.base.json ./
 COPY apps/web apps/web
 COPY packages packages
 
-# Build-time placeholders only. Better Auth and the DB client validate their env
-# at import time, and Next evaluates route modules during page-data collection.
-# These values stay in this discarded builder stage — the runner is a fresh FROM,
-# so the real values are supplied at runtime via `docker run -e ...`.
-ARG BETTER_AUTH_SECRET=build-time-placeholder
-ARG DATABASE_URL=postgres://buildx:buildx@localhost:5432/buildx
-ENV BETTER_AUTH_SECRET=$BETTER_AUTH_SECRET \
-    DATABASE_URL=$DATABASE_URL
-
+# Better Auth and the DB client validate their env at import time, and Next
+# evaluates route modules during page-data collection. The build only needs
+# placeholders (not the real secrets); the runner is a fresh FROM stage, so real
+# values are supplied at runtime via `docker run -e ...`.
 RUN --mount=type=cache,id=nextjs,target=/repo/apps/web/.next/cache \
+    BETTER_AUTH_SECRET=build-time-placeholder \
+    DATABASE_URL=postgres://buildx:buildx@localhost:5432/buildx \
     pnpm --filter @buildx/web build
 
 # ---- Runner ----------------------------------------------------------------
