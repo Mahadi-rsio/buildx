@@ -8,6 +8,7 @@ export const SUMMARIZE_TOOL_NAME = "summarize_context";
 
 /** Truncate the summary to keep the compacted prompt well under budget. */
 const MAX_SUMMARY_CHARS = 12_000;
+const RECENT_MESSAGES_TO_KEEP = 8;
 
 export interface ContextBudgetOptions {
   /** Token budget. Set to 0 or Infinity to disable compaction. */
@@ -30,8 +31,10 @@ export interface ContextBudget {
   /** Compose into `prepareStep`; call once per step. */
   prepareStep: (context: {
     messages: ModelMessage[];
+    system?: string;
+    tools?: ToolSet;
   }) => Promise<PrepareStepResult<ToolSet, never> | undefined>;
-  /** Estimated tokens in the latest message set seen by `prepareStep`. */
+  /** Estimated tokens in the latest fully assembled request seen by `prepareStep`. */
   estimatedTokens(): number;
   readonly limitTokens: number;
   /** Number of times the transcript has been compacted so far. */
@@ -124,8 +127,6 @@ function toolSchemaText(definition: unknown): string {
   } catch {
     // fall through to the shape heuristics below
   }
-  // AI SDK / zod don't serialize to JSON directly; their `.shape` keys are a
-  // decent proxy for schema size. Plain-object schemas still stringify fully.
   if (candidate.shape && typeof candidate.shape === "object") {
     return JSON.stringify(Object.keys(candidate.shape));
   }
@@ -140,10 +141,8 @@ function toolSchemaText(definition: unknown): string {
 
 /**
  * Approximate the token count of a fully assembled upstream request: system
- * prompt + transcript + tool schemas (workspace tools and MCP-discovered tools
- * alike). Only the transcripts are guaranteed present, so missing inputs are
- * treated as zero. Like `estimateMessageTokens` this is a chars/4 heuristic,
- * not a tokenizer.
+ * prompt + transcript + tool schemas. This remains a conservative heuristic;
+ * provider-reported usage is the source of truth for actual model tokens.
  */
 export function estimateRequestTokens(context: {
   system?: string;
@@ -192,10 +191,10 @@ export function digestMessages(messages: ModelMessage[]): string {
 }
 
 /**
- * Implements the context-window budget. When `prepareStep` sees the transcript
- * exceed the budget it forces the model to call `summarize_context`; the next
- * step replaces the entire transcript with the summary (dropping the original
- * messages), so the run continues inside a fresh, small context window.
+ * Implements the context-window budget. The threshold is evaluated against the
+ * assembled request (system + messages + tool definitions), not just messages.
+ * Compaction preserves a bounded recent tail verbatim and summarizes the older
+ * transcript so active work and the latest tool results are not discarded.
  */
 export function createContextBudget(
   options: ContextBudgetOptions = {},
@@ -203,10 +202,13 @@ export function createContextBudget(
   const limitTokens = options.limitTokens ?? DEFAULT_CONTEXT_BUDGET_TOKENS;
   let phase: "idle" | "pending" = "idle";
   let latestMessages: ModelMessage[] = [];
+  let latestSystem: string | undefined;
+  let latestTools: ToolSet | undefined;
   let summary: string | undefined;
-  let snapshotChars = 0;
+  let snapshotTokens = 0;
   let snapshotCount = 0;
   let compactedCount = 0;
+  let latestEstimatedTokens = 0;
 
   const produceSummary = async (
     messages: ModelMessage[],
@@ -234,44 +236,58 @@ export function createContextBudget(
 
   const prepareStep = async (context: {
     messages: ModelMessage[];
+    system?: string;
+    tools?: ToolSet;
   }): Promise<PrepareStepResult<ToolSet, never> | undefined> => {
     latestMessages = context.messages;
+    latestSystem = context.system;
+    latestTools = context.tools;
+
     if (!Number.isFinite(limitTokens) || limitTokens <= 0) return undefined;
 
     if (phase === "pending") {
       if (summary) {
+        const recent = latestMessages.slice(-RECENT_MESSAGES_TO_KEEP);
         const compacted: ModelMessage[] = [
           {
             role: "user",
             content:
               "The earlier conversation was compacted to stay within the context " +
-              "budget. Here is the summary of everything that happened before this " +
-              `point:\n\n${summary}\n\nContinue the task from here without ` +
-              "repeating completed work.",
+              "budget. Here is the summary of everything that happened before the " +
+              `recent turns:\n\n${summary}\n\nContinue the task without repeating ` +
+              "completed work. The recent turns below are authoritative.",
           },
+          ...recent,
         ];
         const info = {
           summary,
           messagesBefore: snapshotCount,
-          estimatedTokensBefore: Math.ceil(snapshotChars / 4),
+          estimatedTokensBefore: snapshotTokens,
         };
         summary = undefined;
         phase = "idle";
         compactedCount += 1;
         latestMessages = compacted;
+        latestEstimatedTokens = estimateRequestTokens({
+          system: latestSystem,
+          messages: compacted,
+          tools: latestTools,
+        });
         await options.onCompacted?.(info);
         return { messages: compacted };
       }
-      // The model did not produce a summary (it may have ended the run); stop
-      // forcing compaction so the loop can finish normally.
       phase = "idle";
       return undefined;
     }
 
-    const tokens = estimateMessageTokens(context.messages);
+    const tokens = estimateRequestTokens({
+      system: context.system,
+      messages: context.messages,
+      tools: context.tools,
+    });
+    latestEstimatedTokens = tokens;
     if (tokens > limitTokens) {
-      summary = undefined;
-      snapshotChars = messageChars(context.messages);
+      snapshotTokens = tokens;
       snapshotCount = context.messages.length;
       phase = "pending";
       return { toolChoice: { type: "tool", toolName: SUMMARIZE_TOOL_NAME } };
@@ -282,7 +298,7 @@ export function createContextBudget(
   return {
     summarizeTool,
     prepareStep,
-    estimatedTokens: () => estimateMessageTokens(latestMessages),
+    estimatedTokens: () => latestEstimatedTokens,
     limitTokens,
     get compactedCount() {
       return compactedCount;
