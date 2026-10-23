@@ -8,6 +8,7 @@ export async function register(): Promise<void> {
     process.env.NEXT_RUNTIME === "nodejs" &&
     !process.env.BUILDX_DISABLE_LOCAL_WORKER
   ) {
-    await import("./instrumentation-node");
+    const { register } = await import("./instrumentation-node");
+    register();
   }
 }
