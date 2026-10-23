@@ -840,6 +840,17 @@ const ts = (): number => Date.now();
       }
       stepCount += 1;
 
+      if (stepCount >= options.maxSteps ?? DEFAULT_MAX_STEPS) {
+        status = "cancelled";
+        failureMessage = `Agent exceeded maximum of ${options.maxSteps ?? DEFAULT_MAX_STEPS} steps`;
+        await emit({
+          type: "error",
+          data: { message: failureMessage },
+          ts: ts(),
+        });
+        break;
+      }
+
       if (status === "waiting_input") break;
     }
 

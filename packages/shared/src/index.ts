@@ -222,6 +222,8 @@ export interface UsagePayload {
   totalTokens: number;
   /** Context-window stats for the most recent request (optional, live). */
   context?: ContextUsagePayload;
+  /** UI indicator showing the current execution phase. */
+  uiIndicator?: UiIndicator;
 }
 
 export type WorkspaceEventStatus =
@@ -229,6 +231,24 @@ export type WorkspaceEventStatus =
   | "workspace.ready"
   | "workspace.archiving"
   | "workspace.archived";
+
+/** UI indicator showing the current execution phase. */
+export type UiIndicator =
+  | "preparing_workspace"
+  | "analyzing_codebase"
+  | "searching_code"
+  | "thinking"
+  | "running_tool"
+  | "updating_code_index"
+  | "verifying_changes"
+  | "saving_progress"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "graphify_ready"
+  | "graphify_searching"
+  | "graphify_indexing"
+  | "code_search_rg_fallback";
 
 export interface WorkspacePayload {
   status: WorkspaceEventStatus;

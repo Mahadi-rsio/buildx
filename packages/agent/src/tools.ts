@@ -1,4 +1,5 @@
 import type { Sandbox } from "@buildx/sandbox";
+import { searchCode } from "./graphify";
 import type { FileChangePayload, TodoItem } from "@buildx/shared";
 import { tool } from "ai";
 import { z } from "zod";
@@ -1198,3 +1199,89 @@ export function buildTools(sandbox: Sandbox, hooks: ToolHooks = {}) {
 }
 
 export type AgentTools = ReturnType<typeof buildTools>;
+
+/**
+ * Search code using Graphify first, then fall back to ripgrep ("rg").
+ * Modes:
+ *   "auto"     - Try Graphify first, validate results, fall back to "rg" when empty/unusable
+ *   "graph"    - Prefer Graphify, "rg" fallback if no useful matches
+ *   "literal"  - rg exact-text search
+ *   "regex"    - rg regex search with safe limits
+ *
+ * The output distinguishes Graphify vs "rg" results, and "auto" mode
+ * validates Graphify results and falls back when empty/unusable.
+ */
+export const code_search = tool({
+  description:
+    "Search code with Graphify-first strategy and ripgrep fallback. Modes: 'auto' (Graphify first, rg fallback if no useful matches), 'graph' (prefer Graphify, rg fallback if no useful matches), 'literal' (rg exact-text), 'regex' (rg regex with safe limits). Distinguishes Graphify vs rg results in output.",
+  inputSchema: z.object({
+    query: z.string().min(1).describe("Search query"),
+    mode: z
+      .enum(["auto", "graph", "literal", "regex"])
+      .default("auto")
+      .describe("Search mode: 'auto' tries Graphify first, 'graph' prefers Graphify with rg fallback, 'literal' does rg exact-text, 'regex' does rg regex"),
+    maxResults: z
+      .number()
+      .int()
+      .positive()
+      .max(100)
+      .default(20)
+      .describe("Maximum results to return"),
+  }),
+  execute: async (input, options) => {
+    if (options?.abortSignal?.aborted) {
+      throw new Error("Tool execution aborted: run cancelled");
+    }
+
+    const { query, mode, maxResults } = input;
+
+    // Use Graphify search with ripgrep fallback
+    const searchResult = searchCode(query, maxResults);
+
+    // Distinguish Graphify vs rg results in the output
+    const isGraphify = searchResult.mode === "graphify";
+
+    if (isGraphify) {
+      // Graphify results: files with labels/community info
+      const graphifyResults = searchResult.results.map((r, i) => ({
+        file: r.file,
+        content: r.content || "",
+        relevance: r.relevance,
+        source: "graphify",
+        toolCallId: `code_search:${i}`,
+      }));
+
+      return {
+        toolCallId: graphifyResults[0]?.toolCallId || "code_search",
+        toolName: "code_search",
+        input: { query, mode, maxResults },
+        output: {
+          mode: "graphify",
+          results: graphifyResults,
+          total: graphifyResults.length,
+        },
+      };
+    } else {
+      // rg results
+      const rgResults = searchResult.results.map((r, i) => ({
+        file: r.file,
+        line: r.line,
+        content: r.content || "",
+        relevance: r.relevance,
+        source: "rg",
+        toolCallId: `code_search:${i}`,
+      }));
+
+      return {
+        toolCallId: rgResults[0]?.toolCallId || "code_search",
+        toolName: "code_search",
+        input: { query, mode, maxResults },
+        output: {
+          mode: "rg",
+          results: rgResults,
+          total: rgResults.length,
+        },
+      };
+    }
+  },
+});

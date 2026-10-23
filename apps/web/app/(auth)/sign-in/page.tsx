@@ -1,7 +1,7 @@
 import { Suspense } from "react";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { auth } from "@/lib/auth/auth";
+import { getAuth } from "@/lib/auth/auth";
 import {
   Card,
   CardContent,
@@ -14,6 +14,7 @@ import { SignInForm } from "@/components/auth/sign-in-form";
 export const dynamic = "force-dynamic";
 
 export default async function SignInPage() {
+  const auth = await getAuth();
   const session = await auth.api.getSession({ headers: await headers() });
   if (session) {
     redirect("/");

@@ -667,10 +667,12 @@ test("write_file refuses existing files unless overwrite is set", async () => {
     const opts: any = { messages: [], toolCallId: "write-guard" };
 
     await assert.rejects(
-      tools.write_file.execute(
-        { path: "existing.txt", content: "clobbered\n" },
-        opts,
-      ),
+      async () => {
+        await tools.write_file.execute(
+          { path: "existing.txt", content: "clobbered\n" },
+          opts,
+        );
+      },
       /already exists/,
       "overwriting without the flag is rejected",
     );

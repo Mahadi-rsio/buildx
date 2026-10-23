@@ -7,6 +7,9 @@ import {
   providerEndpoint,
   resolveModelProvider,
   type AgentCheckpoint,
+  type RunStatus,
+  type UiIndicator,
+  type WorkspaceEventStatus,
 } from "@buildx/shared";
 import {
   getDb,
@@ -279,37 +282,93 @@ export async function startRun(run: StoredRun): Promise<void> {
         await quota.markDispatched(run.userId, attemptId);
       },
       onEvent: (event) => {
-        // Live usage event: keep the in-memory stats current and persist them so
-        // a refresh mid-run still shows real tokens/steps.
-        if (event.type === "usage") {
-          run.stats = {
-            steps: event.data.steps,
-            usage: {
-              inputTokens: event.data.inputTokens,
-              outputTokens: event.data.outputTokens,
-              totalTokens: event.data.totalTokens,
-            },
-            ...(event.data.context
-              ? { context: event.data.context }
-              : {}),
-          };
-          void persistStats(run).catch((error) => {
-            console.error(
-              `[buildx-worker] stats persist failed (run ${run.id})`,
-              error,
-            );
-          });
-        }
-        // Fire-and-forget: the append chain serializes per-run writes. Errors
-        // are surfaced (a failed append must not silently drop the event
-        // stream) without letting a transient failure abort execution.
-        void appendEvent(run, event).catch((error) => {
+      // Live usage event: keep the in-memory stats current and persist them so
+      // a refresh mid-run still shows real tokens/steps.
+      if (event.type === "usage") {
+        run.stats = {
+          steps: event.data.steps,
+          usage: {
+            inputTokens: event.data.inputTokens,
+            outputTokens: event.data.outputTokens,
+            totalTokens: event.data.totalTokens,
+          },
+          ...(event.data.context
+            ? { context: event.data.context }
+            : {}),
+        };
+        void persistStats(run).catch((error) => {
           console.error(
-            `[buildx-worker] event append failed (run ${run.id})`,
+            `[buildx-worker] stats persist failed (run ${run.id})`,
             error,
           );
         });
-      },
+      }
+
+      // Map event types to UI indicator messages
+      let indicatorMessage: string | undefined;
+      if (event.type === "status") {
+        const payload = event.data as { status: RunStatus; message?: string };
+        if (payload.status === "running") {
+          indicatorMessage = undefined;
+        } else if (payload.status === "completed") {
+          indicatorMessage = "Completed";
+        } else if (payload.status === "failed") {
+          indicatorMessage = payload.message ?? "Failed";
+        } else if (payload.status === "cancelled") {
+          indicatorMessage = "Cancelled";
+        } else if (payload.status === "waiting_input") {
+          indicatorMessage = "Waiting for input";
+        }
+      } else if (event.type === "text") {
+        indicatorMessage = undefined;
+      } else if (event.type === "tool_call") {
+        indicatorMessage = "Running tool";
+      } else if (event.type === "tool_result") {
+        indicatorMessage = undefined;
+      } else if (event.type === "terminal") {
+        indicatorMessage = undefined;
+      } else if (event.type === "file_change") {
+        indicatorMessage = undefined;
+      } else if (event.type === "todo") {
+        indicatorMessage = undefined;
+      } else if (event.type === "approval") {
+        indicatorMessage = undefined;
+      } else if (event.type === "error") {
+        indicatorMessage = event.data.message ?? "Error";
+      } else if (event.type === "workspace") {
+        const payload = event.data as {
+          status: WorkspaceEventStatus;
+          step?: string;
+          message?: string;
+        };
+        if (payload.status === "workspace.ready") {
+          indicatorMessage = "Workspace ready";
+        } else if (payload.status === "workspace.archiving") {
+          indicatorMessage = "Archiving workspace";
+        } else if (payload.status === "workspace.archived") {
+          indicatorMessage = "Workspace archived";
+        } else {
+          indicatorMessage = payload.step ?? payload.message;
+        }
+      } else if (event.type === "context") {
+        indicatorMessage = undefined;
+      }
+
+      // Fire-and-forget: the append chain serializes per-run writes. Errors
+      // are surfaced (a failed append must not silently drop the event
+      // stream) without letting a transient failure abort execution.
+      void appendEvent(run, event).catch((error) => {
+        console.error(
+          `[buildx-worker] event append failed (run ${run.id})`,
+          error,
+        );
+      });
+
+      // Update UI indicator if this event has a mapped message
+      if (indicatorMessage && run.runtime) {
+        run.runtime.uiIndicator = indicatorMessage as UiIndicator;
+      }
+    },
     });
 
     if (

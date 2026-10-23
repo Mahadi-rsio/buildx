@@ -4,6 +4,8 @@ import {
   DEFAULT_MODEL,
   isContextWindowTokens,
   isTerminalStatus,
+  UiIndicator,
+  type UsagePayload,
 } from "@buildx/shared";
 import type {
   AgentCheckpoint,
@@ -65,6 +67,10 @@ export interface RunRuntime {
   lostOwnership: boolean;
   /** Workspace lifecycle + quota state surfaced by the UI (transient view). */
   workspace: WorkspaceRuntime;
+  /** Live step/token accounting emitted while the agent loop is still running. */
+  usage?: UsagePayload;
+  /** UI indicator showing the current execution phase. */
+  uiIndicator?: UiIndicator;
   /** Run-start snapshot for the workspace diff (arcetecture §6). Capture is
    *  lazy: the first `GET /api/workspaces/:id/diff` fills this when missing. */
   baseline?: Baseline;

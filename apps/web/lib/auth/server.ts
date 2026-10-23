@@ -1,9 +1,10 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { auth } from "./auth";
+import { getAuth } from "./auth";
 
 /** Server-side session lookup (validates against the database). */
 export async function getSession(customHeaders?: Headers | Record<string, string>) {
+  const auth = await getAuth();
   const h = customHeaders ?? (await headers());
   return auth.api.getSession({ headers: h });
 }
