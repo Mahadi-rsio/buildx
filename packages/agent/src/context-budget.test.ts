@@ -24,7 +24,6 @@ test("estimateRequestTokens counts system, messages and tool schemas", () => {
   });
   assert.ok(Number.isInteger(estimate));
   assert.ok(estimate > 1, "estimate should exceed the floor");
-  // System + message content is ~60 chars => ~15 tokens; tool schema adds more.
   assert.ok(estimate >= 15, `expected >=15 tokens, got ${estimate}`);
 });
 
@@ -41,7 +40,7 @@ test("estimateMessageTokens grows with content and floors at 1", () => {
   assert.equal(estimateMessageTokens([]), 0);
   assert.equal(
     estimateMessageTokens([{ role: "user" as const, content: "a" }]),
-    3, // 1 content char + 8 overhead => 9 chars => ceil(9/4)
+    3,
   );
   const longer = estimateMessageTokens([
     { role: "user" as const, content: "x".repeat(100) },
@@ -49,30 +48,61 @@ test("estimateMessageTokens grows with content and floors at 1", () => {
   assert.ok(longer > 10);
 });
 
-test("compactedCount increments once per forced compaction", async () => {
+test("compactedCount increments once per forced compaction and keeps recent turns", async () => {
   const budget = createContextBudget({ limitTokens: 100 });
-  const longMessages = [
-    { role: "user" as const, content: "y".repeat(50_000) },
-    { role: "assistant" as const, content: "z".repeat(50_000) },
-  ];
-  // Over budget: forces the summarize tool.
-  const forced = await budget.prepareStep({ messages: longMessages });
+  const longMessages = Array.from({ length: 12 }, (_, index) => ({
+    role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
+    content: `${index}: ${"x".repeat(10_000)}`,
+  }));
+  const forced = await budget.prepareStep({
+    system: "A large stable system prompt",
+    messages: longMessages,
+    tools: {
+      read_file: {
+        description: "Read files",
+        inputSchema: z.object({ path: z.string() }),
+      },
+    },
+  });
   assert.ok(forced && forced.toolChoice, "expected a forced toolChoice");
   assert.equal(budget.compactedCount, 0);
   const beforeTokens = budget.estimatedTokens();
-  assert.ok(beforeTokens > 1000, "pre-compaction transcript is large");
+  assert.ok(beforeTokens > 1000, "pre-compaction request is large");
 
-  // Simulate the model producing a summary, then the next prepareStep
-  // replaces the transcript with the compacted form.
   await budget.summarizeTool.execute!(undefined as never, {} as never);
-  const compacted = await budget.prepareStep({ messages: longMessages });
+  const compacted = await budget.prepareStep({
+    system: "A large stable system prompt",
+    messages: longMessages,
+    tools: {
+      read_file: {
+        description: "Read files",
+        inputSchema: z.object({ path: z.string() }),
+      },
+    },
+  });
   assert.ok(compacted && compacted.messages, "expected compacted messages");
   assert.equal(budget.compactedCount, 1);
-  // The compacted replacement is far smaller than the original transcript.
+  assert.equal(compacted.messages.length, 9, "summary plus recent tail");
+  assert.match(String(compacted.messages.at(-1)?.content), /^11:/);
   assert.ok(
-    budget.estimatedTokens() < beforeTokens / 10,
+    budget.estimatedTokens() < beforeTokens,
     `expected compaction to shrink the estimate, got ${budget.estimatedTokens()}`,
   );
+});
+
+test("system and tool definitions can trigger compaction even with a small transcript", async () => {
+  const budget = createContextBudget({ limitTokens: 100 });
+  const result = await budget.prepareStep({
+    system: "s".repeat(300),
+    messages: [{ role: "user" as const, content: "tiny" }],
+    tools: {
+      huge_tool: {
+        description: "d".repeat(300),
+        inputSchema: z.object({ value: z.string().describe("v".repeat(300)) }),
+      },
+    },
+  });
+  assert.ok(result?.toolChoice, "assembled request should trigger compaction");
 });
 
 test("budget does not compact under the limit", async () => {
