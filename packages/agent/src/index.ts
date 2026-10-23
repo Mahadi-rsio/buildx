@@ -1289,10 +1289,10 @@ export async function runTask(options: RunTaskOptions): Promise<RunTaskResult> {
   try {
     // Replay earlier turns (including checkpoint history after stop/ask_user)
     // so a follow-up or resume keeps conversation context.
-    const resumeHistory =
-      options.checkpoint?.history?.length && !(options.history?.length)
-        ? options.checkpoint.history
-        : (options.history ?? []);
+    const resumeHistory = mergeResumeHistory(
+      options.checkpoint?.history,
+      options.history,
+    );
     const resumeNotes: string[] = [];
     if (
       options.checkpoint?.interruptedTool &&
