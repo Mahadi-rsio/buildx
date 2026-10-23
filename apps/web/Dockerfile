@@ -2,9 +2,14 @@
 
 # Build context is the repository root, because this is a pnpm workspace and
 # @buildx/web depends on the local packages (agent, db, sandbox, shared, storage).
+#
+# Deploy to Fly.io from the repo root:  fly deploy   (see ../../fly.toml, which
+# points `[build] dockerfile` at this file). Runtime secrets are supplied with
+# `fly secrets set`, never baked into the image.
 
 FROM node:22-alpine AS base
-RUN npm install -g pnpm@12.3.4
+ARG PNPM_VERSION=12.3.4
+RUN npm install -g pnpm@${PNPM_VERSION}
 WORKDIR /repo
 ENV NEXT_TELEMETRY_DISABLED=1
 
@@ -57,6 +62,16 @@ COPY --from=builder --chown=nextjs:nodejs /repo/apps/web/public ./apps/web/publi
 
 USER nextjs
 
+# Fly.io (and Docker) route traffic to this port; fly.toml `internal_port` must match.
 EXPOSE 3000
 
+# Fly sends SIGTERM on deploys/stops (see `kill_signal` in fly.toml); the Node
+# server and the in-process run worker shut down gracefully on it.
+STOPSIGNAL SIGTERM
+
+# Local `docker run` health probe; Fly uses the HTTP check in fly.toml instead.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD wget -qO- "http://127.0.0.1:${PORT}/api/config" >/dev/null || exit 1
+
+# Run node directly (no pnpm/npm wrapper) so signals reach the server process.
 CMD ["node", "apps/web/server.js"]
