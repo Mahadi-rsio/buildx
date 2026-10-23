@@ -29,6 +29,7 @@ import {
   type McpServerConfig,
 } from "./mcp";
 import { buildSystemPrompt } from "./prompt";
+import { mergeResumeHistory } from "./resume-history";
 import {
   buildGitHubTools,
   type GitHubToolsOptions,
@@ -653,10 +654,10 @@ const ts = (): number => Date.now();
   try {
     // Replay earlier turns (including checkpoint history after stop/ask_user)
     // so a follow-up or resume keeps conversation context.
-    const resumeHistory =
-      options.checkpoint?.history?.length && !(options.history?.length)
-        ? options.checkpoint.history
-        : (options.history ?? []);
+    const resumeHistory = mergeResumeHistory(
+      options.checkpoint?.history,
+      options.history,
+    );
     const resumeNotes: string[] = [];
     if (
       options.checkpoint?.interruptedTool &&
@@ -840,7 +841,7 @@ const ts = (): number => Date.now();
       }
       stepCount += 1;
 
-      if (stepCount >= options.maxSteps ?? DEFAULT_MAX_STEPS) {
+      if (stepCount >= (options.maxSteps ?? DEFAULT_MAX_STEPS)) {
         status = "cancelled";
         failureMessage = `Agent exceeded maximum of ${options.maxSteps ?? DEFAULT_MAX_STEPS} steps`;
         await emit({
@@ -1006,6 +1007,8 @@ function toText(value: unknown): string {
     return String(value);
   }
 }
+
+
 
 /**
  * Turn provider errors into actionable messages. Some routers (`auto` combos)
@@ -1286,10 +1289,10 @@ export async function runTask(options: RunTaskOptions): Promise<RunTaskResult> {
   try {
     // Replay earlier turns (including checkpoint history after stop/ask_user)
     // so a follow-up or resume keeps conversation context.
-    const resumeHistory =
-      options.checkpoint?.history?.length && !(options.history?.length)
-        ? options.checkpoint.history
-        : (options.history ?? []);
+    const resumeHistory = mergeResumeHistory(
+      options.checkpoint?.history,
+      options.history,
+    );
     const resumeNotes: string[] = [];
     if (
       options.checkpoint?.interruptedTool &&
