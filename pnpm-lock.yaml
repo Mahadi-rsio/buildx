@@ -136,7 +136,7 @@ importers:
         version: 4.0.1(supports-color@10.2.2)
       shadcn:
         specifier: ^4.21.5
-        version: 4.21.5(supports-color@10.2.2)
+        version: 4.21.5(@cfworker/json-schema@4.1.1)(supports-color@10.2.2)
       shiki:
         specifier: 4.5.0
         version: 4.5.0
@@ -159,6 +159,9 @@ importers:
       '@types/react-dom':
         specifier: ^19.2.6
         version: 19.3.0(@types/react@19.3.0)
+      '@upstash/box':
+        specifier: 0.7.10
+        version: 0.7.10(zod@4.6.7)
       tailwindcss:
         specifier: ^4.1.18
         version: 4.3.3
@@ -219,7 +222,7 @@ importers:
         version: 1.2.0
       drizzle-orm:
         specifier: ^0.45.4
-        version: 0.45.4(@cloudflare/workers-types@5.20261016.1)(@neondatabase/serverless@1.2.0)(@types/pg@8.23.1)(kysely@0.29.6)(pg@8.23.1)
+        version: 0.45.4(@cloudflare/workers-types@5.20261016.1)(@neondatabase/serverless@1.2.0)(@types/pg@8.23.1)(@upstash/redis@1.39.0)(kysely@0.29.6)(pg@8.23.1)
       pg:
         specifier: ^8.23.1
         version: 8.23.1
@@ -1984,6 +1987,12 @@ packages:
 
   '@ungap/structured-clone@1.4.0':
     resolution: {integrity: sha512-1mEZtMKPM09vDmQt5y7YvmN2+DFTP7Tg0EWXdic8/C6VRnpb33e4ghisCIE3WZjsE2N8mf+QV1Zqh7ZFYLWInQ==}
+
+  '@upstash/box@0.7.10':
+    resolution: {integrity: sha512-CPA4yyusIybDt+MlnrMgHTBFfFCYyn7OMkRhgYibSVmltzMDcRzbDCTgpN/Oge20uIzl2KVvD6fXs0odhBpjHA==}
+    engines: {node: '>=18.0.0'}
+    peerDependencies:
+      zod: ^3.25.0 || ^4.0.0
 
   '@upstash/box@0.7.9':
     resolution: {integrity: sha512-otSqUC2KVzBCftzwNuHIWNm/CvLan7+9ngm1gjma8BwLaOtmEdXt1GUPm7TjG07XcO009R++FZ4MMz13IZgXYg==}
@@ -5208,6 +5217,30 @@ snapshots:
 
   '@langchain/protocol@0.0.20': {}
 
+  '@modelcontextprotocol/sdk@1.32.1(@cfworker/json-schema@4.1.1)(supports-color@10.2.2)(zod@3.25.76)':
+    dependencies:
+      '@hono/node-server': 2.1.5(hono@4.13.13)
+      ajv: 8.20.0
+      ajv-formats: 3.0.1(ajv@8.20.0)
+      content-type: 1.0.5
+      cors: 2.8.6
+      cross-spawn: 7.0.6
+      eventsource: 3.0.7
+      eventsource-parser: 3.1.1
+      express: 5.3.0(supports-color@10.2.2)
+      express-rate-limit: 8.7.1(express@5.3.0(supports-color@10.2.2))(supports-color@10.2.2)
+      hono: 4.13.13
+      jose: 6.2.12
+      json-schema-typed: 8.0.2
+      pkce-challenge: 5.0.1
+      raw-body: 3.0.2
+      zod: 3.25.76
+      zod-to-json-schema: 3.25.2(zod@3.25.76)
+    optionalDependencies:
+      '@cfworker/json-schema': 4.1.1
+    transitivePeerDependencies:
+      - supports-color
+
   '@modelcontextprotocol/sdk@1.32.1(@cfworker/json-schema@4.1.1)(supports-color@10.2.2)(zod@4.6.7)':
     dependencies:
       '@hono/node-server': 2.1.5(hono@4.13.13)
@@ -5229,28 +5262,6 @@ snapshots:
       zod-to-json-schema: 3.25.2(zod@4.6.7)
     optionalDependencies:
       '@cfworker/json-schema': 4.1.1
-    transitivePeerDependencies:
-      - supports-color
-
-  '@modelcontextprotocol/sdk@1.32.1(supports-color@10.2.2)(zod@3.25.76)':
-    dependencies:
-      '@hono/node-server': 2.1.5(hono@4.13.13)
-      ajv: 8.20.0
-      ajv-formats: 3.0.1(ajv@8.20.0)
-      content-type: 1.0.5
-      cors: 2.8.6
-      cross-spawn: 7.0.6
-      eventsource: 3.0.7
-      eventsource-parser: 3.1.1
-      express: 5.3.0(supports-color@10.2.2)
-      express-rate-limit: 8.7.1(express@5.3.0(supports-color@10.2.2))(supports-color@10.2.2)
-      hono: 4.13.13
-      jose: 6.2.12
-      json-schema-typed: 8.0.2
-      pkce-challenge: 5.0.1
-      raw-body: 3.0.2
-      zod: 3.25.76
-      zod-to-json-schema: 3.25.2(zod@3.25.76)
     transitivePeerDependencies:
       - supports-color
 
@@ -5782,6 +5793,15 @@ snapshots:
 
   '@ungap/structured-clone@1.4.0': {}
 
+  '@upstash/box@0.7.10(zod@4.6.7)':
+    dependencies:
+      ws: 8.22.0
+      zod: 4.6.7
+      zod-to-json-schema: 3.25.2(zod@4.6.7)
+    transitivePeerDependencies:
+      - bufferutil
+      - utf-8-validate
+
   '@upstash/box@0.7.9(zod@4.6.7)':
     dependencies:
       ws: 8.22.0
@@ -6113,14 +6133,6 @@ snapshots:
       '@neondatabase/serverless': 1.2.0
       '@types/pg': 8.23.1
       '@upstash/redis': 1.39.0
-      kysely: 0.29.6
-      pg: 8.23.1
-
-  drizzle-orm@0.45.4(@cloudflare/workers-types@5.20261016.1)(@neondatabase/serverless@1.2.0)(@types/pg@8.23.1)(kysely@0.29.6)(pg@8.23.1):
-    optionalDependencies:
-      '@cloudflare/workers-types': 5.20261016.1
-      '@neondatabase/serverless': 1.2.0
-      '@types/pg': 8.23.1
       kysely: 0.29.6
       pg: 8.23.1
 
@@ -7703,14 +7715,14 @@ snapshots:
 
   setprototypeof@1.2.0: {}
 
-  shadcn@4.21.5(supports-color@10.2.2):
+  shadcn@4.21.5(@cfworker/json-schema@4.1.1)(supports-color@10.2.2):
     dependencies:
       '@babel/core': 7.29.7(supports-color@10.2.2)
       '@babel/parser': 7.29.9
       '@babel/plugin-transform-typescript': 7.29.9(@babel/core@7.29.7(supports-color@10.2.2))(supports-color@10.2.2)
       '@babel/preset-typescript': 7.29.7(@babel/core@7.29.7(supports-color@10.2.2))(supports-color@10.2.2)
       '@dotenvx/dotenvx': 1.75.1
-      '@modelcontextprotocol/sdk': 1.32.1(supports-color@10.2.2)(zod@3.25.76)
+      '@modelcontextprotocol/sdk': 1.32.1(@cfworker/json-schema@4.1.1)(supports-color@10.2.2)(zod@3.25.76)
       '@shadcn/registry': 0.1.4(supports-color@10.2.2)
       '@types/validate-npm-package-name': 4.0.2
       browserslist: 4.29.3

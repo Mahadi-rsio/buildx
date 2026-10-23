@@ -21,9 +21,9 @@ const TERMINAL: RunStatus[] = ["completed", "failed", "cancelled"];
 
 /**
  * Atomically claim the oldest queued run. Uses `FOR UPDATE SKIP LOCKED` so two
- * workers never claim the same row, and skips runs whose user already has a
- * running run (enforced in the DB by `runs_one_active_per_user_idx`, so the
- * claim must never `UPDATE` a second row to `running` at the same time).
+ * workers never claim the same row, and skips runs whose workspace already has
+ * a running run (enforced in the DB by `runs_one_active_per_workspace_idx`, so
+ * the claim must never `UPDATE` a second row to `running` at the same time).
  * Returns the claimed run or `null`.
  */
 export async function claimNextQueuedRun(
@@ -37,7 +37,8 @@ export async function claimNextQueuedRun(
       WHERE r.status = 'queued'
         AND NOT EXISTS (
           SELECT 1 FROM runs other
-          WHERE other.user_id = r.user_id
+          WHERE other.workspace_id = r.workspace_id
+            AND r.workspace_id IS NOT NULL
             AND other.status = 'running'
         )
       ORDER BY r.created_at
@@ -66,7 +67,7 @@ export async function claimNextQueuedRun(
 /**
  * Atomically claim a specific queued run by ID.
  * Used by queue message consumers to claim the specific run targeted by a message.
- * Respects the per-user single running run invariant with row locks.
+ * Respects the per-workspace single running run invariant with row locks.
  */
 export async function claimRunById(
   db: Db,
@@ -80,7 +81,8 @@ export async function claimRunById(
         AND r.status = 'queued'
         AND NOT EXISTS (
           SELECT 1 FROM runs other
-          WHERE other.user_id = r.user_id
+          WHERE other.workspace_id = r.workspace_id
+            AND r.workspace_id IS NOT NULL
             AND other.status = 'running'
         )
       FOR UPDATE SKIP LOCKED

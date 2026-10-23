@@ -127,6 +127,20 @@
       "when": 1792600000000,
       "tag": "0018_agent_checkpoint_ask_user",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1792760305624,
+      "tag": "0019_workspaces_durable",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1792760305625,
+      "tag": "0020_runs_workspace_exclusivity",
+      "breakpoints": true
     }
   ]
 }

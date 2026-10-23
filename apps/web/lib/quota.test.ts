@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  DAILY_MODEL_REQUEST_LIMIT,
   QuotaExceededError,
   QuotaServiceUnavailableError,
   createQuotaService,
@@ -60,9 +59,13 @@ test("quotaWindow rolls over exactly at Dhaka midnight", () => {
 
 test("the 51st model request of the day is rejected", async () => {
   const redis = new FakeRedis();
-  const service = createQuotaService({ redis, now: () => FIXED_NOW });
+  const service = createQuotaService({
+    redis,
+    now: () => FIXED_NOW,
+    limit: 50,
+  });
 
-  for (let i = 0; i < DAILY_MODEL_REQUEST_LIMIT; i += 1) {
+  for (let i = 0; i < 50; i += 1) {
     const reservation = await service.reserve("user-1", `attempt-${i}`);
     assert.equal(reservation.allowed, true);
   }

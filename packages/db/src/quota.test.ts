@@ -37,7 +37,7 @@ try {
   skipReason = `Postgres unavailable: ${(error as Error).message}`;
 }
 
-/** A fresh user per test (workspaces are UNIQUE per user). */
+/** A fresh user per test (one user may own many workspaces). */
 async function newUser(): Promise<string> {
   const id = randomUUID();
   await db!.insert(user).values({
@@ -67,25 +67,27 @@ test("transition is a single conditional UPDATE", { skip: skipReason }, async ()
   const workspaceId = await newWorkspace(userId, "w");
 
   assert.equal(
-    await transition(db!, workspaces, workspaceId, "creating", "running"),
+    await transition(db!, workspaces, workspaceId, "provisioning", "ready"),
     true,
   );
   assert.equal(
-    await transition(db!, workspaces, workspaceId, "creating", "archived"),
+    await transition(db!, workspaces, workspaceId, "provisioning", "deleting"),
     false,
   );
   const [row] = await db!
     .select({ status: workspaces.status })
     .from(workspaces)
     .where(eq(workspaces.id, workspaceId));
-  assert.equal(row.status, "running");
+  assert.equal(row.status, "ready");
 });
 
 test("daily counter never exceeds the limit under 100 concurrent requests", { skip: skipReason }, async () => {
   const userId = await newUser();
   const day = "2000-01-01";
   const results = await Promise.all(
-    Array.from({ length: 100 }, () => consumeDailyRequest(db!, userId, day)),
+    Array.from({ length: DAILY_REQUEST_LIMIT + 50 }, () =>
+      consumeDailyRequest(db!, userId, day),
+    ),
   );
 
   const allowed = results.filter((value) => value !== null);
@@ -141,16 +143,26 @@ test("open/close usage session round-trips", { skip: skipReason }, async () => {
   assert.equal(await closeUsageSession(db!, sessionId), false);
 });
 
-test("only one run may be running per user", { skip: skipReason }, async () => {
+test("only one run may be running per workspace", { skip: skipReason }, async () => {
   const userId = await newUser();
-  assert.equal(await canStartRun(db!, userId), true);
+  const workspaceId = await newWorkspace(userId, "exclusive");
+  const otherWorkspaceId = await newWorkspace(userId, "other");
 
-  await db!.insert(runs).values({ userId, status: "running", model: "test" });
-  assert.equal(await countActiveRuns(db!, userId), 1);
-  assert.equal(await canStartRun(db!, userId), false);
+  assert.equal(await canStartRun(db!, workspaceId), true);
+
+  await db!
+    .insert(runs)
+    .values({ userId, workspaceId, status: "running", model: "test" });
+  assert.equal(await countActiveRuns(db!, workspaceId), 1);
+  assert.equal(await canStartRun(db!, workspaceId), false);
+
+  // A second workspace for the same user may still start a run.
+  assert.equal(await canStartRun(db!, otherWorkspaceId), true);
 
   await assert.rejects(() =>
-    db!.insert(runs).values({ userId, status: "running", model: "test" }),
+    db!
+      .insert(runs)
+      .values({ userId, workspaceId, status: "running", model: "test" }),
   );
 });
 

@@ -1,0 +1,17 @@
+---
+source_file: ".opencode/skills/ui-styling/references/canvas-design-system.md"
+type: "document"
+community: "Community 47"
+location: "L163"
+tags:
+  - graphify/document
+  - graphify/EXTRACTED
+  - community/Community_47
+---
+
+# Typography System
+
+## Connections
+- [[Implementation Guidelines]] - `contains` [EXTRACTED]
+
+#graphify/document #graphify/EXTRACTED #community/Community_47

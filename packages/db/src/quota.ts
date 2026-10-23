@@ -152,19 +152,22 @@ export async function hasCpuBudget(db: Db, userId: string): Promise<boolean> {
   return used < MONTHLY_CPU_HOURS * 3600;
 }
 
-/** Number of runs currently in the `running` state for this user. */
+/** Number of runs currently in the `running` state for this workspace. */
 export async function countActiveRuns(
   db: Db,
-  userId: string,
+  workspaceId: string,
 ): Promise<number> {
   const rows = await db
     .select({ id: runs.id })
     .from(runs)
-    .where(and(eq(runs.userId, userId), eq(runs.status, "running")));
+    .where(and(eq(runs.workspaceId, workspaceId), eq(runs.status, "running")));
   return rows.length;
 }
 
-/** At most one active run per user (plan phase 4). */
-export async function canStartRun(db: Db, userId: string): Promise<boolean> {
-  return (await countActiveRuns(db, userId)) === 0;
+/** At most one active run per workspace (plan phase 4). */
+export async function canStartRun(
+  db: Db,
+  workspaceId: string,
+): Promise<boolean> {
+  return (await countActiveRuns(db, workspaceId)) === 0;
 }

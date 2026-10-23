@@ -127,13 +127,11 @@ export const accountRelations = relations(account, ({ one }) => ({
  * ──────────────────────────────────────────────────────────────────────────── */
 
 export type WorkspaceStatus =
-  | "creating"
-  | "restoring"
-  | "running"
-  | "archiving"
-  | "archived"
-  | "archive_failed"
-  | "error";
+  | "provisioning"
+  | "ready"
+  | "failed"
+  | "recovering"
+  | "deleting";
 
 export type RunStatus =
   | "queued"
@@ -169,31 +167,21 @@ export const projects = pgTable(
   (table) => [index("projects_userId_idx").on(table.userId)],
 );
 
-/** One workspace per user (UNIQUE user_id) — phase.md phase 4. */
+/** Workspace owned by a user; one user may have many workspaces. */
 export const workspaces = pgTable(
   "workspaces",
   {
     id: uuid("id").primaryKey().defaultRandom(),
     userId: text("user_id")
       .notNull()
-      .unique()
       .references(() => user.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
+    slug: text("slug"),
+    box_id: text("box_id"),
     status: text("status")
       .$type<WorkspaceStatus>()
       .notNull()
-      .default("creating"),
-    flyApp: text("fly_app"),
-    flyVolumeId: text("fly_volume_id"),
-    flyMachineId: text("fly_machine_id"),
-    region: text("region"),
-    daemonTokenEncrypted: text("daemon_token_encrypted"),
-    lastActiveAt: timestamp("last_active_at", { withTimezone: true }),
-    lastSyncedAt: timestamp("last_synced_at", { withTimezone: true }),
-    backupBytes: bigint("backup_bytes", { mode: "number" }),
-    backupSha256: text("backup_sha256"),
-    imageDigest: text("image_digest"),
-    lockfileHash: text("lockfile_hash"),
+      .default("provisioning"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -202,7 +190,12 @@ export const workspaces = pgTable(
       .$onUpdate(() => new Date())
       .notNull(),
   },
-  (table) => [index("workspaces_status_idx").on(table.status)],
+  (table) => [
+    index("workspaces_userId_idx").on(table.userId),
+    index("workspaces_slug_idx").on(table.slug),
+    index("workspaces_status_idx").on(table.status),
+    uniqueIndex("workspaces_name_user_idx").on(table.name, table.userId),
+  ],
 );
 
 export const tasks = pgTable(
@@ -262,6 +255,8 @@ export const runs = pgTable(
     userId: text("user_id")
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
+    workspaceId: uuid("workspace_id")
+      .references(() => workspaces.id, { onDelete: "set null" }),
     conversationId: uuid("conversation_id").references(() => conversations.id, {
       onDelete: "set null",
     }),
@@ -284,7 +279,7 @@ export const runs = pgTable(
     taskBranch: text("task_branch"),
     /** Installed skills the user attached; preloaded into the model context. */
     skillNames: jsonb("skill_names").$type<string[]>(),
-    /** Human label for the sandbox workspace backing this run. */
+    /** Selected sandbox workspace backing this run. */
     workspaceName: text("workspace_name"),
     maxSteps: integer("max_steps").notNull().default(40),
     /** Selected context window: drives compaction and live utilization stats. */
@@ -326,9 +321,9 @@ export const runs = pgTable(
     // Queue scanner: queued runs, oldest first, on the `FOR UPDATE SKIP LOCKED`
     // claim path used by the job worker.
     index("runs_status_createdAt_idx").on(table.status, table.createdAt),
-    // At most one running run per user (plan phase 4).
-    uniqueIndex("runs_one_active_per_user_idx")
-      .on(table.userId)
+    // At most one running run per workspace (plan phase 4).
+    uniqueIndex("runs_one_active_per_workspace_idx")
+      .on(table.workspaceId)
       .where(sql`${table.status} = 'running'`),
     // Idempotency: redirect a retried POST to the original run.
     uniqueIndex("runs_idempotency_key_idx")
@@ -750,10 +745,12 @@ export const workspaceRelations = relations(workspaces, ({ one, many }) => ({
   user: one(user, { fields: [workspaces.userId], references: [user.id] }),
   usageSessions: many(usageSessions),
   checkpoints: many(checkpoints),
+  runs: many(runs),
 }));
 
 export const runRelations = relations(runs, ({ one, many }) => ({
   user: one(user, { fields: [runs.userId], references: [user.id] }),
+  workspace: one(workspaces, { fields: [runs.workspaceId], references: [workspaces.id] }),
   task: one(tasks, { fields: [runs.taskId], references: [tasks.id] }),
   messages: many(messages),
   events: many(events),

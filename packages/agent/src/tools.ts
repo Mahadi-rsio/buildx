@@ -125,7 +125,7 @@ function stripAnsi(text: string): string {
 function scrubProgressNoise(text: string): string {
   const lines = text.split("\n");
   const out: string[] = [];
-  let prev = "";
+  let prev: string | null = null;
   let repeat = 0;
   for (const line of lines) {
     const normalized = line
@@ -136,7 +136,7 @@ function scrubProgressNoise(text: string): string {
     const isProgress =
       /^\s*(?:\d{1,3}%|download|downloading|progress|eta\b)/i.test(normalized) ||
       /^[\s.*=#\-_|/\\]+$/.test(normalized);
-    if (normalized === prev) {
+    if (prev !== null && normalized === prev) {
       repeat += 1;
       continue;
     }

@@ -363,7 +363,7 @@ export async function createRun(
     };
     const unique =
       target.code === "23505" &&
-      target.constraint !== "runs_one_active_per_user_idx";
+      target.constraint !== "runs_one_active_per_workspace_idx";
     if (!unique) throw error;
     const [existing] = await db
       .select()

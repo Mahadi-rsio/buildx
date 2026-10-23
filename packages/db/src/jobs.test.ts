@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { after, test } from "node:test";
+import { after, beforeEach, test } from "node:test";
 import { eq, inArray, sql } from "drizzle-orm";
 import { loadRootEnv } from "@buildx/shared/node";
 import { getDb, type Db } from "./client";
@@ -17,7 +17,7 @@ import {
   renewWorkspaceLock,
   requestCancellation,
 } from "./jobs";
-import { runs, user } from "./schema";
+import { runs, user, workspaces } from "./schema";
 
 /** Real-Postgres tests; skip when the database is unreachable. */
 loadRootEnv();
@@ -45,14 +45,23 @@ async function newUser(): Promise<string> {
   return id;
 }
 
+async function newWorkspace(userId: string, name: string): Promise<string> {
+  const [row] = await db!
+    .insert(workspaces)
+    .values({ userId, name })
+    .returning({ id: workspaces.id });
+  return row.id;
+}
+
 async function insertRun(
   userId: string,
   fields?: Partial<typeof runs.$inferInsert>,
 ): Promise<string> {
   const createdAt = fields?.createdAt ?? new Date(Date.now());
+  const { workspaceId, ...rest } = fields ?? {};
   const [row] = await db!
     .insert(runs)
-    .values({ userId, status: "queued", model: "test", ...fields, createdAt })
+    .values({ userId, status: "queued", model: "test", workspaceId: workspaceId ?? null, ...rest, createdAt })
     .returning({ id: runs.id });
   return row.id;
 }
@@ -60,6 +69,13 @@ async function insertRun(
 after(async () => {
   if (skipReason || createdUsers.length === 0) return;
   await db!.delete(user).where(inArray(user.id, createdUsers));
+});
+
+// Claims scan the global queue, so clear runs created by earlier tests to keep
+// each test's queue deterministic.
+beforeEach(async () => {
+  if (skipReason || createdUsers.length === 0) return;
+  await db!.delete(runs).where(inArray(runs.userId, createdUsers));
 });
 
 test("claim picks the oldest queued run and leases it", { skip: skipReason }, async () => {
@@ -79,11 +95,18 @@ test("claim picks the oldest queued run and leases it", { skip: skipReason }, as
   assert.equal(rest.status, "queued");
 });
 
-test("claim skips users who already have a running run", { skip: skipReason }, async () => {
-  const busyUser = await newUser();
-  const freeUser = await newUser();
-  const busyQueued = await insertRun(busyUser, { createdAt: new Date(Date.now() - 10_000) });
-  const freeQueued = await insertRun(freeUser, { createdAt: new Date() });
+test("claim allows another workspace while one is busy", { skip: skipReason }, async () => {
+  const userId = await newUser();
+  const busyWorkspace = await newWorkspace(userId, "busy");
+  const freeWorkspace = await newWorkspace(userId, "free");
+  const busyQueued = await insertRun(userId, {
+    workspaceId: busyWorkspace,
+    createdAt: new Date(Date.now() - 10_000),
+  });
+  const freeQueued = await insertRun(userId, {
+    workspaceId: freeWorkspace,
+    createdAt: new Date(),
+  });
 
   const first = await claimNextQueuedRun(db!, { leaseId: "lease-busy" });
   assert.ok(first);
@@ -95,6 +118,18 @@ test("claim skips users who already have a running run", { skip: skipReason }, a
 
   const third = await claimNextQueuedRun(db!, { leaseId: "lease-none" });
   assert.equal(third, null);
+});
+
+test("claim skips a workspace that already has a running run", { skip: skipReason }, async () => {
+  const userId = await newUser();
+  const workspaceId = await newWorkspace(userId, "busy-ws");
+  await insertRun(userId, { workspaceId, status: "running" });
+  const queued = await insertRun(userId, { workspaceId, status: "queued" });
+
+  assert.equal(await claimNextQueuedRun(db!, { leaseId: "lease-skip" }), null);
+
+  const [row] = await db!.select().from(runs).where(eq(runs.id, queued));
+  assert.equal(row.status, "queued");
 });
 
 test("heartbeat and release only succeed while we own the lease", { skip: skipReason }, async () => {

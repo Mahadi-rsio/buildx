@@ -8,6 +8,7 @@ import {
   monthlyCpuSecondsUsed,
   runs as runsTable,
   type Db,
+  workspaces,
 } from "@buildx/db";
 import {
   DEFAULT_CONTEXT_WINDOW_TOKENS,
@@ -15,17 +16,17 @@ import {
   type ContextWindowTokens,
   type ConversationTurn,
 } from "@buildx/shared";
-import type { WorkspaceUsage } from "./types";
-import {
-  getRunForIdempotencyKey,
-  hydrateRun,
-  type StoredRun,
-} from "./store";
 import {
   QuotaServiceUnavailableError,
   readConfiguredQuota,
   type QuotaSnapshot,
 } from "./quota";
+import {
+  getRunForIdempotencyKey,
+  hydrateRun,
+  type StoredRun,
+} from "./store";
+import type { WorkspaceRuntime, WorkspaceUsage } from "./types";
 
 /**
  * Create a run for a user with idempotent + quota-safe atomic semantics:
@@ -65,9 +66,14 @@ export interface CreateRunInput {
   conversationId?: string;
   idempotencyKey?: string;
   correlationId?: string;
-  /** Injectable for tests; defaults to the app's database. */
+  /** Optional workspace id the run belongs to. When provided, the run is
+   *  verified to belong to the authenticated user and the workspace must be
+   *  in "ready" status. If not provided, the existing behavior (no workspace
+   *  verification) is maintained for backward compatibility. */
+  workspaceId?: string;
+  /** Optional database instance; defaults to getDb() when not provided. */
   db?: Db;
-  /** Injectable for tests; defaults to the Upstash-backed service. */
+  /** Optional quota gate; defaults to the app's configured quota service. */
   quota?: QuotaGate;
 }
 
@@ -82,6 +88,20 @@ function usageFor(
     dailyRequestsLimit: quota.limit,
     nextDhakaResetAt: quota.resetAt,
   };
+}
+
+/** Map a durable workspace status onto the UI's transient runtime status. */
+function workspaceRuntimeStatus(
+  status: "provisioning" | "ready" | "failed" | "recovering" | "deleting",
+): WorkspaceRuntime["status"] {
+  switch (status) {
+    case "ready":
+      return "workspace.ready";
+    case "failed":
+      return "workspace.archived";
+    default:
+      return "workspace.restoring";
+  }
 }
 
 async function ensureConversation(
@@ -153,6 +173,27 @@ export async function createRunForUser(
   const preflight = await readQuota();
   if (!preflight) return { kind: "quota_unavailable" };
   if (preflight.remaining <= 0) return { kind: "quota_exhausted" };
+
+  // When a workspaceId is provided, verify ownership and readiness before
+  // creating the run. This enforces the "User → Workspace → Session → Run"
+  // ownership chain.
+  if (input.workspaceId) {
+    const [workspace] = await db
+      .select()
+      .from(workspaces)
+      .where(
+        and(
+          eq(workspaces.userId, input.user.id),
+          eq(workspaces.id, input.workspaceId),
+        ),
+      );
+    if (!workspace) {
+      return { kind: "conversation_conflict" }; // or a new error kind
+    }
+    if (workspace.status !== "ready") {
+      return { kind: "conversation_conflict" }; // workspace not ready
+    }
+  }
 
   // A continuation of an interrupted run restores its last valid checkpoint:
   // history, completed steps, pending ask_user answer, and task branch.
@@ -274,6 +315,8 @@ export async function createRunForUser(
           repository: repository ?? null,
           taskBranch: checkpoint?.taskBranch ?? null,
           skillNames: input.skillNames?.length ? input.skillNames : null,
+          // New: store workspace_id linking the run to its workspace
+          workspaceId: input.workspaceId ?? null,
           workspaceName:
             input.user.name?.trim() ||
             input.user.email.split("@")[0] ||
@@ -317,6 +360,19 @@ export async function createRunForUser(
       if (existing) {
         const quota = await readQuota();
         if (!quota) return { kind: "quota_unavailable" };
+        // Attach workspace info if available
+        if (input.workspaceId) {
+          const [ws] = await db
+            .select()
+            .from(workspaces)
+            .where(eq(workspaces.id, input.workspaceId));
+          if (ws) {
+            existing.runtime.workspace = {
+              status: workspaceRuntimeStatus(ws.status),
+              workspaceId: ws.id,
+            };
+          }
+        }
         existing.runtime.workspace.usage = usageFor(await cpuUsage(), quota);
         return { kind: "replayed", run: existing };
       }

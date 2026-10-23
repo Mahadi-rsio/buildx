@@ -1,0 +1,17 @@
+---
+source_file: ".opencode/skills/brand/references/voice-framework.md"
+type: "document"
+community: "Community 125"
+location: "L1"
+tags:
+  - graphify/document
+  - graphify/EXTRACTED
+  - community/Community_125
+---
+
+# voice-framework.md
+
+## Connections
+- [[Brand Voice Framework]] - `contains` [EXTRACTED]
+
+#graphify/document #graphify/EXTRACTED #community/Community_125
