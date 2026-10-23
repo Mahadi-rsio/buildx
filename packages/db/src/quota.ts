@@ -11,7 +11,7 @@ import { dailyRequests, runs, usageSessions } from "./schema";
 /** A workspace with no activity is archived after this many minutes. */
 export const FREE_IDLE_MINUTES = 5;
 /** Requests per user per Dhaka day. */
-export const DAILY_REQUEST_LIMIT = 30;
+export const DAILY_REQUEST_LIMIT = 150;
 /** Machine CPU-hours per user per calendar month. */
 export const MONTHLY_CPU_HOURS = 5;
 /** Hard caps for a single agent run. */
@@ -42,7 +42,7 @@ export function nextDhakaReset(date: Date = new Date()): Date {
 /**
  * Atomically consume one daily request. Returns the new count when the request
  * is allowed, or `null` when the user is already at the limit. The `WHERE` on
- * the conflict update is what makes 100 concurrent calls stop at exactly 30.
+ * the conflict update is what makes 100 concurrent calls stop at exactly 150.
  */
 export async function consumeDailyRequest(
   db: Db,

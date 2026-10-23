@@ -592,6 +592,7 @@ test("ask_user replays a checkpointed approvalAnswer instead of pausing again", 
         history: [],
         completedSteps: 0,
         todos: [],
+        updatedAt: Date.now(),
         approvalAnswer: {
           toolCallId: "call_ask",
           question: "Proceed?",

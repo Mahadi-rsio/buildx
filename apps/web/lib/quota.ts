@@ -5,7 +5,7 @@ import { Redis } from "@upstash/redis";
  * step (including tool-loop iterations, retries and fallbacks) reserves one
  * unit before the request leaves the app.
  */
-export const DAILY_MODEL_REQUEST_LIMIT = 50;
+export const DAILY_MODEL_REQUEST_LIMIT = 150;
 
 const DHAKA_OFFSET_MS = 6 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
