@@ -79,6 +79,8 @@ export interface RunRuntime {
 export interface StoredRun {
   id: string;
   userId: string;
+  /** Durable workspace owning this run and its isolated Box. */
+  workspaceId?: string;
   /** Durable conversation grouping this and follow-up runs. */
   conversationId?: string;
   workspaceName: string;
@@ -157,6 +159,7 @@ function freshRuntime(): RunRuntime {
 /** Copy durable row fields onto a run object. Never touches `run.runtime`. */
 function syncFromRow(run: StoredRun, row: RunRow): void {
   run.userId = row.userId;
+  run.workspaceId = row.workspaceId ?? undefined;
   run.conversationId = row.conversationId ?? undefined;
   run.workspaceName = row.workspaceName ?? "workspace";
   run.task = row.task ?? "";
@@ -212,7 +215,8 @@ export async function hydrateRun(
   const run: StoredRun = {
     id: row.id,
     userId: row.userId,
-    conversationId: row.conversationId ?? undefined,
+    workspaceId: row.workspaceId ?? undefined,
+    conversationId: row.conversationId ?? undefined;
     workspaceName: row.workspaceName ?? "workspace",
     task: row.task ?? "",
     history: row.history ?? undefined,
@@ -792,7 +796,7 @@ export async function cancelRun(
       .catch(() => undefined);
     run.status = "cancelled";
   }
-  void cancelRemoteBoxExecution(run.userId).catch(() => undefined);
+  void cancelRemoteBoxExecution(run.userId, run.workspaceId).catch(() => undefined);
   return newly;
 }
 
@@ -812,7 +816,7 @@ export function toRunSummary(run: StoredRun): RunSummary {
     model: run.model,
     maxSteps: run.maxSteps,
     contextWindowTokens: run.contextWindowTokens,
-    workspaceId: run.id,
+    workspaceId: run.workspaceId ?? run.id,
     createdAt: run.createdAt,
     updatedAt: run.updatedAt,
     startedAt: run.startedAt,
