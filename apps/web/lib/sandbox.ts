@@ -80,7 +80,7 @@ function boxOptions(ctx: SandboxRunContext): BoxSandboxOptions {
     name: boxNameFor(ctx),
     apiKey: settings.apiKey,
     baseUrl: settings.baseUrl,
-    runtime: (settings.runtime as BoxSandboxOptions["runtime"]) || "node",
+    runtime: ctx.workspaceId ? "node" : ((settings.runtime as BoxSandboxOptions["runtime"]) || "node"),
     size: ctx.workspaceId ? "small" : ((settings.size as BoxSandboxOptions["size"]) || "small"),
     // Never keep an ordinary workspace running while idle: Upstash auto-pauses
     // it and active-CPU billing stops. Runs pause it explicitly on teardown.
