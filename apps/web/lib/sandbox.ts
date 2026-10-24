@@ -14,6 +14,8 @@ export interface BoxSettings {
 
 export interface SandboxRunContext {
   userId: string;
+  /** Durable workspace row; each workspace owns its own Box. */
+  workspaceId?: string;
 }
 
 const globalSandboxState = globalThis as unknown as {
@@ -47,10 +49,11 @@ function missingBoxes(): Map<string, number> {
 }
 
 /** Build a stable per-user box name (Box names must be [a-z0-9-]). */
-function boxNameFor(userId: string): string {
-  const slug = userId.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-  const base = `buildx-${slug.slice(0, 40)}`;
-  return base.replace(/[^a-z0-9-]+/g, "-");
+function boxNameFor(ctx: SandboxRunContext): string {
+  const id = ctx.workspaceId ? `ws-${ctx.workspaceId}` : ctx.userId;
+  const slug = id.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  const prefix = ctx.workspaceId ? "buildx-" : "buildx-";
+  return `${prefix}${slug.slice(0, 40)}`.replace(/[^a-z0-9-]+/g, "-");
 }
 
 /**
@@ -72,10 +75,10 @@ export function boxSettings(): BoxSettings {
   };
 }
 
-function boxOptions(userId: string): BoxSandboxOptions {
+function boxOptions(ctx: SandboxRunContext): BoxSandboxOptions {
   const settings = boxSettings();
   return {
-    name: boxNameFor(userId),
+    name: boxNameFor(ctx),
     apiKey: settings.apiKey,
     baseUrl: settings.baseUrl,
     runtime: (settings.runtime as BoxSandboxOptions["runtime"]) || "node",
@@ -95,13 +98,13 @@ function boxOptions(userId: string): BoxSandboxOptions {
 export async function resolveWorkspaceBox(
   ctx: SandboxRunContext,
 ): Promise<BoxSandbox> {
-  const key = ctx.userId;
+  const key = ctx.workspaceId ?? ctx.userId;
   const cache = boxCache();
   const existing = cache.get(key);
   if (existing) return existing;
 
   const promise = (async () => {
-    const box = new BoxSandbox(boxOptions(ctx.userId));
+    const box = new BoxSandbox(boxOptions(ctx));
     await box.start();
     resolvedBoxes().set(key, box);
     missingBoxes().delete(key);
@@ -125,8 +128,10 @@ export async function resolveWorkspaceBox(
  */
 export async function tryGetWorkspaceBox(
   userId: string,
+  workspaceId?: string,
 ): Promise<BoxSandbox | undefined> {
-  const key = `${userId}`;
+  const ctx = { userId, workspaceId };
+  const key = workspaceId ?? userId;
   const resolved = resolvedBoxes().get(key);
   if (resolved) return resolved;
 
@@ -136,7 +141,7 @@ export async function tryGetWorkspaceBox(
   const missingUntil = missingBoxes().get(key);
   if (missingUntil && missingUntil > Date.now()) return undefined;
 
-  const box = new BoxSandbox(boxOptions(userId));
+  const box = new BoxSandbox(boxOptions(ctx));
   const connected = await box.connect();
   if (!connected) {
     missingBoxes().set(key, Date.now() + MISSING_BOX_TTL_MS);
@@ -150,9 +155,9 @@ export async function tryGetWorkspaceBox(
 /**
  * Cancel and suspend remote Box execution for a user.
  */
-export async function cancelRemoteBoxExecution(userId: string): Promise<void> {
+export async function cancelRemoteBoxExecution(userId: string, workspaceId?: string): Promise<void> {
   try {
-    const box = await tryGetWorkspaceBox(userId);
+    const box = await tryGetWorkspaceBox(userId, workspaceId);
     if (box) {
       await box.suspend().catch((err) => {
         console.warn(`[sandbox] failed to suspend box for user ${userId}`, err);
@@ -169,8 +174,8 @@ export function createSandbox(ctx: SandboxRunContext): Sandbox {
     resolve: () => resolveWorkspaceBox(ctx),
     // Keep the persistent box alive across runs; Box auto-pauses when idle.
     onDestroy: async (box) => {
-      boxCache().delete(ctx.userId);
-      resolvedBoxes().delete(ctx.userId);
+      boxCache().delete(ctx.workspaceId ?? ctx.userId);
+      resolvedBoxes().delete(ctx.workspaceId ?? ctx.userId);
       await box.suspend().catch(() => undefined);
     },
   });
