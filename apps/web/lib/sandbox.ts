@@ -52,8 +52,7 @@ function missingBoxes(): Map<string, number> {
 function boxNameFor(ctx: SandboxRunContext): string {
   const id = ctx.workspaceId ? `ws-${ctx.workspaceId}` : ctx.userId;
   const slug = id.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-  const prefix = ctx.workspaceId ? "buildx-" : "buildx-";
-  return `${prefix}${slug.slice(0, 40)}`.replace(/[^a-z0-9-]+/g, "-");
+  return `buildx-${slug.slice(0, 40)}`.replace(/[^a-z0-9-]+/g, "-");
 }
 
 /**
@@ -82,7 +81,7 @@ function boxOptions(ctx: SandboxRunContext): BoxSandboxOptions {
     apiKey: settings.apiKey,
     baseUrl: settings.baseUrl,
     runtime: (settings.runtime as BoxSandboxOptions["runtime"]) || "node",
-    size: (settings.size as BoxSandboxOptions["size"]) || "small",
+    size: ctx.workspaceId ? "small" : ((settings.size as BoxSandboxOptions["size"]) || "small"),
     // Never keep an ordinary workspace running while idle: Upstash auto-pauses
     // it and active-CPU billing stops. Runs pause it explicitly on teardown.
     keepAlive: false,
