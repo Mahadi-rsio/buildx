@@ -59,7 +59,7 @@ export async function POST(
 
   let box;
   try {
-    box = await tryGetWorkspaceBox(run.userId);
+    box = await tryGetWorkspaceBox(run.userId, run.workspaceId);
   } catch (error) {
     return jsonError(
       "workspace_unavailable",
