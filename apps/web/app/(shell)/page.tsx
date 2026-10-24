@@ -15,7 +15,6 @@ import { newConversationId } from "@/lib/conversation-id";
 import { enqueueConversationEvent } from "@/lib/conversation-sync";
 import { formatAgo } from "@/lib/format";
 import { WorkspaceManager, type WorkspaceOption } from "@/components/workspaces/workspace-manager";
-import { WorkspaceManager, type WorkspaceOption } from "@/components/workspaces/workspace-manager";
 
 const RECENT_SESSIONS = 8;
 const REPOSITORY_KEY = "buildx.selectedRepository";
