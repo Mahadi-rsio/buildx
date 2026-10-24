@@ -84,7 +84,7 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   const db = getDb();
-  let workspaceId: string;
+  let workspaceId: string | undefined;
   try {
     const [existing] = await db
       .select()
@@ -121,6 +121,12 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ workspace: toWorkspace(ready) }, { status: 201 });
   } catch (error) {
     console.error("[POST /api/workspaces] provisioning failed", error);
+    if (workspaceId) {
+      await db.update(workspaces)
+        .set({ status: "failed", updatedAt: new Date() })
+        .where(and(eq(workspaces.id, workspaceId), eq(workspaces.userId, user.id)))
+        .catch(() => undefined);
+    }
     return Response.json(
       {
         error: "workspace_provisioning_failed",
