@@ -165,7 +165,7 @@ export function sourceForRun(run: StoredRun): WorkspaceSource {
       return clean;
     },
     async listDir(rel: string) {
-      const box = await tryGetWorkspaceBox(run.userId);
+      const box = await tryGetWorkspaceBox(run.userId, run.workspaceId);
       if (!box) return new EmptyWorkspaceSource().listDir(rel);
       return new BoxWorkspaceSource(box).listDir(rel);
     },
