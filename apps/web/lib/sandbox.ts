@@ -48,7 +48,7 @@ function missingBoxes(): Map<string, number> {
   return globalSandboxState.__BUILDX_BOXES_MISSING__;
 }
 
-/** Build a stable per-user box name (Box names must be [a-z0-9-]). */
+/** Build a stable Box name per workspace (legacy runs still use a per-user name). */
 function boxNameFor(ctx: SandboxRunContext): string {
   const id = ctx.workspaceId ? `ws-${ctx.workspaceId}` : ctx.userId;
   const slug = id.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
@@ -89,10 +89,9 @@ function boxOptions(ctx: SandboxRunContext): BoxSandboxOptions {
 }
 
 /**
- * Resolve (and cache) the persistent Upstash Box backing a user's workspace.
- * One box per user, named after their id, so reconnecting resumes the same
- * workspace. Exposed above `createSandbox` so the workspace source and the
- * runner share one connected instance.
+ * Resolve (and cache) the persistent Upstash Box backing a workspace.
+ * New runs key the box by workspace id; older runs without one retain the
+ * legacy per-user box mapping. The workspace source and runner share this cache.
  */
 export async function resolveWorkspaceBox(
   ctx: SandboxRunContext,
@@ -120,7 +119,7 @@ export async function resolveWorkspaceBox(
 }
 
 /**
- * Non-activating box lookup: attach to the user's existing box if there is one.
+ * Non-activating box lookup: attach to the existing workspace Box if there is one.
  * Never creates a box, so read-only consumers (file browser, diff) cannot spin
  * one up. Reconnecting matters after a server restart: the box still exists in
  * Upstash even though this process has no in-memory handle for it.
