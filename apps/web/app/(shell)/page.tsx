@@ -14,6 +14,7 @@ import { useSkills } from "@/hooks/use-skills";
 import { newConversationId } from "@/lib/conversation-id";
 import { enqueueConversationEvent } from "@/lib/conversation-sync";
 import { formatAgo } from "@/lib/format";
+import { WorkspaceManager, type WorkspaceOption } from "@/components/workspaces/workspace-manager";
 
 const RECENT_SESSIONS = 8;
 const REPOSITORY_KEY = "buildx.selectedRepository";
@@ -45,6 +46,7 @@ export default function NewChatPage() {
   const { skills, loading: skillsLoading } = useSkills();
   const { runs, loading: runsLoading } = useRuns();
   const { modelOverride, setModelOverride, contextWindowTokens } = useShell();
+  const [workspace, setWorkspace] = useState<WorkspaceOption | null>(null);
   const [draft, setDraft] = useState("");
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
   const [repository, setRepository] = useState("");
@@ -129,7 +131,7 @@ export default function NewChatPage() {
 
   async function send() {
     const task = draft.trim();
-    if (task.length === 0 || submitting || sendInFlightRef.current) return;
+    if (!workspace || workspace.status !== "ready" || task.length === 0 || submitting || sendInFlightRef.current) return;
     sendInFlightRef.current = true;
 
     const conversationId = conversationIdRef.current ?? newConversationId();
@@ -155,6 +157,7 @@ export default function NewChatPage() {
     try {
       const created = await createRun({
         task,
+        workspaceId: workspace.id,
         model: modelOverride.trim() || undefined,
         contextWindow: contextWindowTokens,
         skillNames: skillsForTurn,
