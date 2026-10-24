@@ -122,10 +122,13 @@ export async function POST(request: Request): Promise<Response> {
   } catch (error) {
     console.error("[POST /api/workspaces] provisioning failed", error);
     if (workspaceId) {
-      await db.update(workspaces)
-        .set({ status: "failed", updatedAt: new Date() })
-        .where(and(eq(workspaces.id, workspaceId), eq(workspaces.userId, user.id)))
-        .catch(() => undefined);
+      try {
+        await db.update(workspaces)
+          .set({ status: "failed", updatedAt: new Date() })
+          .where(and(eq(workspaces.id, workspaceId), eq(workspaces.userId, user.id)));
+      } catch {
+        // Preserve the original provisioning error; the row can be reconciled later.
+      }
     }
     return Response.json(
       {
