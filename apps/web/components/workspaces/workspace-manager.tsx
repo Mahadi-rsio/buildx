@@ -15,7 +15,7 @@ export interface WorkspaceOption {
 const TIERS = [
   { id: "small", name: "Small", ram: "4 GB RAM", storage: "5 GB storage", price: "$0.135", available: true },
   { id: "medium", name: "Medium", ram: "8 GB RAM", storage: "10 GB storage", price: "$0.27", available: false },
-  { id: "large", name: "Large", ram: "16 GB RAM", storage: "20 GB storage", price: "$0.54", available: false },
+  { id: "large", name: "Large", ram: "16 GB RAM", storage: "20 GB storage max (25 GB unavailable)", price: "$0.54", available: false },
 ] as const;
 
 export function WorkspaceManager({
