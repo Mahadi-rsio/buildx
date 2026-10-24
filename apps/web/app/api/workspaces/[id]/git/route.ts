@@ -66,7 +66,7 @@ export async function GET(
   if (!run) return notFound(id);
 
   // Read-only: never create or start a box from this route.
-  const box = await tryGetWorkspaceBox(run.userId);
+  const box = await tryGetWorkspaceBox(run.userId, run.workspaceId);
   if (!box) {
     return Response.json({ ready: false, repositories: [], repo: null });
   }
