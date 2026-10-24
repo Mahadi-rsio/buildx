@@ -27,6 +27,7 @@ export function useCreateRun() {
       idempotencyKey?: string;
       clientMessageId?: string;
       resumeFromRunId?: string;
+      workspaceId?: string;
     }) => {
       const trimmed = args.task.trim();
       if (trimmed.length === 0 || submitting) return null;
@@ -48,6 +49,7 @@ export function useCreateRun() {
             idempotencyKey: args.idempotencyKey,
             clientMessageId: args.clientMessageId,
             resumeFromRunId: args.resumeFromRunId,
+            workspaceId: args.workspaceId,
           }),
         });
         const contentType = res.headers.get("content-type") ?? "";

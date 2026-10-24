@@ -81,6 +81,7 @@ export async function POST(request: Request): Promise<Response> {
       history: parsed.data.history,
       repository: parsed.data.repository,
       resumeFromRunId: parsed.data.resumeFromRunId,
+      workspaceId: parsed.data.workspaceId,
       skillNames: parsed.data.skillNames,
       conversationId: parsed.data.conversationId,
       idempotencyKey: parsed.data.idempotencyKey,

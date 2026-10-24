@@ -177,6 +177,7 @@ export async function createRunForUser(
   // When a workspaceId is provided, verify ownership and readiness before
   // creating the run. This enforces the "User → Workspace → Session → Run"
   // ownership chain.
+  let selectedWorkspaceName: string | undefined;
   if (input.workspaceId) {
     const [workspace] = await db
       .select()
@@ -190,9 +191,10 @@ export async function createRunForUser(
     if (!workspace) {
       return { kind: "conversation_conflict" }; // or a new error kind
     }
-    if (workspace.status !== "ready") {
+    if (workspace.status !== "ready" || !workspace.box_id) {
       return { kind: "conversation_conflict" }; // workspace not ready
     }
+    selectedWorkspaceName = workspace.name;
   }
 
   // A continuation of an interrupted run restores its last valid checkpoint:
@@ -318,6 +320,7 @@ export async function createRunForUser(
           // New: store workspace_id linking the run to its workspace
           workspaceId: input.workspaceId ?? null,
           workspaceName:
+            selectedWorkspaceName ||
             input.user.name?.trim() ||
             input.user.email.split("@")[0] ||
             "workspace",

@@ -14,6 +14,7 @@ import { useSkills } from "@/hooks/use-skills";
 import { newConversationId } from "@/lib/conversation-id";
 import { enqueueConversationEvent } from "@/lib/conversation-sync";
 import { formatAgo } from "@/lib/format";
+import { WorkspaceManager, type WorkspaceOption } from "@/components/workspaces/workspace-manager";
 
 const RECENT_SESSIONS = 8;
 const REPOSITORY_KEY = "buildx.selectedRepository";
@@ -45,6 +46,7 @@ export default function NewChatPage() {
   const { skills, loading: skillsLoading } = useSkills();
   const { runs, loading: runsLoading } = useRuns();
   const { modelOverride, setModelOverride, contextWindowTokens } = useShell();
+  const [workspace, setWorkspace] = useState<WorkspaceOption | null>(null);
   const [draft, setDraft] = useState("");
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
   const [repository, setRepository] = useState("");
@@ -129,7 +131,7 @@ export default function NewChatPage() {
 
   async function send() {
     const task = draft.trim();
-    if (task.length === 0 || submitting || sendInFlightRef.current) return;
+    if (!workspace || workspace.status !== "ready" || task.length === 0 || submitting || sendInFlightRef.current) return;
     sendInFlightRef.current = true;
 
     const conversationId = conversationIdRef.current ?? newConversationId();
@@ -155,6 +157,7 @@ export default function NewChatPage() {
     try {
       const created = await createRun({
         task,
+        workspaceId: workspace.id,
         model: modelOverride.trim() || undefined,
         contextWindow: contextWindowTokens,
         skillNames: skillsForTurn,
@@ -178,6 +181,9 @@ export default function NewChatPage() {
       <div className="flex h-full min-h-0 min-w-0 flex-col">
         <div className="min-h-0 flex-1 overflow-y-auto">
           <div className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6">
+            <WorkspaceManager selectedId={workspace?.id ?? null} onSelect={setWorkspace} />
+            {workspace ? (
+            <>
             <h1 className="text-2xl font-semibold tracking-tight text-foreground">
               Start a session
             </h1>
@@ -320,10 +326,12 @@ export default function NewChatPage() {
                 </ul>
               )}
             </section>
+            </>
+            ) : null}
           </div>
         </div>
 
-        <ChatComposer
+        {workspace ? <ChatComposer
           value={draft}
           onChange={setDraft}
           onSubmit={() => void send()}
@@ -337,7 +345,7 @@ export default function NewChatPage() {
           error={error}
           hint="Start session creates a run in your persistent workspace"
           placeholder="Describe a coding task…"
-        />
+        /> : null}
       </div>
     </PanelSplit>
   );

@@ -49,7 +49,7 @@ export async function GET(
     return invalid(parsed.error.issues[0]?.message ?? "invalid request");
   }
 
-  const box = await tryGetWorkspaceBox(run.userId);
+  const box = await tryGetWorkspaceBox(run.userId, run.workspaceId);
   if (!box) return draftNotFound();
 
   try {

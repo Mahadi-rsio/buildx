@@ -14,6 +14,8 @@ export interface BoxSettings {
 
 export interface SandboxRunContext {
   userId: string;
+  /** Durable workspace row; each workspace owns its own Box. */
+  workspaceId?: string;
 }
 
 const globalSandboxState = globalThis as unknown as {
@@ -46,11 +48,11 @@ function missingBoxes(): Map<string, number> {
   return globalSandboxState.__BUILDX_BOXES_MISSING__;
 }
 
-/** Build a stable per-user box name (Box names must be [a-z0-9-]). */
-function boxNameFor(userId: string): string {
-  const slug = userId.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-  const base = `buildx-${slug.slice(0, 40)}`;
-  return base.replace(/[^a-z0-9-]+/g, "-");
+/** Build a stable Box name per workspace (legacy runs still use a per-user name). */
+function boxNameFor(ctx: SandboxRunContext): string {
+  const id = ctx.workspaceId ? `ws-${ctx.workspaceId}` : ctx.userId;
+  const slug = id.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return `buildx-${slug.slice(0, 40)}`.replace(/[^a-z0-9-]+/g, "-");
 }
 
 /**
@@ -72,14 +74,14 @@ export function boxSettings(): BoxSettings {
   };
 }
 
-function boxOptions(userId: string): BoxSandboxOptions {
+function boxOptions(ctx: SandboxRunContext): BoxSandboxOptions {
   const settings = boxSettings();
   return {
-    name: boxNameFor(userId),
+    name: boxNameFor(ctx),
     apiKey: settings.apiKey,
     baseUrl: settings.baseUrl,
-    runtime: (settings.runtime as BoxSandboxOptions["runtime"]) || "node",
-    size: (settings.size as BoxSandboxOptions["size"]) || "small",
+    runtime: ctx.workspaceId ? "node" : ((settings.runtime as BoxSandboxOptions["runtime"]) || "node"),
+    size: ctx.workspaceId ? "small" : ((settings.size as BoxSandboxOptions["size"]) || "small"),
     // Never keep an ordinary workspace running while idle: Upstash auto-pauses
     // it and active-CPU billing stops. Runs pause it explicitly on teardown.
     keepAlive: false,
@@ -87,21 +89,20 @@ function boxOptions(userId: string): BoxSandboxOptions {
 }
 
 /**
- * Resolve (and cache) the persistent Upstash Box backing a user's workspace.
- * One box per user, named after their id, so reconnecting resumes the same
- * workspace. Exposed above `createSandbox` so the workspace source and the
- * runner share one connected instance.
+ * Resolve (and cache) the persistent Upstash Box backing a workspace.
+ * New runs key the box by workspace id; older runs without one retain the
+ * legacy per-user box mapping. The workspace source and runner share this cache.
  */
 export async function resolveWorkspaceBox(
   ctx: SandboxRunContext,
 ): Promise<BoxSandbox> {
-  const key = ctx.userId;
+  const key = ctx.workspaceId ?? ctx.userId;
   const cache = boxCache();
   const existing = cache.get(key);
   if (existing) return existing;
 
   const promise = (async () => {
-    const box = new BoxSandbox(boxOptions(ctx.userId));
+    const box = new BoxSandbox(boxOptions(ctx));
     await box.start();
     resolvedBoxes().set(key, box);
     missingBoxes().delete(key);
@@ -118,15 +119,17 @@ export async function resolveWorkspaceBox(
 }
 
 /**
- * Non-activating box lookup: attach to the user's existing box if there is one.
+ * Non-activating box lookup: attach to the existing workspace Box if there is one.
  * Never creates a box, so read-only consumers (file browser, diff) cannot spin
  * one up. Reconnecting matters after a server restart: the box still exists in
  * Upstash even though this process has no in-memory handle for it.
  */
 export async function tryGetWorkspaceBox(
   userId: string,
+  workspaceId?: string,
 ): Promise<BoxSandbox | undefined> {
-  const key = `${userId}`;
+  const ctx = { userId, workspaceId };
+  const key = workspaceId ?? userId;
   const resolved = resolvedBoxes().get(key);
   if (resolved) return resolved;
 
@@ -136,7 +139,7 @@ export async function tryGetWorkspaceBox(
   const missingUntil = missingBoxes().get(key);
   if (missingUntil && missingUntil > Date.now()) return undefined;
 
-  const box = new BoxSandbox(boxOptions(userId));
+  const box = new BoxSandbox(boxOptions(ctx));
   const connected = await box.connect();
   if (!connected) {
     missingBoxes().set(key, Date.now() + MISSING_BOX_TTL_MS);
@@ -150,9 +153,9 @@ export async function tryGetWorkspaceBox(
 /**
  * Cancel and suspend remote Box execution for a user.
  */
-export async function cancelRemoteBoxExecution(userId: string): Promise<void> {
+export async function cancelRemoteBoxExecution(userId: string, workspaceId?: string): Promise<void> {
   try {
-    const box = await tryGetWorkspaceBox(userId);
+    const box = await tryGetWorkspaceBox(userId, workspaceId);
     if (box) {
       await box.suspend().catch((err) => {
         console.warn(`[sandbox] failed to suspend box for user ${userId}`, err);
@@ -169,8 +172,8 @@ export function createSandbox(ctx: SandboxRunContext): Sandbox {
     resolve: () => resolveWorkspaceBox(ctx),
     // Keep the persistent box alive across runs; Box auto-pauses when idle.
     onDestroy: async (box) => {
-      boxCache().delete(ctx.userId);
-      resolvedBoxes().delete(ctx.userId);
+      boxCache().delete(ctx.workspaceId ?? ctx.userId);
+      resolvedBoxes().delete(ctx.workspaceId ?? ctx.userId);
       await box.suspend().catch(() => undefined);
     },
   });
