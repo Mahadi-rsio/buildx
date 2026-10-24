@@ -221,7 +221,7 @@ export async function startRun(run: StoredRun): Promise<void> {
     return undefined;
   });
 
-  const rawSandbox = createSandbox({ userId: run.userId });
+  const rawSandbox = createSandbox({ userId: run.userId, workspaceId: run.workspaceId });
   const sandbox = guardSandbox(rawSandbox, run);
   try {
     await sandbox.start();
