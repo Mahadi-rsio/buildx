@@ -516,11 +516,17 @@ export async function removeQueuedRun(runId: string): Promise<boolean> {
   return (rows.rowCount ?? 0) > 0;
 }
 
-/** Resolve a run by its workspace id (equal to the run id today). */
+/** Resolve the most recent run attached to a durable workspace. */
 export async function getRunByWorkspaceId(
   workspaceId: string,
 ): Promise<StoredRun | undefined> {
-  return getRun(workspaceId);
+  const [row] = await getDb()
+    .select()
+    .from(runsTable)
+    .where(eq(runsTable.workspaceId, workspaceId))
+    .orderBy(desc(runsTable.createdAt))
+    .limit(1);
+  return row ? hydrateRun(row) : undefined;
 }
 
 /** The caller's runs, newest first (Postgres is the source of truth). */
