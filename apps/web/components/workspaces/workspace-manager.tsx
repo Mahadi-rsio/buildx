@@ -42,7 +42,7 @@ export function WorkspaceManager({
         if (!alive) return;
         const items = Array.isArray(data.workspaces) ? data.workspaces : [];
         setWorkspaces(items);
-        const next = items.find((item) => item.id === selectedId)
+        const next = items.find((item) => item.id === selectedId && item.status === "ready")
           ?? items.find((item) => item.status === "ready")
           ?? null;
         onSelect(next);
