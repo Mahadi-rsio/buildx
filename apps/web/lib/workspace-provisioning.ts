@@ -1,4 +1,4 @@
-import { Box, BoxError, Runtime, BoxSize } from "@upstash/box";
+import { Box, BoxError } from "@upstash/box";
 import { getDb } from "@buildx/db";
 import { workspaces, eq } from "@buildx/db";
 
@@ -59,8 +59,10 @@ export async function provisionWorkspaceBox(
   } else {
     box = await Box.create({
       name: boxName,
-      runtime: (process.env.UPSTASH_BOX_RUNTIME ?? "node") as Runtime,
-      size: (process.env.UPSTASH_BOX_SIZE ?? "small") as BoxSize,
+      runtime: "node",
+      // The free plan only supports the Small (4 GB RAM / 5 GB disk) box.
+      // Larger tiers are displayed in the UI but cannot be provisioned here.
+      size: "small",
       keepAlive: false,
       apiKey,
       baseUrl,
@@ -134,8 +136,8 @@ export async function recoverWorkspaceBox(
     try {
       const newBox = await Box.create({
         name: boxName,
-        runtime: (process.env.UPSTASH_BOX_RUNTIME ?? "node") as Runtime,
-        size: (process.env.UPSTASH_BOX_SIZE ?? "small") as BoxSize,
+        runtime: "node",
+        size: "small",
         keepAlive: false,
         apiKey,
         baseUrl,
