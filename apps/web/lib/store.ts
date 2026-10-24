@@ -216,7 +216,7 @@ export async function hydrateRun(
     id: row.id,
     userId: row.userId,
     workspaceId: row.workspaceId ?? undefined,
-    conversationId: row.conversationId ?? undefined;
+    conversationId: row.conversationId ?? undefined,
     workspaceName: row.workspaceName ?? "workspace",
     task: row.task ?? "",
     history: row.history ?? undefined,
