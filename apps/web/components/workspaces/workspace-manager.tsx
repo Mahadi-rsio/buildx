@@ -170,7 +170,7 @@ export function WorkspaceManager({
 
 function TierCards() {
   return (
-    <div className="grid gap-2 sm:grid-cols-3">
+    <div className="space-y-2">\n      <div className="grid gap-2 sm:grid-cols-3">
       {TIERS.map((tier) => (
         <div key={tier.id} className={tier.available ? "rounded-xl border border-foreground/30 bg-muted/30 p-3" : "rounded-xl border border-border/60 bg-muted/20 p-3 opacity-60"}>
           <div className="flex items-center justify-between gap-2">
@@ -180,7 +180,7 @@ function TierCards() {
           <p className="mt-2 text-xs text-muted-foreground">{tier.ram}</p>
           <p className="text-xs text-muted-foreground">{tier.storage}</p>
           <p className="mt-3 font-mono text-sm font-semibold">{tier.price}<span className="font-sans text-2xs font-normal text-muted-foreground"> / active CPU-hour</span></p>
-          <p className="mt-1 text-2xs text-muted-foreground">Includes 35% BuildX markup</p>
+          <p className="mt-1 text-2xs text-muted-foreground">Upstash base rate + 35% BuildX markup</p>
         </div>
       ))}
     </div>
