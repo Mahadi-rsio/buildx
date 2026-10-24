@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Check, ChevronDown, HardDrive, Loader2, Plus, Server, X } from "lucide-react";
+import { type FormEvent, useEffect, useState } from "react";
+import { Check, ChevronDown, Loader2, Plus, Server, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -32,18 +32,6 @@ export function WorkspaceManager({
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
 
-  async function refresh(preferredId?: string) {
-    const res = await fetch("/api/workspaces", { cache: "no-store" });
-    const data = (await res.json().catch(() => ({}))) as { workspaces?: WorkspaceOption[]; message?: string };
-    if (!res.ok) throw new Error(data.message ?? "Could not load workspaces.");
-    const items = Array.isArray(data.workspaces) ? data.workspaces : [];
-    setWorkspaces(items);
-    const next = items.find((item) => item.id === (preferredId ?? selectedId))
-      ?? items.find((item) => item.status === "ready")
-      ?? null;
-    onSelect(next);
-  }
-
   useEffect(() => {
     let alive = true;
     void (async () => {
@@ -69,7 +57,7 @@ export function WorkspaceManager({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function createWorkspace(event: React.FormEvent<HTMLFormElement>) {
+  async function createWorkspace(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (creating || name.trim().length < 2) return;
     setCreating(true);
@@ -96,7 +84,6 @@ export function WorkspaceManager({
     }
   }
 
-  const selected = workspaces.find((item) => item.id === selectedId) ?? null;
   const noWorkspace = !loading && workspaces.length === 0;
 
   return (
