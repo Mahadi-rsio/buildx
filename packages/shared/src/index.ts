@@ -348,6 +348,8 @@ export const createRunSchema = z.object({
     .optional(),
   /** Continue from an interrupted run's persisted checkpoint. */
   resumeFromRunId: z.string().uuid().optional(),
+  /** Workspace selected for this run. */
+  workspaceId: z.string().uuid().optional(),
   /** Client-generated id for optimistic message reconciliation. */
   clientMessageId: z.string().min(1).max(128).optional(),
 });
