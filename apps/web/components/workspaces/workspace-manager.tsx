@@ -185,7 +185,7 @@ function TierCards() {
               <span className="text-sm font-semibold">{tier.name}</span>
               {tier.available ? (
                 <span className="rounded-full bg-foreground px-2 py-0.5 text-2xs text-background">
-                  Free tier
+                  Upstash Free
                 </span>
               ) : (
                 <span className="text-2xs text-muted-foreground">Paid plan</span>
@@ -206,8 +206,7 @@ function TierCards() {
         ))}
       </div>
       <p className="text-2xs leading-relaxed text-muted-foreground">
-        Upstash Free includes 5 CPU-hours per month. Rates shown are BuildX unit
-        rates per active CPU-hour, not wall-clock hours; provider plan limits still apply.
+        Upstash Free includes 5 CPU-hours per month across the Upstash account, not per workspace. Rates shown are BuildX unit rates per active CPU-hour, not wall-clock hours; provider plan limits still apply.
       </p>
     </div>
   );
