@@ -331,6 +331,7 @@ export default function RunPage() {
           skillNames: next.skillNames,
           history: toHistory(messages),
           conversationId: run.conversationId ?? conversationIdRef.current,
+          workspaceId: run.workspaceId && run.workspaceId !== run.id ? run.workspaceId : undefined,
         });
         if (created) return;
         dispatchedRunRef.current = null;
